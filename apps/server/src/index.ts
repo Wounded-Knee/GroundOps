@@ -1,0 +1,43 @@
+import websocket from "@fastify/websocket";
+import Fastify from "fastify";
+import { connectBus } from "./bus.js";
+import { closeDatabase, pingDatabase } from "./db.js";
+import { registerGateway } from "./gateway.js";
+
+const port = Number(process.env.PORT ?? 3000);
+const host = "0.0.0.0";
+
+const app = Fastify({ logger: true });
+const bus = await connectBus();
+
+await app.register(websocket);
+registerGateway(app, bus.subscription);
+
+app.get("/health", async (_request, reply) => {
+  let postgres: "up" | "down" = "down";
+  try {
+    await pingDatabase();
+    postgres = "up";
+  } catch (error) {
+    app.log.error({ err: error }, "postgres health check failed");
+  }
+
+  const nats = bus.connection.isClosed() ? "down" : "up";
+  const ok = postgres === "up" && nats === "up";
+  return reply.code(ok ? 200 : 503).send({ ok, postgres, nats });
+});
+
+async function shutdown(): Promise<void> {
+  await app.close();
+  await bus.connection.drain();
+  await closeDatabase();
+}
+
+process.once("SIGINT", () => {
+  void shutdown().then(() => process.exit(0));
+});
+process.once("SIGTERM", () => {
+  void shutdown().then(() => process.exit(0));
+});
+
+await app.listen({ port, host });
