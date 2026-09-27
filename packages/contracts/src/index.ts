@@ -5,3 +5,18 @@ export type RealtimeEnvelope = {
   id: string;
   type: string;
 };
+
+export type User = {
+  id: string;
+  displayName: string | null;
+  email: string | null;
+};
+
+export type CreateSessionRequest = {
+  googleIdToken: string;
+};
+
+export type CreateSessionResponse = {
+  token: string;
+  user: User;
+};

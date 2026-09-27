@@ -3,6 +3,8 @@ import Fastify from "fastify";
 import { connectBus } from "./bus.js";
 import { closeDatabase, pingDatabase } from "./db.js";
 import { registerGateway } from "./gateway.js";
+import { migrateDatabase } from "./migrate.js";
+import { registerSessionRoutes } from "./routes.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const host = "0.0.0.0";
@@ -10,7 +12,9 @@ const host = "0.0.0.0";
 const app = Fastify({ logger: true });
 const bus = await connectBus();
 
+await migrateDatabase();
 await app.register(websocket);
+registerSessionRoutes(app);
 registerGateway(app, bus.subscription);
 
 app.get("/health", async (_request, reply) => {

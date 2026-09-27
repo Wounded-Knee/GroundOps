@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --env-file=../../.env --import tsx src/index.ts",
+    "dev": "node --watch --env-file=../../.env --import tsx src/index.ts",
+    "test": "node --env-file=../../.env --import tsx --test src/identity/tokens.test.ts src/identity/sign-in.test.ts src/identity/sessions.test.ts src/identity/google.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -13,11 +14,13 @@
     "@nats-io/transport-node": "^3.4.0",
     "drizzle-orm": "^0.45.3",
     "fastify": "^5.12.5",
+    "google-auth-library": "^11.1.0",
     "postgres": "^3.4.9",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "drizzle-kit": "0.31.8",
     "tsx": "^4.23.15",
     "typescript": "~6.0.3"
   }

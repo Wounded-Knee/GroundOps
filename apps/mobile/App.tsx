@@ -1,73 +1,416 @@
-import type { RealtimeEnvelope } from "@groundops/contracts";
-import Constants from "expo-constants";
+import type { User } from "@groundops/contracts";
+import * as AuthSession from "expo-auth-session";
+import * as Crypto from "expo-crypto";
+import * as SecureStore from "expo-secure-store";
+import * as WebBrowser from "expo-web-browser";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { resolveApiUrl } from "./src/apiUrl";
+import {
+  createSession,
+  openAuthenticatedSocket,
+  readCurrentUser,
+  revokeSession,
+  sessionKey,
+} from "./src/sessionClient";
+
+WebBrowser.maybeCompleteAuthSession();
 
 const apiUrl = resolveApiUrl();
+const googleClient = googleClientForPlatform();
+const nativeGoogleSignIn = Platform.OS !== "web";
+const redirectUri = nativeGoogleSignIn
+  ? nativeGoogleRedirectUri(googleClient.id)
+  : AuthSession.makeRedirectUri({ path: "redirect" });
+const googleDiscovery = {
+  authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+  tokenEndpoint: "https://oauth2.googleapis.com/token",
+};
 
-/** The client compiles against the shared envelope and does not treat it as operational state. */
-const liveMessage: RealtimeEnvelope | null = null;
+if (__DEV__) {
+  console.log(`Google redirect URI: ${redirectUri}`);
+  console.log(`API URL: ${apiUrl}`);
+}
+
+type Phase =
+  | { status: "loading" }
+  | { status: "signed-out"; message: string | null }
+  | { status: "offline"; message: string }
+  | {
+      status: "signed-in";
+      token: string;
+      user: User;
+      live: "authenticated" | "closed";
+      signOutMessage: string | null;
+    };
 
 export default function App() {
-  const [health, setHealth] = useState("Loading health…");
-  void liveMessage;
+  const [phase, setPhase] = useState<Phase>({ status: "loading" });
+  const [nonce, setNonce] = useState(() => Crypto.randomUUID());
+  const [submitting, setSubmitting] = useState(false);
+  const generation = useRef(0);
+
+  const [request, , promptAsync] = AuthSession.useAuthRequest(
+    {
+      clientId: googleClient.id,
+      redirectUri,
+      responseType: nativeGoogleSignIn
+        ? AuthSession.ResponseType.Code
+        : AuthSession.ResponseType.IdToken,
+      scopes: ["openid", "profile", "email"],
+      usePKCE: nativeGoogleSignIn,
+      extraParams: nativeGoogleSignIn ? undefined : { nonce },
+    },
+    googleDiscovery,
+  );
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadHealth(): Promise<void> {
+    async function restore(): Promise<void> {
+      let token: string | null;
       try {
-        const response = await fetch(`${apiUrl}/health`);
-        const body: unknown = await response.json();
-        if (!cancelled) {
-          setHealth(JSON.stringify(body, null, 2));
-        }
+        token = await SecureStore.getItemAsync(sessionKey);
       } catch (error) {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : "Health request failed";
-          setHealth(`${message}\n${apiUrl}`);
+          setPhase({ status: "offline", message: errorMessage(error) });
         }
+        return;
       }
+
+      if (!token) {
+        if (!cancelled) {
+          setPhase({ status: "signed-out", message: null });
+        }
+        return;
+      }
+
+      const current = await readCurrentUser(apiUrl, token);
+      if (cancelled) {
+        return;
+      }
+      if (current === "unauthorized") {
+        await SecureStore.deleteItemAsync(sessionKey);
+        if (!cancelled) {
+          setPhase({ status: "signed-out", message: null });
+        }
+        return;
+      }
+      if (current === "unreachable") {
+        setPhase({ status: "offline", message: "Could not reach the server." });
+        return;
+      }
+      setPhase({
+        status: "signed-in",
+        token,
+        user: current,
+        live: "closed",
+        signOutMessage: null,
+      });
     }
 
-    void loadHealth();
+    void restore();
     return () => {
       cancelled = true;
     };
   }, []);
 
+  const sessionToken = phase.status === "signed-in" ? phase.token : null;
+
+  useEffect(() => {
+    if (!sessionToken) {
+      return;
+    }
+
+    const token = sessionToken;
+    const currentGeneration = generation.current;
+    const socket = openAuthenticatedSocket(apiUrl, token);
+
+    socket.onopen = () => {
+      if (generation.current !== currentGeneration) {
+        return;
+      }
+      setPhase((current) =>
+        current.status === "signed-in" && current.token === token
+          ? { ...current, live: "authenticated" }
+          : current,
+      );
+    };
+
+    socket.onclose = () => {
+      if (generation.current !== currentGeneration) {
+        return;
+      }
+      void classifyClosedSocket(token, currentGeneration);
+    };
+
+    return () => {
+      generation.current += 1;
+      socket.close();
+    };
+  }, [sessionToken]);
+
+  async function classifyClosedSocket(token: string, currentGeneration: number): Promise<void> {
+    const current = await readCurrentUser(apiUrl, token);
+    if (generation.current !== currentGeneration) {
+      return;
+    }
+    if (current === "unauthorized") {
+      await SecureStore.deleteItemAsync(sessionKey);
+      if (generation.current !== currentGeneration) {
+        return;
+      }
+      setPhase({ status: "signed-out", message: null });
+      return;
+    }
+    setPhase((existing) =>
+      existing.status === "signed-in" && existing.token === token
+        ? { ...existing, live: "closed" }
+        : existing,
+    );
+  }
+
+  async function onSignIn(): Promise<void> {
+    setSubmitting(true);
+    setPhase({ status: "signed-out", message: null });
+    if (!googleClient.id) {
+      setPhase({
+        status: "signed-out",
+        message: `Set ${googleClient.envName} in the root .env file.`,
+      });
+      setSubmitting(false);
+      return;
+    }
+    try {
+      const result = await promptAsync();
+      setNonce(Crypto.randomUUID());
+      if (result.type === "cancel" || result.type === "dismiss") {
+        return;
+      }
+      const idToken = await readIdToken(result, request?.codeVerifier);
+      if (!idToken) {
+        if (__DEV__) {
+          console.log(`Google sign-in returned no ID token (${result.type}).`);
+        }
+        setPhase({ status: "signed-out", message: "Sign-in failed." });
+        return;
+      }
+
+      const created = await createSession(apiUrl, idToken);
+      if (created === "rejected" || created === "unreachable") {
+        if (__DEV__) {
+          console.log(`Session create ${created} at ${apiUrl}.`);
+        }
+        setPhase({ status: "signed-out", message: "Sign-in failed." });
+        return;
+      }
+      await SecureStore.setItemAsync(sessionKey, created.token);
+      setPhase({
+        status: "signed-in",
+        token: created.token,
+        user: created.user,
+        live: "closed",
+        signOutMessage: null,
+      });
+    } catch (error) {
+      if (__DEV__) {
+        console.log(`Google sign-in failed: ${errorMessage(error)}`);
+      }
+      setPhase({ status: "signed-out", message: "Sign-in failed." });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onSignOut(token: string): Promise<void> {
+    const result = await revokeSession(apiUrl, token);
+    if (result === "unreachable") {
+      setPhase((current) =>
+        current.status === "signed-in" ? { ...current, signOutMessage: "Sign-out failed." } : current,
+      );
+      return;
+    }
+    await SecureStore.deleteItemAsync(sessionKey);
+    setPhase({ status: "signed-out", message: null });
+  }
+
+  async function onRetry(): Promise<void> {
+    setPhase({ status: "loading" });
+    let token: string | null;
+    try {
+      token = await SecureStore.getItemAsync(sessionKey);
+    } catch (error) {
+      setPhase({ status: "offline", message: errorMessage(error) });
+      return;
+    }
+    if (!token) {
+      setPhase({ status: "signed-out", message: null });
+      return;
+    }
+    const current = await readCurrentUser(apiUrl, token);
+    if (current === "unauthorized") {
+      await SecureStore.deleteItemAsync(sessionKey);
+      setPhase({ status: "signed-out", message: null });
+      return;
+    }
+    if (current === "unreachable") {
+      setPhase({ status: "offline", message: "Could not reach the server." });
+      return;
+    }
+    setPhase({
+      status: "signed-in",
+      token,
+      user: current,
+      live: "closed",
+      signOutMessage: null,
+    });
+  }
+
   return (
     <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <Text style={styles.health}>{health}</Text>
+      {phase.status === "loading" ? <Text>Checking session…</Text> : null}
+      {phase.status === "signed-out" ? (
+        <SignIn message={phase.message} disabled={submitting} onSignIn={() => void onSignIn()} />
+      ) : null}
+      {phase.status === "offline" ? <Offline message={phase.message} onRetry={() => void onRetry()} /> : null}
+      {phase.status === "signed-in" ? (
+        <SignedIn
+          user={phase.user}
+          live={phase.live}
+          signOutMessage={phase.signOutMessage}
+          onSignOut={() => void onSignOut(phase.token)}
+        />
+      ) : null}
       <StatusBar style="auto" />
     </View>
   );
 }
 
-function resolveApiUrl(): string {
-  const configured = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000";
-  const devHost = developmentHost();
-  if (!devHost || !isLoopback(configured)) {
-    return configured;
-  }
-
-  const url = new URL(configured);
-  url.hostname = devHost;
-  return url.origin;
+function SignIn({
+  message,
+  disabled,
+  onSignIn,
+}: {
+  message: string | null;
+  disabled: boolean;
+  onSignIn: () => void;
+}) {
+  return (
+    <>
+      <Pressable style={styles.button} disabled={disabled} onPress={onSignIn}>
+        <Text style={styles.buttonText}>Sign in with Google</Text>
+      </Pressable>
+      {message ? <Text style={styles.message}>{message}</Text> : null}
+    </>
+  );
 }
 
-function isLoopback(url: string): boolean {
-  return url.includes("://localhost") || url.includes("://127.0.0.1");
+function SignedIn({
+  user,
+  live,
+  signOutMessage,
+  onSignOut,
+}: {
+  user: User;
+  live: "authenticated" | "closed";
+  signOutMessage: string | null;
+  onSignOut: () => void;
+}) {
+  return (
+    <>
+      <Text style={styles.identity}>{identityLabel(user)}</Text>
+      <Text style={styles.message}>
+        {live === "authenticated"
+          ? "Live connection authenticated"
+          : "Live connection not authenticated"}
+      </Text>
+      {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
+      <Pressable style={styles.button} onPress={onSignOut}>
+        <Text style={styles.buttonText}>Sign out</Text>
+      </Pressable>
+    </>
+  );
 }
 
-function developmentHost(): string | undefined {
-  const host = Constants.expoConfig?.hostUri?.split(":")[0];
-  if (!host || host === "localhost" || host === "127.0.0.1") {
-    return undefined;
+function Offline({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <>
+      <Text style={styles.message}>{message}</Text>
+      <Pressable style={styles.button} onPress={onRetry}>
+        <Text style={styles.buttonText}>Retry</Text>
+      </Pressable>
+    </>
+  );
+}
+
+function identityLabel(user: User): string {
+  return user.displayName ?? user.email ?? "Signed in";
+}
+
+async function readIdToken(
+  result: AuthSession.AuthSessionResult,
+  codeVerifier: string | undefined,
+): Promise<string | null> {
+  if (result.type !== "success") {
+    return null;
   }
-  return host;
+  const fromParams = result.params.id_token;
+  if (fromParams && fromParams.length > 0) {
+    return fromParams;
+  }
+  const fromAuthentication = result.authentication?.idToken;
+  if (fromAuthentication && fromAuthentication.length > 0) {
+    return fromAuthentication;
+  }
+  const code = result.params.code;
+  if (!code || !codeVerifier) {
+    return null;
+  }
+  const tokens = await new AuthSession.AccessTokenRequest({
+    clientId: googleClient.id,
+    redirectUri,
+    code,
+    extraParams: { code_verifier: codeVerifier },
+  }).performAsync(googleDiscovery);
+  return tokens.idToken && tokens.idToken.length > 0 ? tokens.idToken : null;
+}
+
+function nativeGoogleRedirectUri(clientId: string): string {
+  const scheme = reversedGoogleClientScheme(clientId);
+  return scheme ? `${scheme}:/oauth2redirect` : "groundops://redirect";
+}
+
+function reversedGoogleClientScheme(clientId: string): string | null {
+  const suffix = ".apps.googleusercontent.com";
+  if (!clientId.endsWith(suffix)) {
+    return null;
+  }
+  const prefix = clientId.slice(0, -suffix.length);
+  return prefix ? `com.googleusercontent.apps.${prefix}` : null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Could not reach the server.";
+}
+
+function googleClientForPlatform(): { id: string; envName: string } {
+  if (Platform.OS === "ios") {
+    return {
+      id: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? "",
+      envName: "GOOGLE_IOS_CLIENT_ID",
+    };
+  }
+  if (Platform.OS === "android") {
+    return {
+      id: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? "",
+      envName: "GOOGLE_ANDROID_CLIENT_ID",
+    };
+  }
+  return {
+    id: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? "",
+    envName: "GOOGLE_WEB_CLIENT_ID",
+  };
 }
 
 const styles = StyleSheet.create({
@@ -78,8 +421,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 24,
   },
-  health: {
+  identity: {
+    fontSize: 20,
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  message: {
     marginTop: 16,
-    fontFamily: "monospace",
+    textAlign: "center",
+  },
+  button: {
+    backgroundColor: "#111",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 8,
+  },
+  buttonText: {
+    color: "#fff",
+    fontSize: 16,
   },
 });

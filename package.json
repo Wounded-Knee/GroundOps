@@ -6,8 +6,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev:server": "pnpm --filter @groundops/server dev",
+    "dev:server": "sudo docker compose up -d && pnpm --filter @groundops/server dev",
     "dev:mobile": "pnpm --filter @groundops/mobile start",
+    "android": "pnpm --filter @groundops/mobile run android",
+    "android:run": "pnpm --filter @groundops/mobile run run:android",
     "typecheck": "pnpm -r typecheck"
   }
 }
