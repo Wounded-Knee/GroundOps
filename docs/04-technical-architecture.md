@@ -112,7 +112,7 @@ JetStream, Kafka, and Redis are not part of the stack.
 
 **Background work.** The first implementation runs in-process. A job queue is added only when in-process work is insufficient.
 
-**Routing.** Routing calls go through a server-side provider interface. The first provider is Google. Domain types do not use Google representations. The on-device map toolkit is chosen with the navigation slice.
+**Routing.** Routing calls go through a server-side provider interface. The first provider is Google. Domain types do not use Google representations. The on-device map toolkit is `expo-maps`, chosen in the navigation slice (`docs/slices/002-Navigation.md`): Google Maps on Android and Apple Maps on iOS. The client draws driving guidance over that map and does not call the routing provider itself.
 
 **Deployment.** When a slice requires a deployed environment, the shape is one API service, managed PostgreSQL, NATS, and HTTPS. The cloud vendor is not chosen here. Kubernetes and Terraform are not part of this decision.
 

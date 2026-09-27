@@ -2,7 +2,7 @@
 
 ## Status
 
-**CURRENT SLICE**
+**Previous slice**
 
 **Derived from:** Development Methodology (`docs/02-development-methodology.md`) section 6, Technical Architecture (`docs/04-technical-architecture.md`) section 6, and the User concept in `docs/03-domain-model.md`.
 
