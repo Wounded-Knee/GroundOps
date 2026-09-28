@@ -4,6 +4,10 @@ import { connectBus } from "./bus.js";
 import { closeDatabase, pingDatabase } from "./db.js";
 import { registerGateway } from "./gateway.js";
 import { migrateDatabase } from "./migrate.js";
+import { findActiveSession } from "./identity/sessions.js";
+import { readBearer } from "./identity/tokens.js";
+import { registerRoutingRoutes } from "./routing/http.js";
+import { computeDrivingRoute, suggestPlaces } from "./routing/google.js";
 import { registerSessionRoutes } from "./routes.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -15,6 +19,17 @@ const bus = await connectBus();
 await migrateDatabase();
 await app.register(websocket);
 registerSessionRoutes(app);
+registerRoutingRoutes(app, {
+  findSession: async (authorization) => {
+    const token = readBearer(authorization);
+    if (!token) {
+      return null;
+    }
+    return findActiveSession(token);
+  },
+  suggestPlaces,
+  computeDrivingRoute,
+});
 registerGateway(app, bus.subscription);
 
 app.get("/health", async (_request, reply) => {

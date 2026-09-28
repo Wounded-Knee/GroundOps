@@ -7,6 +7,7 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { resolveApiUrl } from "./src/apiUrl";
+import { NavigationScreen } from "./src/NavigationScreen";
 import {
   createSession,
   openAuthenticatedSocket,
@@ -235,6 +236,12 @@ export default function App() {
     setPhase({ status: "signed-out", message: null });
   }
 
+  async function onSessionRejected(): Promise<void> {
+    generation.current += 1;
+    await SecureStore.deleteItemAsync(sessionKey);
+    setPhase({ status: "signed-out", message: null });
+  }
+
   async function onRetry(): Promise<void> {
     setPhase({ status: "loading" });
     let token: string | null;
@@ -267,19 +274,29 @@ export default function App() {
     });
   }
 
+  const driving = phase.status === "signed-in" && Platform.OS !== "web";
+
   return (
-    <View style={styles.container}>
+    <View style={driving ? styles.map : styles.container}>
       {phase.status === "loading" ? <Text>Checking session…</Text> : null}
       {phase.status === "signed-out" ? (
         <SignIn message={phase.message} disabled={submitting} onSignIn={() => void onSignIn()} />
       ) : null}
       {phase.status === "offline" ? <Offline message={phase.message} onRetry={() => void onRetry()} /> : null}
-      {phase.status === "signed-in" ? (
+      {phase.status === "signed-in" && Platform.OS === "web" ? (
         <SignedIn
           user={phase.user}
           live={phase.live}
           signOutMessage={phase.signOutMessage}
           onSignOut={() => void onSignOut(phase.token)}
+        />
+      ) : null}
+      {driving ? (
+        <NavigationScreen
+          token={phase.token}
+          signOutMessage={phase.signOutMessage}
+          onSignOut={() => void onSignOut(phase.token)}
+          onUnauthorized={() => void onSessionRejected()}
         />
       ) : null}
       <StatusBar style="auto" />
@@ -420,6 +437,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
+  },
+  map: {
+    flex: 1,
+    backgroundColor: "#fff",
   },
   identity: {
     fontSize: 20,

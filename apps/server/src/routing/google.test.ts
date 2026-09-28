@@ -1,0 +1,198 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { computeDrivingRoute, mapGoogleRoute, mapManeuver, suggestPlaces } from "./google.js";
+
+const encoded = "_p~iF~ps|U_ulLnnqC_mqNvxq`@";
+
+describe("mapManeuver", () => {
+  it("maps Google maneuver names onto the platform set", () => {
+    assert.equal(mapManeuver("DEPART"), "depart");
+    assert.equal(mapManeuver("TURN_LEFT"), "turn-left");
+    assert.equal(mapManeuver("TURN_SHARP_RIGHT"), "sharp-right");
+    assert.equal(mapManeuver("UTURN_LEFT"), "u-turn");
+    assert.equal(mapManeuver("ROUNDABOUT_RIGHT"), "roundabout");
+    assert.equal(mapManeuver("FORK_LEFT"), "fork-left");
+    assert.equal(mapManeuver("RAMP_RIGHT"), "ramp-right");
+    assert.equal(mapManeuver("NAME_CHANGE"), "straight");
+    assert.equal(mapManeuver("FERRY"), "straight");
+    assert.equal(mapManeuver("NOT_A_MANEUVER"), "straight");
+  });
+});
+
+describe("mapGoogleRoute", () => {
+  it("returns platform coordinates and drops Google encodings", () => {
+    const route = mapGoogleRoute({
+      routes: [
+        {
+          distanceMeters: 300,
+          duration: "90s",
+          polyline: { encodedPolyline: encoded },
+          legs: [
+            {
+              steps: [
+                {
+                  distanceMeters: 100,
+                  staticDuration: "30s",
+                  navigationInstruction: { maneuver: "DEPART", instructions: "Head north" },
+                  startLocation: { latLng: { latitude: 1, longitude: 2 } },
+                  endLocation: { latLng: { latitude: 1.001, longitude: 2 } },
+                },
+                {
+                  distanceMeters: 200,
+                  staticDuration: "60s",
+                  polyline: { encodedPolyline: encoded },
+                  navigationInstruction: { maneuver: "TURN_LEFT", instructions: "<b>Turn left</b>" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    assert.notEqual(route, "no-route");
+    if (route === "no-route") {
+      return;
+    }
+    assert.equal(route.distanceMeters, 300);
+    assert.equal(route.durationSeconds, 90);
+    assert.equal(route.steps[0]?.maneuver, "depart");
+    assert.equal(route.steps[0]?.durationSeconds, 30);
+    assert.equal(route.steps[1]?.maneuver, "turn-left");
+    assert.equal(route.steps[1]?.instruction, "Turn left");
+    assert.equal(route.steps[1]?.durationSeconds, 60);
+    assert.ok((route.path[0]?.latitude ?? 0) > 38);
+    const serialized = JSON.stringify(route);
+    assert.equal(serialized.includes("encodedPolyline"), false);
+    assert.equal(serialized.includes(encoded), false);
+    assert.equal(serialized.includes("placeId"), false);
+  });
+
+  it("marks an arrival instruction as arrive", () => {
+    const route = mapGoogleRoute({
+      routes: [
+        {
+          duration: "10s",
+          distanceMeters: 20,
+          polyline: { encodedPolyline: encoded },
+          legs: [
+            {
+              steps: [
+                {
+                  distanceMeters: 20,
+                  staticDuration: "10s",
+                  navigationInstruction: { maneuver: "STRAIGHT", instructions: "Arrive at the destination" },
+                  startLocation: { latLng: { latitude: 1, longitude: 2 } },
+                  endLocation: { latLng: { latitude: 1.001, longitude: 2 } },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    assert.notEqual(route, "no-route");
+    if (route === "no-route") {
+      return;
+    }
+    assert.equal(route.steps[0]?.maneuver, "arrive");
+  });
+
+  it("rejects a payload with no driving route", () => {
+    assert.equal(mapGoogleRoute({ routes: [] }), "no-route");
+    assert.equal(mapGoogleRoute({}), "no-route");
+  });
+});
+
+describe("suggestPlaces", () => {
+  it("does not call Google for an empty query", async () => {
+    let calls = 0;
+    const result = await suggestPlaces("   ", null, {
+      apiKey: "test-key",
+      fetch: async () => {
+        calls += 1;
+        return Response.json({});
+      },
+    });
+    assert.deepEqual(result, []);
+    assert.equal(calls, 0);
+  });
+
+  it("does not call Google when the server key is missing", async () => {
+    let calls = 0;
+    const previous = process.env.GOOGLE_MAPS_API_KEY;
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    try {
+      const result = await suggestPlaces("library", null, {
+        fetch: async () => {
+          calls += 1;
+          return Response.json({});
+        },
+      });
+      assert.equal(result, "failed");
+      assert.equal(calls, 0);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.GOOGLE_MAPS_API_KEY;
+      } else {
+        process.env.GOOGLE_MAPS_API_KEY = previous;
+      }
+    }
+  });
+
+  it("returns labels and coordinates and drops the place id", async () => {
+    const result = await suggestPlaces("library", { latitude: 40, longitude: -75 }, {
+      apiKey: "test-key",
+      fetch: async (url, init) => {
+        if (url.endsWith(":autocomplete")) {
+          const body = JSON.parse(String(init?.body)) as { locationBias?: unknown };
+          assert.ok(body.locationBias);
+          return Response.json({
+            suggestions: [
+              {
+                placePrediction: {
+                  placeId: "secret-place",
+                  text: { text: "Central Library" },
+                },
+              },
+            ],
+          });
+        }
+        assert.equal(url.includes("secret-place"), true);
+        return Response.json({
+          location: { latitude: 40.1, longitude: -75.1 },
+          id: "secret-place",
+        });
+      },
+    });
+
+    assert.deepEqual(result, [{ label: "Central Library", latitude: 40.1, longitude: -75.1 }]);
+    assert.equal(JSON.stringify(result).includes("secret-place"), false);
+  });
+});
+
+describe("computeDrivingRoute", () => {
+  it("returns no-route when Google has no driving route", async () => {
+    const result = await computeDrivingRoute(
+      { latitude: 0, longitude: 0 },
+      { latitude: 1, longitude: 1 },
+      {
+        apiKey: "test-key",
+        fetch: async () => Response.json({ routes: [] }),
+      },
+    );
+    assert.equal(result, "no-route");
+  });
+
+  it("returns failed when the provider responds with an error", async () => {
+    const result = await computeDrivingRoute(
+      { latitude: 0, longitude: 0 },
+      { latitude: 1, longitude: 1 },
+      {
+        apiKey: "test-key",
+        fetch: async () => new Response("nope", { status: 500 }),
+      },
+    );
+    assert.equal(result, "failed");
+  });
+});

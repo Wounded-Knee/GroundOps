@@ -27,9 +27,37 @@ function googleSchemes() {
   return schemes;
 }
 
-module.exports = () => ({
-  expo: {
-    ...appJson.expo,
-    scheme: googleSchemes(),
-  },
-});
+module.exports = () => {
+  const android = appJson.expo.android ?? {};
+  return {
+    expo: {
+      ...appJson.expo,
+      scheme: googleSchemes(),
+      android: {
+        ...android,
+        config: {
+          ...(android.config ?? {}),
+          googleMaps: {
+            apiKey: process.env.GOOGLE_MAPS_ANDROID_API_KEY ?? "",
+          },
+        },
+      },
+      plugins: [
+        ...(appJson.expo.plugins ?? []),
+        [
+          "expo-maps",
+          {
+            requestLocationPermission: true,
+            locationPermission: "Allow Groundops to use your location while you navigate.",
+          },
+        ],
+        [
+          "expo-location",
+          {
+            locationWhenInUsePermission: "Allow Groundops to use your location while you navigate.",
+          },
+        ],
+      ],
+    },
+  };
+};

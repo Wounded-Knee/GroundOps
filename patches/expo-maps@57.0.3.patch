@@ -1,0 +1,172 @@
+diff --git a/android/src/main/java/expo/modules/maps/GoogleMapsView.kt b/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
+index 82450b6ab008ef190cbc499d987ffbc774309c82..1cbd67b8fda10c9dc7d46a856ec996dd60548584 100644
+--- a/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
++++ b/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
+@@ -277,13 +277,14 @@ class GoogleMapsView(context: Context, appContext: AppContext) :
+     val locationSource = remember(coordinates) {
+       CustomLocationSource()
+     }
+-    LaunchedEffect(coordinates) {
++    LaunchedEffect(coordinates, wasLoaded.value) {
+       if (coordinates == null) {
+         return@LaunchedEffect
+       }
+       locationSource.onLocationChanged(coordinates.toLocation())
+-      if (followUserLocation && !manualCameraControl) {
++      // CameraUpdateFactory throws until the map has loaded.
++      if (followUserLocation && !manualCameraControl && wasLoaded.value) {
+         // Update camera position when location changes and manualCameraControl is disabled.
+         cameraState.animate(CameraUpdateFactory.newLatLng(coordinates.toLatLng()))
+       }
+     }
+@@ -369,8 +370,14 @@ class GoogleMapsView(context: Context, appContext: AppContext) :
+       ?: props.userLocation.value.coordinates?.toLatLng()
+       ?: return
+ 
+-    val cameraUpdate = config?.zoom?.let { CameraUpdateFactory.newLatLngZoom(coordinates, it) }
+-      ?: CameraUpdateFactory.newLatLng(coordinates)
++    val current = cameraState.position
++    val cameraPosition = CameraPosition.Builder()
++      .target(coordinates)
++      .zoom(config?.zoom ?: current.zoom)
++      .bearing(config?.bearing ?: current.bearing)
++      .tilt((config?.tilt ?: current.tilt).coerceIn(0f, 90f))
++      .build()
++    val cameraUpdate = CameraUpdateFactory.newCameraPosition(cameraPosition)
+ 
+     // When Int.MAX_VALUE is provided as durationMs, the default animation duration will be used.
+     cameraState.animate(cameraUpdate, config?.duration ?: Int.MAX_VALUE)
+diff --git a/android/src/main/java/expo/modules/maps/Records.kt b/android/src/main/java/expo/modules/maps/Records.kt
+index 15854606398ea84a49d9eef55750eab4102aa174..5aac14f7b02e2afd6da843911f9a955f8a91e364 100644
+--- a/android/src/main/java/expo/modules/maps/Records.kt
++++ b/android/src/main/java/expo/modules/maps/Records.kt
+@@ -27,7 +27,13 @@ data class SetCameraPositionConfig(
+   val zoom: Float?,
+ 
+   @Field
+-  val duration: Int?
++  val duration: Int?,
++
++  @Field
++  val bearing: Float? = null,
++
++  @Field
++  val tilt: Float? = null
+ ) : Record
+ 
+ @OptimizedRecord
+diff --git a/build/shared.types.d.ts b/build/shared.types.d.ts
+index 3a32344e3ef9b4c174c2878f01773fa912a61beb..001fd4b17059b7d6a86e7bfbf16d270c6296b44a 100644
+--- a/build/shared.types.d.ts
++++ b/build/shared.types.d.ts
+@@ -14,6 +14,16 @@ export type CameraPosition = {
+      * The middle point of the camera.
+      */
+     coordinates?: Coordinates;
++    /**
++     * The direction the camera faces, in degrees clockwise from north.
++     * Omit it to leave the current bearing unchanged.
++     */
++    bearing?: number;
++    /**
++     * The camera pitch in degrees, from 0 (straight down) through 90.
++     * Omit it to leave the current tilt unchanged.
++     */
++    tilt?: number;
+     /**
+      * The zoom level of the camera.
+      * For some view sizes, lower zoom levels might not be available.
+diff --git a/ios/MapRecords.swift b/ios/MapRecords.swift
+index 7cab76612a78a83ae93f2611e727cf5529acdb55..76662ed51d3ab179e63f4976fddb27a3b5f21277 100644
+--- a/ios/MapRecords.swift
++++ b/ios/MapRecords.swift
+@@ -41,10 +41,13 @@ struct MapMarker: Identifiable, Record {
+ struct CameraPosition: Record, Equatable {
+   @Field var coordinates: Coordinate
+   @Field var zoom: Double = 1
++  @Field var bearing: Double?
++  @Field var tilt: Double?
+ 
+   static func == (lhs: CameraPosition, rhs: CameraPosition) -> Bool {
+     return lhs.coordinates.latitude == rhs.coordinates.latitude
+       && lhs.coordinates.longitude == rhs.coordinates.longitude && lhs.zoom == rhs.zoom
++      && lhs.bearing == rhs.bearing && lhs.tilt == rhs.tilt
+   }
+ }
+ 
+diff --git a/ios/MapUtils.swift b/ios/MapUtils.swift
+index b1bdee1319481da0c1c13eea2ab767eb52bea86d..e05ef2339df9b41a7c1aa98803499e882e28fe17 100644
+--- a/ios/MapUtils.swift
++++ b/ios/MapUtils.swift
+@@ -7,6 +7,18 @@ func convertToMapCamera(position: CameraPosition) -> MapCameraPosition {
+     latitude: position.coordinates.latitude,
+     longitude: position.coordinates.longitude
+   )
++  let tilt = position.tilt ?? 0
++  if tilt > 0 {
++    let distance = max(16_000_000 / pow(2, position.zoom), 50)
++    return .camera(
++      MapCamera(
++        centerCoordinate: coordinate,
++        distance: distance,
++        heading: position.bearing ?? 0,
++        pitch: min(max(tilt, 0), 90)
++      )
++    )
++  }
+   return convertToMapCameraPosition(coordinate: coordinate, zoom: position.zoom)
+ }
+ 
+diff --git a/src/shared.types.ts b/src/shared.types.ts
+index ce531a92279fde5776b013f96b80cc4d257c5540..e7f421022556a565e577e33f34b13d012c612852 100644
+--- a/src/shared.types.ts
++++ b/src/shared.types.ts
+@@ -23,6 +23,18 @@ export type CameraPosition = {
+    * For some view sizes, lower zoom levels might not be available.
+    */
+   zoom?: number;
++
++  /**
++   * The direction the camera faces, in degrees clockwise from north.
++   * Omit it to leave the current bearing unchanged.
++   */
++  bearing?: number;
++
++  /**
++   * The camera pitch in degrees, from 0 (straight down) through 90.
++   * Omit it to leave the current tilt unchanged.
++   */
++  tilt?: number;
+ };
+ 
+ /**
+diff --git a/src/google/GoogleMapsView.tsx b/src/google/GoogleMapsView.tsx
+--- a/src/google/GoogleMapsView.tsx
++++ b/src/google/GoogleMapsView.tsx
+@@ -8,6 +8,11 @@
+   SetCameraPositionConfig,
+ } from './GoogleMaps.types';
+ 
++function isCancelledAnimation(error: unknown): boolean {
++  const message = error instanceof Error ? error.message : String(error);
++  return message.includes('Animation cancelled') || message.includes('CancellationException');
++}
++
+ let NativeView: React.ComponentType<GoogleMapsViewProps> | null = null;
+ 
+ if (Platform.OS === 'android') {
+@@ -50,7 +55,13 @@
+     const nativeRef = React.useRef<GoogleMapsViewType>(null);
+     React.useImperativeHandle(ref, () => ({
+       setCameraPosition(config?: SetCameraPositionConfig) {
+-        nativeRef.current?.setCameraPosition(config);
++        // A later camera update cancels the in-flight animation. That rejection is expected.
++        const pending = nativeRef.current?.setCameraPosition(config) as Promise<void> | undefined;
++        void Promise.resolve(pending).catch((error: unknown) => {
++          if (!isCancelledAnimation(error)) {
++            console.error(error);
++          }
++        });
+       },
+       async selectMarker(id?: string, options?: { zoom?: number; moveCamera?: boolean }) {
+         return nativeRef.current?.selectMarker(id, options);

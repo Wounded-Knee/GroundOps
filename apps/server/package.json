@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch --env-file=../../.env --import tsx src/index.ts",
-    "test": "node --env-file=../../.env --import tsx --test src/identity/tokens.test.ts src/identity/sign-in.test.ts src/identity/sessions.test.ts src/identity/google.test.ts",
+    "test": "node --env-file=../../.env --import tsx --test src/identity/tokens.test.ts src/identity/sign-in.test.ts src/identity/sessions.test.ts src/identity/google.test.ts src/routing/polyline.test.ts src/routing/google.test.ts src/routing/http.test.ts ../../apps/mobile/src/guidance.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
