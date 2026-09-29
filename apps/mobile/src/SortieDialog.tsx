@@ -1,12 +1,9 @@
 import type { PlaceSuggestion, SortieStop, SortieWriteRequest } from "@groundops/contracts";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { createElement, useEffect, useState } from "react";
+import { createElement, useState } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { resolveApiUrl } from "./apiUrl";
+import { AddressPicker } from "./AddressPicker";
 import { formatUsPhone, phoneDigits, withPickedDate, withPickedTime } from "./calendarTime";
-import { requestPlaceSuggestions } from "./routingClient";
-
-const apiUrl = resolveApiUrl();
 
 export type StopDraft = {
   query: string;
@@ -45,37 +42,6 @@ export function SortieDialog({
   const [phone, setPhone] = useState(draft.phone);
   const [stops, setStops] = useState(draft.stops);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
-  const [activeStop, setActiveStop] = useState<number | null>(null);
-  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
-
-  useEffect(() => {
-    if (activeStop === null) {
-      return;
-    }
-    const stop = stops[activeStop];
-    const query = stop?.query.trim() ?? "";
-    if (!stop || query.length < 2 || stop.chosen?.label === stop.query) {
-      setSuggestions([]);
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void requestPlaceSuggestions(apiUrl, token, query, null).then((result) => {
-        if (cancelled) {
-          return;
-        }
-        if (result === "unauthorized") {
-          onUnauthorized();
-          return;
-        }
-        setSuggestions(result === "failed" ? [] : result);
-      });
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [activeStop, onUnauthorized, stops, token]);
 
   function applyPicked(target: PickerTarget, picked: Date): void {
     if (target === "start-date") {
@@ -93,7 +59,6 @@ export function SortieDialog({
   }
 
   function updateStop(index: number, query: string): void {
-    setActiveStop(index);
     setStops((current) =>
       current.map((stop, stopIndex) => {
         if (stopIndex !== index) {
@@ -111,8 +76,6 @@ export function SortieDialog({
         stopIndex === index ? { query: suggestion.label, chosen: suggestion } : stop,
       ),
     );
-    setSuggestions([]);
-    setActiveStop(null);
   }
 
   function addWaypoint(): void {
@@ -126,8 +89,6 @@ export function SortieDialog({
 
   function removeWaypoint(index: number): void {
     setStops((current) => current.filter((_, stopIndex) => stopIndex !== index));
-    setActiveStop(null);
-    setSuggestions([]);
   }
 
   function save(): void {
@@ -197,25 +158,20 @@ export function SortieDialog({
         />
         {stops.map((stop, index) => (
           <View key={`${stopRole(index, stops.length)}-${index}`}>
-            <Text style={styles.fieldLabel}>{stopRole(index, stops.length)}</Text>
-            <TextInput
-              value={stop.query}
-              onChangeText={(query) => updateStop(index, query)}
-              onFocus={() => setActiveStop(index)}
-              style={styles.input}
+            <AddressPicker
+              label={stopRole(index, stops.length)}
+              appearance="field"
+              query={stop.query}
+              token={token}
+              onQueryChange={(query) => updateStop(index, query)}
+              onSelect={(suggestion) => chooseStop(index, suggestion)}
+              onUnauthorized={onUnauthorized}
             />
             {index > 0 && index < stops.length - 1 ? (
               <Pressable onPress={() => removeWaypoint(index)} style={styles.secondary}>
                 <Text style={styles.secondaryText}>Remove waypoint</Text>
               </Pressable>
             ) : null}
-            {activeStop === index
-              ? suggestions.map((suggestion) => (
-                  <Pressable key={`${suggestion.label}-${suggestion.latitude}`} onPress={() => chooseStop(index, suggestion)} style={styles.suggestion}>
-                    <Text>{suggestion.label}</Text>
-                  </Pressable>
-                ))
-              : null}
           </View>
         ))}
         <Pressable onPress={addWaypoint} style={styles.secondary}>
@@ -365,10 +321,6 @@ const styles = StyleSheet.create({
   },
   pickerValue: {
     fontSize: 16,
-  },
-  suggestion: {
-    paddingVertical: 8,
-    paddingHorizontal: 4,
   },
   primary: {
     backgroundColor: "#111",

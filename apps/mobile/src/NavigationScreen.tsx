@@ -3,7 +3,8 @@ import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { AddressPicker } from "./AddressPicker";
 import { resolveApiUrl } from "./apiUrl";
 import {
   applyLocationFix,
@@ -18,8 +19,8 @@ import {
   remainingDurationSeconds,
   travelBearing,
 } from "./guidance";
-import { PlatformMap, type MapHandle } from "./PlatformMap";
-import { requestDrivingRoute, requestPlaceSuggestions } from "./routingClient";
+import { PlatformMap, type MapCamera, type MapHandle } from "./PlatformMap";
+import { requestDrivingRoute } from "./routingClient";
 
 type NavState =
   | { mode: "browse"; message: string | null; destination: PlaceSuggestion | null }
@@ -53,7 +54,6 @@ export function NavigationScreen({
   const mapRef = useRef<MapHandle>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
   const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
   const [finding, setFinding] = useState(false);
   const [permission, setPermission] = useState<"unknown" | "granted" | "denied">("unknown");
   const [fix, setFix] = useState<GeoCoordinate | null>(null);
@@ -69,12 +69,28 @@ export function NavigationScreen({
   const bearingRef = useRef<number | null>(null);
   const centered = useRef(false);
   const routeRequest = useRef(0);
-  const searchGeneration = useRef(0);
   const rerouteInFlight = useRef(false);
   const offRouteSinceRef = useRef<number | null>(null);
   const rerouteGeneration = useRef(0);
   const spokenKey = useRef<string | null>(null);
   const speechGeneration = useRef(0);
+  const guidedCameraRef = useRef<MapCamera | null>(null);
+
+  function sendGuidanceCamera(camera: MapCamera): void {
+    const previous = guidedCameraRef.current;
+    const unchanged =
+      previous !== null &&
+      previous.latitude === camera.latitude &&
+      previous.longitude === camera.longitude &&
+      previous.zoom === camera.zoom &&
+      previous.tilt === camera.tilt &&
+      previous.bearing === camera.bearing;
+    if (unchanged) {
+      return;
+    }
+    guidedCameraRef.current = camera;
+    mapRef.current?.setCamera(camera);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -127,39 +143,6 @@ export function NavigationScreen({
   }, []);
 
   useEffect(() => {
-    const trimmed = query.trim();
-    if (trimmed.length === 0) {
-      setSuggestions([]);
-      return;
-    }
-    const generation = ++searchGeneration.current;
-    const handle = setTimeout(() => {
-      void (async () => {
-        const bias = fixRef.current;
-        const result = await requestPlaceSuggestions(apiUrl, token, trimmed, bias);
-        if (searchGeneration.current !== generation) {
-          return;
-        }
-        if (result === "unauthorized") {
-          onUnauthorized();
-          return;
-        }
-        if (result === "failed") {
-          setSuggestions([]);
-          setNav((current) =>
-            current.mode === "browse" ? { ...current, message: "Search failed." } : current,
-          );
-          return;
-        }
-        setSuggestions(result);
-      })();
-    }, 300);
-    return () => {
-      clearTimeout(handle);
-    };
-  }, [query, token, onUnauthorized]);
-
-  useEffect(() => {
     if (!fix || nav.mode !== "browse" || centered.current || !mapRef.current) {
       return;
     }
@@ -178,13 +161,14 @@ export function NavigationScreen({
   useEffect(() => {
     const current = navRef.current;
     if (!fix || (current.mode !== "guiding" && current.mode !== "arrived")) {
+      guidedCameraRef.current = null;
       return;
     }
     const observed = travelBearing(course, compass);
     if (observed !== null) {
       bearingRef.current = observed;
     }
-    mapRef.current?.setCamera({
+    sendGuidanceCamera({
       latitude: fix.latitude,
       longitude: fix.longitude,
       zoom: guidanceZoom,
@@ -283,7 +267,6 @@ export function NavigationScreen({
   }, [nav, routeEpoch]);
 
   async function onSelect(suggestion: PlaceSuggestion): Promise<void> {
-    setSuggestions([]);
     setQuery(suggestion.label);
     const origin = fixRef.current;
     if (permission !== "granted" || !origin) {
@@ -323,7 +306,7 @@ export function NavigationScreen({
     offRouteSinceRef.current = null;
     const origin = fixRef.current;
     if (origin) {
-      mapRef.current?.setCamera({
+      sendGuidanceCamera({
         latitude: origin.latitude,
         longitude: origin.longitude,
         zoom: guidanceZoom,
@@ -349,7 +332,6 @@ export function NavigationScreen({
     offRouteSinceRef.current = null;
     setFinding(false);
     setQuery("");
-    setSuggestions([]);
     setNav({ mode: "browse", destination: null, message: null });
   }
 
@@ -389,9 +371,13 @@ export function NavigationScreen({
       <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
         {showSearch ? (
           <View style={styles.searchCard} pointerEvents="auto">
-            <TextInput
-              value={query}
-              onChangeText={(text) => {
+            <AddressPicker
+              placeholder="Where to?"
+              appearance="search"
+              query={query}
+              token={token}
+              bias={fix}
+              onQueryChange={(text) => {
                 routeRequest.current += 1;
                 setFinding(false);
                 setQuery(text);
@@ -401,20 +387,16 @@ export function NavigationScreen({
                     : { mode: "browse", destination: null, message: null },
                 );
               }}
-              placeholder="Where to?"
-              placeholderTextColor="#667"
-              autoCorrect={false}
-              style={styles.searchInput}
+              onSelect={(suggestion) => {
+                void onSelect(suggestion);
+              }}
+              onUnauthorized={onUnauthorized}
+              onSearchFailed={() => {
+                setNav((current) =>
+                  current.mode === "browse" ? { ...current, message: "Search failed." } : current,
+                );
+              }}
             />
-            {suggestions.map((suggestion) => (
-              <Pressable
-                key={`${suggestion.label}:${suggestion.latitude}:${suggestion.longitude}`}
-                onPress={() => void onSelect(suggestion)}
-                style={styles.suggestion}
-              >
-                <Text style={styles.suggestionText}>{suggestion.label}</Text>
-              </Pressable>
-            ))}
           </View>
         ) : null}
 
@@ -538,22 +520,10 @@ const styles = StyleSheet.create({
   searchCard: {
     margin: 12,
     backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#767676",
     borderRadius: 12,
     overflow: "hidden",
-  },
-  searchInput: {
-    fontSize: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  suggestion: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#ddd",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  suggestionText: {
-    fontSize: 16,
   },
   maneuverCard: {
     marginHorizontal: 12,

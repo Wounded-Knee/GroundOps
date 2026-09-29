@@ -1,0 +1,7 @@
+{"sessionId":"0ddf71","location":"App.tsx:phase","message":"phase changed","hypothesisId":"C","data":{"status":"loading","submitting":false,"driving":false},"timestamp":1790702340157}
+{"sessionId":"0ddf71","location":"App.tsx:initialUrl","message":"initial url","hypothesisId":"D","data":{"hasUrl":false,"scheme":null},"timestamp":1790702340180}
+{"sessionId":"0ddf71","location":"App.tsx:restore","message":"current user result","hypothesisId":"D","data":{"result":"user"},"timestamp":1790702340266}
+{"sessionId":"0ddf71","location":"NavigationScreen.tsx:mount","message":"navigation screen mounted","hypothesisId":"C","data":{},"timestamp":1790702340361}
+{"sessionId":"0ddf71","location":"App.tsx:phase","message":"phase changed","hypothesisId":"C","data":{"status":"signed-in","submitting":false,"driving":true},"timestamp":1790702340367}
+{"sessionId":"0ddf71","location":"App.tsx:phase","message":"phase changed","hypothesisId":"C","data":{"status":"signed-in","submitting":false,"driving":true},"timestamp":1790702340401}
+{"sessionId":"0ddf71","location":"NavigationScreen.tsx:mount","message":"navigation screen mounted","hypothesisId":"C","data":{},"timestamp":1790702396001}
