@@ -1,9 +1,10 @@
 import type { Sortie, SortieWriteRequest } from "@groundops/contracts";
+import * as Location from "expo-location";
 import { useEffect, useRef, useState } from "react";
-import { AppState, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppState, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { readCalendarCache, writeCalendarCache } from "./calendarCache";
-import { authorSortie, ensureCurrentDriver, requestCalendar, reviseSortie } from "./calendarClient";
+import { authorSortie, ensureCurrentDriver, requestCalendar, requestTariff, reviseSortie } from "./calendarClient";
 import {
   blockOnDay,
   calendarDayDelta,
@@ -22,12 +23,15 @@ import {
   weekDays,
   type CalendarScope,
 } from "./calendarTime";
+import type { SortieGuideCommand } from "./sortieGuide";
+import { requestSortieDrivingRoute } from "./routingClient";
 import { SortieDialog, emptyPlaces, placesFromSortie, sortieTitle, type DialogDraft } from "./SortieDialog";
 
 const couldNotLoad = "The calendar could not be loaded.";
 const couldNotRefresh = "The calendar could not be refreshed.";
 const notSaved = "The sortie was not saved.";
 const locationRequired = "Location is required to schedule the sortie.";
+const routeFailed = "The route failed.";
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hours = Array.from({ length: 24 }, (_, hour) => hour);
 
@@ -70,11 +74,13 @@ export function CalendarScreen({
   token,
   reloadToken = 0,
   onUnauthorized,
+  onGuide,
 }: {
   userId: string;
   token: string;
   reloadToken?: number;
   onUnauthorized: () => void;
+  onGuide?: (command: SortieGuideCommand) => void;
 }) {
   const [screen, setScreen] = useState<Ready>(() => emptyCalendar(new Date()));
   const generation = useRef(0);
@@ -264,6 +270,51 @@ export function CalendarScreen({
       return;
     }
     setScreen({ ...ready, summary: sortie, dialog: null, message: null });
+  }
+
+  async function guideSortie(ready: Ready, sortie: Sortie): Promise<void> {
+    if (!onGuide || Platform.OS === "web") {
+      return;
+    }
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (permission.status !== "granted") {
+      setScreen({ ...ready, summary: sortie, message: locationRequired });
+      return;
+    }
+    let position: Location.LocationObject;
+    try {
+      position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation });
+    } catch {
+      setScreen({ ...ready, summary: sortie, message: locationRequired });
+      return;
+    }
+    const origin = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+    };
+    const tariffResult = await requestTariff(apiUrl, token);
+    if (tariffResult === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    const tariff = typeof tariffResult === "string" ? null : tariffResult;
+    const route = await requestSortieDrivingRoute(apiUrl, token, sortie.id, origin, 0);
+    if (route === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (route === "failed") {
+      setScreen({ ...ready, summary: sortie, message: routeFailed });
+      return;
+    }
+    setScreen({ ...ready, summary: null, message: null });
+    onGuide({
+      sortieId: sortie.id,
+      stops: sortie.stops,
+      firstStopPosition: 0,
+      route,
+      tariff,
+    });
   }
 
   const ready = screen;
@@ -487,7 +538,15 @@ export function CalendarScreen({
           {ready.summary ? (
             <SortieSummary
               sortie={ready.summary}
+              message={ready.message}
               onClose={() => setScreen({ ...ready, summary: null })}
+              onGuide={
+                Platform.OS !== "web" && onGuide
+                  ? () => {
+                      void guideSortie(ready, ready.summary!);
+                    }
+                  : null
+              }
               onRevise={() => {
                 const summary = ready.summary;
                 if (summary) {
@@ -608,12 +667,16 @@ function MonthChip({
 
 function SortieSummary({
   sortie,
+  message,
   onClose,
   onRevise,
+  onGuide,
 }: {
   sortie: Sortie;
+  message: string | null;
   onClose: () => void;
   onRevise: () => void;
+  onGuide: (() => void) | null;
 }) {
   return (
     <View style={styles.backdrop}>
@@ -628,9 +691,17 @@ function SortieSummary({
         {sortie.stops.map((stop, index) => (
           <SummaryRow key={`${stop.role}-${stop.label}-${index}`} label={stopRoleLabel(stop.role)} value={stop.label} />
         ))}
-        <Pressable onPress={onRevise} style={styles.primary}>
-          <Text style={styles.primaryText}>Revise</Text>
-        </Pressable>
+        {message ? <Text style={styles.message}>{message}</Text> : null}
+        <View style={styles.summaryActions}>
+          {onGuide ? (
+            <Pressable onPress={onGuide} style={styles.primary}>
+              <Text style={styles.primaryText}>Guide</Text>
+            </Pressable>
+          ) : null}
+          <Pressable onPress={onRevise} style={styles.primary}>
+            <Text style={styles.primaryText}>Revise</Text>
+          </Pressable>
+        </View>
         <Pressable onPress={onClose} style={styles.summaryClose}>
           <Text style={styles.secondaryText}>Close</Text>
         </Pressable>
@@ -898,11 +969,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 8,
   },
+  summaryActions: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 12,
+  },
   message: {
     marginTop: 12,
     fontSize: 16,
   },
   primary: {
+    flex: 1,
     backgroundColor: "#111",
     borderRadius: 8,
     paddingVertical: 14,

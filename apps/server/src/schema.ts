@@ -158,6 +158,18 @@ export const locationObservation = pgTable(
   (table) => [index("location_observation_driver_id_observed_at_idx").on(table.driverId, table.observedAt)],
 );
 
+/** Programmable meter rates for one driver. Money is integer US cents. */
+export const driverTariff = pgTable("driver_tariff", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  driverId: uuid("driver_id")
+    .notNull()
+    .unique()
+    .references(() => driver.id),
+  flagCents: integer("flag_cents").notNull(),
+  perMileCents: integer("per_mile_cents").notNull(),
+  perWaitMinuteCents: integer("per_wait_minute_cents").notNull(),
+});
+
 export const schema = {
   user,
   userCredential,
@@ -169,4 +181,5 @@ export const schema = {
   sortieStop,
   operationalEvent,
   locationObservation,
+  driverTariff,
 };

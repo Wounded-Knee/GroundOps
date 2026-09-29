@@ -1,4 +1,4 @@
-import type { DrivingRoute, GeoCoordinate, PlaceSuggestion } from "@groundops/contracts";
+import type { DrivingRoute, GeoCoordinate, PlaceSuggestion, SortieStop, Tariff } from "@groundops/contracts";
 import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
@@ -6,9 +6,11 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { resolveApiUrl } from "./apiUrl";
-import { authorSortie, ensureCurrentDriver, reportLocationObservation } from "./calendarClient";
+import { authorSortie, ensureCurrentDriver, reportLocationObservation, requestTariff } from "./calendarClient";
 import {
   applyLocationFix,
+  arrivalMeters,
+  distanceMeters,
   distanceToStepEnd,
   formatMeters,
   formatSeconds,
@@ -20,31 +22,63 @@ import {
   remainingDurationSeconds,
   travelBearing,
 } from "./guidance";
+import { advanceMeter, emptyMeter, tickMeterWait, type MeterState } from "./meter";
+import type { MeterDisplay } from "./MeterStrip";
 import { PlatformMap, type MapCamera, type MapHandle } from "./PlatformMap";
-import { requestDrivingRoute } from "./routingClient";
+import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
+import type { SortieGuideCommand } from "./sortieGuide";
+
+export type { SortieGuideCommand } from "./sortieGuide";
 
 type NavState =
   | { mode: "browse"; message: string | null; destination: PlaceSuggestion | null }
-  | { mode: "preview"; destination: PlaceSuggestion; route: DrivingRoute }
+  | {
+      mode: "preview";
+      destination: PlaceSuggestion;
+      route: DrivingRoute;
+      sortieId: string;
+      stops: SortieStop[];
+    }
   | {
       mode: "guiding";
+      kind: "search" | "sortie";
       destination: PlaceSuggestion;
       route: DrivingRoute;
       stepIndex: number;
       muted: boolean;
       offRouteSince: number | null;
       rerouteMessage: string | null;
+      sortieId: string | null;
+      stops: SortieStop[];
+      firstStopPosition: number;
+      tariff: Tariff | null;
     }
-  | { mode: "arrived"; destination: PlaceSuggestion; route: DrivingRoute; muted: boolean };
+  | {
+      mode: "arrived";
+      kind: "search" | "sortie";
+      destination: PlaceSuggestion;
+      route: DrivingRoute;
+      muted: boolean;
+      tariff: Tariff | null;
+      meter: MeterState;
+    };
 
 const apiUrl = resolveApiUrl();
 
 export function NavigationScreen({
   token,
   onUnauthorized,
+  sortieGuide = null,
+  onSortieGuideConsumed,
+  onMeterReading,
+  onMeterEnded,
 }: {
   token: string;
   onUnauthorized: () => void;
+  sortieGuide?: SortieGuideCommand | null;
+  onSortieGuideConsumed?: () => void;
+  onMeterReading?: (reading: MeterDisplay | null) => void;
+  onMeterEnded?: () => void;
 }) {
   const mapRef = useRef<MapHandle>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
@@ -56,11 +90,14 @@ export function NavigationScreen({
   const [compass, setCompass] = useState<number | null>(null);
   const [routeEpoch, setRouteEpoch] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+  const [meter, setMeter] = useState<MeterState>(emptyMeter());
 
   const navRef = useRef(nav);
   navRef.current = nav;
   const fixRef = useRef(fix);
   fixRef.current = fix;
+  const meterRef = useRef(meter);
+  meterRef.current = meter;
   const bearingRef = useRef<number | null>(null);
   const centered = useRef(false);
   const routeRequest = useRef(0);
@@ -70,6 +107,7 @@ export function NavigationScreen({
   const spokenKey = useRef<string | null>(null);
   const speechGeneration = useRef(0);
   const guidedCameraRef = useRef<MapCamera | null>(null);
+  const stopAdvanceInFlight = useRef(false);
 
   function sendGuidanceCamera(camera: MapCamera): void {
     const previous = guidedCameraRef.current;
@@ -86,6 +124,73 @@ export function NavigationScreen({
     guidedCameraRef.current = camera;
     mapRef.current?.setCamera(camera);
   }
+
+  function publishMeter(nextMeter: MeterState, current: NavState, at: GeoCoordinate | null): void {
+    if (current.mode !== "guiding" && current.mode !== "arrived") {
+      onMeterReading?.(null);
+      return;
+    }
+    if (current.kind !== "sortie") {
+      onMeterReading?.(null);
+      return;
+    }
+    const remaining =
+      current.mode === "arrived"
+        ? 0
+        : remainingDistanceMeters(at ?? current.destination, current.route, current.stepIndex);
+    onMeterReading?.({
+      milesTraveled: nextMeter.milesTraveled,
+      waitSeconds: nextMeter.waitSeconds,
+      remainingMeters: remaining,
+      tariff: current.tariff,
+    });
+  }
+
+  useEffect(() => {
+    if (!sortieGuide) {
+      return;
+    }
+    const stop = sortieGuide.stops[sortieGuide.firstStopPosition] ?? sortieGuide.stops[sortieGuide.stops.length - 1];
+    if (!stop) {
+      onSortieGuideConsumed?.();
+      return;
+    }
+    const destination = placeFromStop(stop);
+    const started = emptyMeter();
+    setMeter(started);
+    bearingRef.current = travelBearing(course, compass);
+    rerouteInFlight.current = false;
+    stopAdvanceInFlight.current = false;
+    offRouteSinceRef.current = null;
+    const origin = fixRef.current;
+    if (origin) {
+      sendGuidanceCamera({
+        latitude: origin.latitude,
+        longitude: origin.longitude,
+        zoom: guidanceZoom,
+        tilt: guidanceTilt,
+        bearing: bearingRef.current ?? 0,
+      });
+    }
+    const next: NavState = {
+      mode: "guiding",
+      kind: "sortie",
+      destination,
+      route: sortieGuide.route,
+      stepIndex: 0,
+      muted: false,
+      offRouteSince: null,
+      rerouteMessage: null,
+      sortieId: sortieGuide.sortieId,
+      stops: sortieGuide.stops,
+      firstStopPosition: sortieGuide.firstStopPosition,
+      tariff: sortieGuide.tariff,
+    };
+    setNav(next);
+    setRouteEpoch((epoch) => epoch + 1);
+    publishMeter(started, next, origin);
+    onSortieGuideConsumed?.();
+  }, [sortieGuide]);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,9 +216,23 @@ export function NavigationScreen({
           timeInterval: 1000,
         },
         (location) => {
-          setFix({ latitude: location.coords.latitude, longitude: location.coords.longitude });
+          const sampleFix = { latitude: location.coords.latitude, longitude: location.coords.longitude };
+          setFix(sampleFix);
           const heading = location.coords.heading;
           setCourse(typeof heading === "number" && heading >= 0 ? heading : null);
+          const currentNav = navRef.current;
+          if (currentNav.mode === "guiding" || currentNav.mode === "arrived") {
+            if (currentNav.kind === "sortie") {
+              const advanced = advanceMeter(meterRef.current, {
+                fix: sampleFix,
+                observedAtMs: Date.now(),
+                accuracyMeters: typeof location.coords.accuracy === "number" ? location.coords.accuracy : null,
+              });
+              meterRef.current = advanced;
+              setMeter(advanced);
+              publishMeter(advanced, currentNav, sampleFix);
+            }
+          }
         },
       );
       if (cancelled) {
@@ -145,6 +264,32 @@ export function NavigationScreen({
     mapRef.current.setCamera({ latitude: fix.latitude, longitude: fix.longitude, zoom: 15 });
   }, [fix, nav.mode]);
 
+  const meterActive =
+    (nav.mode === "guiding" || nav.mode === "arrived") && nav.kind === "sortie";
+
+  useEffect(() => {
+    if (!meterActive) {
+      return;
+    }
+    const timer = setInterval(() => {
+      const current = navRef.current;
+      if (current.mode !== "guiding" && current.mode !== "arrived") {
+        return;
+      }
+      if (current.kind !== "sortie") {
+        return;
+      }
+      const ticked = tickMeterWait(meterRef.current, Date.now());
+      if (ticked.waitSeconds === meterRef.current.waitSeconds && ticked.last === meterRef.current.last) {
+        return;
+      }
+      meterRef.current = ticked;
+      setMeter(ticked);
+      publishMeter(ticked, current, fixRef.current);
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [meterActive]);
+
   useEffect(() => {
     if (nav.mode !== "guiding" && nav.mode !== "arrived") {
       return;
@@ -174,6 +319,74 @@ export function NavigationScreen({
       return;
     }
 
+    if (current.kind === "sortie") {
+      const target = current.stops[current.firstStopPosition];
+      const lastIndex = current.stops.length - 1;
+      if (target && distanceMeters(fix, target) <= arrivalMeters) {
+        if (current.firstStopPosition >= lastIndex) {
+          const arrived: NavState = {
+            mode: "arrived",
+            kind: "sortie",
+            destination: current.destination,
+            route: current.route,
+            muted: current.muted,
+            tariff: current.tariff,
+            meter: meterRef.current,
+          };
+          setNav(arrived);
+          publishMeter(meterRef.current, arrived, fix);
+          return;
+        }
+        if (!stopAdvanceInFlight.current && current.sortieId) {
+          stopAdvanceInFlight.current = true;
+          const nextPosition = current.firstStopPosition + 1;
+          const generation = ++rerouteGeneration.current;
+          const origin = fix;
+          const sortieId = current.sortieId;
+          void (async () => {
+            const result = await requestSortieDrivingRoute(apiUrl, token, sortieId, origin, nextPosition);
+            if (generation !== rerouteGeneration.current) {
+              return;
+            }
+            stopAdvanceInFlight.current = false;
+            if (result === "unauthorized") {
+              onUnauthorized();
+              return;
+            }
+            if (result === "failed") {
+              setNav((existing) =>
+                existing.mode === "guiding" && existing.kind === "sortie"
+                  ? { ...existing, rerouteMessage: "Rerouting failed." }
+                  : existing,
+              );
+              return;
+            }
+            const existing = navRef.current;
+            if (existing.mode !== "guiding" || existing.kind !== "sortie") {
+              return;
+            }
+            const nextStop = existing.stops[nextPosition] ?? existing.stops[existing.stops.length - 1];
+            if (!nextStop) {
+              return;
+            }
+            const updated = {
+              ...existing,
+              destination: placeFromStop(nextStop),
+              route: result,
+              stepIndex: 0,
+              firstStopPosition: nextPosition,
+              offRouteSince: null,
+              rerouteMessage: null,
+            };
+            setNav(updated);
+            publishMeter(meterRef.current, updated, origin);
+            setRouteEpoch((epoch) => epoch + 1);
+          })();
+        }
+        return;
+      }
+    }
+
     const outcome = applyLocationFix({
       fix,
       destination: current.destination,
@@ -185,12 +398,19 @@ export function NavigationScreen({
     });
     offRouteSinceRef.current = outcome.offRouteSince;
     if (outcome.arrived) {
-      setNav({
+      const arrived: NavState = {
         mode: "arrived",
+        kind: current.kind,
         destination: current.destination,
         route: current.route,
         muted: current.muted,
-      });
+        tariff: current.tariff,
+        meter: meterRef.current,
+      };
+      setNav(arrived);
+      if (current.kind === "sortie") {
+        publishMeter(meterRef.current, arrived, fix);
+      }
       return;
     }
     if (outcome.stepIndex !== current.stepIndex) {
@@ -202,9 +422,11 @@ export function NavigationScreen({
     rerouteInFlight.current = true;
     const generation = ++rerouteGeneration.current;
     const origin = fix;
-    const destination = current.destination;
     void (async () => {
-      const result = await requestDrivingRoute(apiUrl, token, origin, destination);
+      const result =
+        current.kind === "sortie" && current.sortieId
+          ? await requestSortieDrivingRoute(apiUrl, token, current.sortieId, origin, current.firstStopPosition)
+          : await requestDrivingRoute(apiUrl, token, origin, current.destination);
       if (generation !== rerouteGeneration.current) {
         return;
       }
@@ -214,18 +436,28 @@ export function NavigationScreen({
         onUnauthorized();
         return;
       }
-      setNav((existing) => {
-        if (existing.mode !== "guiding") {
-          return existing;
-        }
-        if (result === "failed") {
-          return { ...existing, rerouteMessage: "Rerouting failed." };
-        }
-        return { ...existing, route: result, stepIndex: 0, offRouteSince: null, rerouteMessage: null };
-      });
-      if (result !== "failed") {
-        setRouteEpoch((epoch) => epoch + 1);
+      if (result === "failed") {
+        setNav((existing) =>
+          existing.mode === "guiding" ? { ...existing, rerouteMessage: "Rerouting failed." } : existing,
+        );
+        return;
       }
+      const existing = navRef.current;
+      if (existing.mode !== "guiding") {
+        return;
+      }
+      const updated = {
+        ...existing,
+        route: result,
+        stepIndex: 0,
+        offRouteSince: null,
+        rerouteMessage: null,
+      };
+      setNav(updated);
+      if (updated.kind === "sortie") {
+        publishMeter(meterRef.current, updated, origin);
+      }
+      setRouteEpoch((epoch) => epoch + 1);
     })();
   }, [fix, course, compass, nav.mode, token, onUnauthorized]);
 
@@ -354,19 +586,26 @@ export function NavigationScreen({
       setNav({ mode: "browse", destination: suggestion, message: "The route failed." });
       return;
     }
-    setNav({ mode: "preview", destination: suggestion, route: result });
+    setNav({
+      mode: "preview",
+      destination: suggestion,
+      route: result,
+      sortieId: authored.id,
+      stops: authored.stops,
+    });
     const camera = overviewCamera(result.path);
     if (camera) {
       mapRef.current?.setCamera(camera);
     }
   }
 
-  function onStart(): void {
+  async function onStart(): Promise<void> {
     if (nav.mode !== "preview") {
       return;
     }
     bearingRef.current = travelBearing(course, compass);
     rerouteInFlight.current = false;
+    stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     const origin = fixRef.current;
     if (origin) {
@@ -378,25 +617,45 @@ export function NavigationScreen({
         bearing: bearingRef.current ?? 0,
       });
     }
-    setNav({
+    const tariffResult = await requestTariff(apiUrl, token);
+    if (tariffResult === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    const tariff = typeof tariffResult === "string" ? null : tariffResult;
+    const started = emptyMeter();
+    setMeter(started);
+    const next: NavState = {
       mode: "guiding",
+      kind: "sortie",
       destination: nav.destination,
       route: nav.route,
       stepIndex: 0,
       muted: false,
       offRouteSince: null,
       rerouteMessage: null,
-    });
+      sortieId: nav.sortieId,
+      stops: nav.stops,
+      firstStopPosition: 0,
+      tariff,
+    };
+    setNav(next);
+    setRouteEpoch((epoch) => epoch + 1);
+    publishMeter(started, next, origin);
   }
 
   function onDismiss(): void {
     routeRequest.current += 1;
     rerouteGeneration.current += 1;
     rerouteInFlight.current = false;
+    stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     setFinding(false);
     setQuery("");
+    setMeter(emptyMeter());
     setNav({ mode: "browse", destination: null, message: null });
+    onMeterReading?.(null);
+    onMeterEnded?.();
   }
 
   function onMute(): void {
@@ -486,7 +745,7 @@ export function NavigationScreen({
               {formatSeconds(preview.route.durationSeconds)} · {formatMeters(preview.route.distanceMeters)}
             </Text>
             <View style={styles.row}>
-              <Pressable style={styles.primary} onPress={onStart}>
+              <Pressable style={styles.primary} onPress={() => void onStart()}>
                 <Text style={styles.primaryText}>Start</Text>
               </Pressable>
               <Pressable style={styles.secondary} onPress={onDismiss}>
@@ -538,6 +797,16 @@ export function NavigationScreen({
       {guiding || arrived ? <Awake /> : null}
     </View>
   );
+}
+
+function placeFromStop(stop: SortieStop): PlaceSuggestion {
+  return {
+    label: stop.label,
+    name: stop.label,
+    detail: "",
+    latitude: stop.latitude,
+    longitude: stop.longitude,
+  };
 }
 
 function Awake() {

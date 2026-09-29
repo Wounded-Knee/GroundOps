@@ -5,6 +5,7 @@ import type {
   Sortie,
   SortieStop,
   SortieWriteRequest,
+  Tariff,
 } from "@groundops/contracts";
 import { taskSortieType } from "@groundops/contracts";
 
@@ -173,6 +174,78 @@ export async function reportLocationObservation(
   } catch {
     return "rejected";
   }
+}
+
+export async function requestTariff(
+  apiUrl: string,
+  token: string,
+): Promise<Tariff | "unauthorized" | "unreachable" | "no-driver"> {
+  try {
+    const response = await fetch(`${apiUrl}/fare-rates`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 409) {
+      return "no-driver";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const body: unknown = await response.json();
+    return isTariff(body) ? body : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+export async function saveTariff(
+  apiUrl: string,
+  token: string,
+  tariff: Tariff,
+): Promise<Tariff | "unauthorized" | "unreachable" | "rejected" | "no-driver"> {
+  try {
+    const response = await fetch(`${apiUrl}/fare-rates`, {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(tariff),
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 409) {
+      return "no-driver";
+    }
+    if (response.status === 400) {
+      return "rejected";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const body: unknown = await response.json();
+    return isTariff(body) ? body : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+function isTariff(value: unknown): value is Tariff {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    Number.isInteger(record.flagCents) &&
+    Number(record.flagCents) >= 0 &&
+    Number.isInteger(record.perMileCents) &&
+    Number(record.perMileCents) >= 0 &&
+    Number.isInteger(record.perWaitMinuteCents) &&
+    Number(record.perWaitMinuteCents) >= 0
+  );
 }
 
 async function readError(response: Response): Promise<string | null> {

@@ -2,13 +2,13 @@
 
 ## Status
 
-**CURRENT SLICE**
+**Previous slice**
 
 **Derived from:** Development Methodology (`docs/02-development-methodology.md`) section 6, the driver calendar in Architectural Specification (`docs/01-architecture..md`) section 9, the driver, company, sortie, driver calendar, and operational event in `docs/03-domain-model.md`, and persistence and the live event path in Technical Architecture (`docs/04-technical-architecture.md`) sections 4 and 7.
 
 **Purpose:** A signed-in person can open a calendar in month, week, or day, author a sortie onto it, revise that sortie, including by dragging it, and still read the last fetched calendar when the server cannot be reached.
 
-This document is the implementation boundary. Responsibility, acceptance, and navigating a sortie stay outside this slice. The calendar is a view of sorties. A sortie stays a sortie. Slice 002's map and guidance stay as they are.
+This document is the implementation boundary. Responsibility, acceptance, and navigating a sortie stay outside this slice. Opening guidance for a sortie is slice 004. The calendar is a view of sorties. A sortie stays a sortie. Slice 002's map and guidance stay as they are.
 
 ---
 
@@ -288,7 +288,7 @@ The slice works when all of the following are true on the local stack:
 - Cancellation
 - Duty, availability, dispatch shifts, duty shifts, and vehicle assignment
 - Sortie types other than `task`, and a type registry
-- Driving-route geometry from these stops, and opening guidance for a sortie or a stop
+- Driving-route geometry from these stops, and opening guidance for a single stop. Opening guidance for a full sortie is slice 004
 - Background location, and stopping GPS reports while off duty
 - All-day sorties, recurrence, reminders, more than one calendar, colors, guests, and search
 - Conflict detection, feasibility, and schedule margins

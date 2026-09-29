@@ -12,7 +12,9 @@ import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
 import { authorSortie, ensureCurrentDriver } from "./src/calendarClient";
+import { MeterOverlay, MeterStrip, type MeterDisplay } from "./src/MeterStrip";
 import { NavigationScreen } from "./src/NavigationScreen";
+import type { SortieGuideCommand } from "./src/sortieGuide";
 import { SettingsScreen } from "./src/SettingsScreen";
 import { SortieDialog, emptyPlaces, type DialogDraft } from "./src/SortieDialog";
 import {
@@ -63,6 +65,9 @@ export default function App() {
   const [compose, setCompose] = useState<DialogDraft | null>(null);
   const [composeMessage, setComposeMessage] = useState<string | null>(null);
   const [calendarReload, setCalendarReload] = useState(0);
+  const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
+  const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
+  const [meterOverlayOpen, setMeterOverlayOpen] = useState(false);
   const generation = useRef(0);
   const composeSaving = useRef(false);
 
@@ -172,6 +177,9 @@ export default function App() {
     setDestination("navigation");
     setCompose(null);
     setComposeMessage(null);
+    setSortieGuide(null);
+    setMeterReading(null);
+    setMeterOverlayOpen(false);
   }
 
   async function classifyClosedSocket(token: string, currentGeneration: number): Promise<void> {
@@ -377,7 +385,17 @@ export default function App() {
             <LocationReporter token={phase.token} onUnauthorized={() => void onSessionRejected()} />
             <View style={styles.content}>
               {Platform.OS !== "web" ? (
-                <NavigationScreen token={phase.token} onUnauthorized={() => void onSessionRejected()} />
+                <NavigationScreen
+                  token={phase.token}
+                  onUnauthorized={() => void onSessionRejected()}
+                  sortieGuide={sortieGuide}
+                  onSortieGuideConsumed={() => setSortieGuide(null)}
+                  onMeterReading={setMeterReading}
+                  onMeterEnded={() => {
+                    setMeterReading(null);
+                    setMeterOverlayOpen(false);
+                  }}
+                />
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (
                 <View style={styles.webIdentity}>
@@ -391,14 +409,20 @@ export default function App() {
                     token={phase.token}
                     reloadToken={calendarReload}
                     onUnauthorized={() => void onSessionRejected()}
+                    onGuide={(command) => {
+                      setSortieGuide(command);
+                      setDestination("navigation");
+                    }}
                   />
                 </View>
               ) : null}
               {destination === "settings" ? (
                 <View style={styles.cover}>
                   <SettingsScreen
+                    token={phase.token}
                     signOutMessage={phase.signOutMessage}
                     onSignOut={() => void onSignOut(phase.token)}
+                    onUnauthorized={() => void onSessionRejected()}
                   />
                 </View>
               ) : null}
@@ -415,7 +439,13 @@ export default function App() {
                   onSave={(body) => void saveCompose(phase.token, body)}
                 />
               ) : null}
+              {meterOverlayOpen && meterReading ? (
+                <MeterOverlay reading={meterReading} onClose={() => setMeterOverlayOpen(false)} />
+              ) : null}
             </View>
+            {meterReading ? (
+              <MeterStrip reading={meterReading} onPress={() => setMeterOverlayOpen(true)} />
+            ) : null}
             <BottomNav
               destination={destination}
               composeOpen={compose !== null}

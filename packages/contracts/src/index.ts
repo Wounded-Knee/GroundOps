@@ -137,3 +137,25 @@ export type LocationObservationRequest = {
 export type CalendarResponse = {
   sorties: Sortie[];
 };
+
+/** Driver-owned meter rates. Money is integer US cents. */
+export type Tariff = {
+  flagCents: number;
+  perMileCents: number;
+  perWaitMinuteCents: number;
+};
+
+export type ReplaceTariffRequest = Tariff;
+
+export type TariffResponse = Tariff;
+
+export const defaultTariff: Tariff = {
+  flagCents: 300,
+  perMileCents: 250,
+  perWaitMinuteCents: 40,
+};
+
+export type SortieDrivingRouteRequest = {
+  origin: GeoCoordinate;
+  firstStopPosition: number;
+};

@@ -87,6 +87,39 @@ export async function requestDrivingRoute(
   }
 }
 
+export async function requestSortieDrivingRoute(
+  apiUrl: string,
+  token: string,
+  sortieId: string,
+  origin: GeoCoordinate,
+  firstStopPosition: number,
+): Promise<DrivingRoute | "failed" | "unauthorized"> {
+  try {
+    const response = await fetch(`${apiUrl}/sorties/${sortieId}/driving-route`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ origin, firstStopPosition }),
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (!response.ok) {
+      return "failed";
+    }
+    const payload: unknown = await response.json();
+    if (!isRecord(payload)) {
+      return "failed";
+    }
+    const route = readRoute(payload.route);
+    return route ?? "failed";
+  } catch {
+    return "failed";
+  }
+}
+
 function readSuggestion(value: unknown): PlaceSuggestion | null {
   if (!isRecord(value) || typeof value.label !== "string" || value.label.length === 0) {
     return null;

@@ -67,27 +67,45 @@ export async function suggestPlaces(
 export async function computeDrivingRoute(
   origin: GeoCoordinate,
   destination: GeoCoordinate,
-  client: Partial<GoogleClient> = {},
+  client?: Partial<GoogleClient>,
+): Promise<DrivingRoute | "no-route" | "failed">;
+export async function computeDrivingRoute(
+  origin: GeoCoordinate,
+  destination: GeoCoordinate,
+  intermediates: GeoCoordinate[],
+  client?: Partial<GoogleClient>,
+): Promise<DrivingRoute | "no-route" | "failed">;
+export async function computeDrivingRoute(
+  origin: GeoCoordinate,
+  destination: GeoCoordinate,
+  third: GeoCoordinate[] | Partial<GoogleClient> = [],
+  fourth: Partial<GoogleClient> = {},
 ): Promise<DrivingRoute | "no-route" | "failed"> {
+  const intermediates = Array.isArray(third) ? third : [];
+  const client = Array.isArray(third) ? fourth : third;
   const resolved = resolveClient(client);
   if (resolved === "failed") {
     return "failed";
   }
 
   try {
+    const body: Record<string, unknown> = {
+      origin: latLngLocation(origin),
+      destination: latLngLocation(destination),
+      travelMode: "DRIVE",
+      routingPreference: "TRAFFIC_AWARE",
+      computeAlternativeRoutes: false,
+    };
+    if (intermediates.length > 0) {
+      body.intermediates = intermediates.map((stop) => latLngLocation(stop));
+    }
     const response = await resolved.fetch(routesUrl, {
       method: "POST",
       headers: {
         ...googleHeaders(resolved.apiKey),
         "X-Goog-FieldMask": routeFieldMask,
       },
-      body: JSON.stringify({
-        origin: latLngLocation(origin),
-        destination: latLngLocation(destination),
-        travelMode: "DRIVE",
-        routingPreference: "TRAFFIC_AWARE",
-        computeAlternativeRoutes: false,
-      }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) {
       return "failed";

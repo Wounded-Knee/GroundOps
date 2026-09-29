@@ -9,6 +9,7 @@ import {
   company,
   driver,
   driverCompany,
+  driverTariff,
   locationObservation,
   operationalEvent,
   session,
@@ -969,6 +970,7 @@ async function removeUser(userId: string): Promise<void> {
     }
     await db.delete(sortie).where(eq(sortie.authorDriverId, row.id));
     await db.delete(locationObservation).where(eq(locationObservation.driverId, row.id));
+    await db.delete(driverTariff).where(eq(driverTariff.driverId, row.id));
     const links = await db
       .select({ companyId: driverCompany.companyId })
       .from(driverCompany)
