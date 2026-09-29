@@ -1,20 +1,21 @@
 import type { User } from "@groundops/contracts";
 import * as AuthSession from "expo-auth-session";
 import * as Crypto from "expo-crypto";
-import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { resolveApiUrl } from "./src/apiUrl";
+import { CalendarScreen } from "./src/CalendarScreen";
+import { clearCalendarCache } from "./src/calendarCache";
 import { NavigationScreen } from "./src/NavigationScreen";
 import {
   createSession,
   openAuthenticatedSocket,
   readCurrentUser,
   revokeSession,
-  sessionKey,
 } from "./src/sessionClient";
+import { deleteStoredSession, readStoredSession, writeStoredSession } from "./src/sessionStore";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -50,6 +51,7 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>({ status: "loading" });
   const [nonce, setNonce] = useState(() => Crypto.randomUUID());
   const [submitting, setSubmitting] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const generation = useRef(0);
 
   const [request, , promptAsync] = AuthSession.useAuthRequest(
@@ -72,7 +74,7 @@ export default function App() {
     async function restore(): Promise<void> {
       let token: string | null;
       try {
-        token = await SecureStore.getItemAsync(sessionKey);
+        token = await readStoredSession();
       } catch (error) {
         if (!cancelled) {
           setPhase({ status: "offline", message: errorMessage(error) });
@@ -92,8 +94,10 @@ export default function App() {
         return;
       }
       if (current === "unauthorized") {
-        await SecureStore.deleteItemAsync(sessionKey);
+        await deleteStoredSession();
+        await forgetCalendarCache();
         if (!cancelled) {
+          setCalendarOpen(false);
           setPhase({ status: "signed-out", message: null });
         }
         return;
@@ -158,10 +162,12 @@ export default function App() {
       return;
     }
     if (current === "unauthorized") {
-      await SecureStore.deleteItemAsync(sessionKey);
+      await deleteStoredSession();
+      await forgetCalendarCache();
       if (generation.current !== currentGeneration) {
         return;
       }
+      setCalendarOpen(false);
       setPhase({ status: "signed-out", message: null });
       return;
     }
@@ -206,7 +212,7 @@ export default function App() {
         setPhase({ status: "signed-out", message: "Sign-in failed." });
         return;
       }
-      await SecureStore.setItemAsync(sessionKey, created.token);
+      await writeStoredSession(created.token);
       setPhase({
         status: "signed-in",
         token: created.token,
@@ -232,13 +238,17 @@ export default function App() {
       );
       return;
     }
-    await SecureStore.deleteItemAsync(sessionKey);
+    await deleteStoredSession();
+    await forgetCalendarCache();
+    setCalendarOpen(false);
     setPhase({ status: "signed-out", message: null });
   }
 
   async function onSessionRejected(): Promise<void> {
     generation.current += 1;
-    await SecureStore.deleteItemAsync(sessionKey);
+    await deleteStoredSession();
+    await forgetCalendarCache();
+    setCalendarOpen(false);
     setPhase({ status: "signed-out", message: null });
   }
 
@@ -246,7 +256,7 @@ export default function App() {
     setPhase({ status: "loading" });
     let token: string | null;
     try {
-      token = await SecureStore.getItemAsync(sessionKey);
+      token = await readStoredSession();
     } catch (error) {
       setPhase({ status: "offline", message: errorMessage(error) });
       return;
@@ -257,7 +267,9 @@ export default function App() {
     }
     const current = await readCurrentUser(apiUrl, token);
     if (current === "unauthorized") {
-      await SecureStore.deleteItemAsync(sessionKey);
+      await deleteStoredSession();
+      await forgetCalendarCache();
+      setCalendarOpen(false);
       setPhase({ status: "signed-out", message: null });
       return;
     }
@@ -275,29 +287,52 @@ export default function App() {
   }
 
   const driving = phase.status === "signed-in" && Platform.OS !== "web";
+  const showCalendar = phase.status === "signed-in" && calendarOpen;
 
   return (
-    <View style={driving ? styles.map : styles.container}>
+    <View style={driving || showCalendar ? styles.map : styles.container}>
       {phase.status === "loading" ? <Text>Checking session…</Text> : null}
       {phase.status === "signed-out" ? (
         <SignIn message={phase.message} disabled={submitting} onSignIn={() => void onSignIn()} />
       ) : null}
       {phase.status === "offline" ? <Offline message={phase.message} onRetry={() => void onRetry()} /> : null}
-      {phase.status === "signed-in" && Platform.OS === "web" ? (
+      {phase.status === "signed-in" && Platform.OS === "web" && !showCalendar ? (
         <SignedIn
           user={phase.user}
           live={phase.live}
           signOutMessage={phase.signOutMessage}
           onSignOut={() => void onSignOut(phase.token)}
+          onOpenCalendar={() => setCalendarOpen(true)}
+        />
+      ) : null}
+      {phase.status === "signed-in" && Platform.OS === "web" && showCalendar ? (
+        <CalendarScreen
+          userId={phase.user.id}
+          token={phase.token}
+          onClose={() => setCalendarOpen(false)}
+          onUnauthorized={() => void onSessionRejected()}
         />
       ) : null}
       {driving ? (
-        <NavigationScreen
-          token={phase.token}
-          signOutMessage={phase.signOutMessage}
-          onSignOut={() => void onSignOut(phase.token)}
-          onUnauthorized={() => void onSessionRejected()}
-        />
+        <View style={styles.map}>
+          <NavigationScreen
+            token={phase.token}
+            signOutMessage={phase.signOutMessage}
+            onSignOut={() => void onSignOut(phase.token)}
+            onUnauthorized={() => void onSessionRejected()}
+            onOpenCalendar={() => setCalendarOpen(true)}
+          />
+          {showCalendar ? (
+            <View style={styles.calendarCover}>
+              <CalendarScreen
+                userId={phase.user.id}
+                token={phase.token}
+                onClose={() => setCalendarOpen(false)}
+                onUnauthorized={() => void onSessionRejected()}
+              />
+            </View>
+          ) : null}
+        </View>
       ) : null}
       <StatusBar style="auto" />
     </View>
@@ -328,11 +363,13 @@ function SignedIn({
   live,
   signOutMessage,
   onSignOut,
+  onOpenCalendar,
 }: {
   user: User;
   live: "authenticated" | "closed";
   signOutMessage: string | null;
   onSignOut: () => void;
+  onOpenCalendar: () => void;
 }) {
   return (
     <>
@@ -343,11 +380,22 @@ function SignedIn({
           : "Live connection not authenticated"}
       </Text>
       {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
-      <Pressable style={styles.button} onPress={onSignOut}>
+      <Pressable style={styles.button} onPress={onOpenCalendar}>
+        <Text style={styles.buttonText}>Calendar</Text>
+      </Pressable>
+      <Pressable style={[styles.button, styles.signOutButton]} onPress={onSignOut}>
         <Text style={styles.buttonText}>Sign out</Text>
       </Pressable>
     </>
   );
+}
+
+async function forgetCalendarCache(): Promise<void> {
+  try {
+    await clearCalendarCache();
+  } catch {
+    // A later sign-in discards a cache stored for a different user.
+  }
 }
 
 function Offline({ message, onRetry }: { message: string; onRetry: () => void }) {
@@ -441,6 +489,17 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
     backgroundColor: "#fff",
+  },
+  calendarCover: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: "#fff",
+  },
+  signOutButton: {
+    marginTop: 12,
   },
   identity: {
     fontSize: 20,

@@ -8,6 +8,8 @@ import { findActiveSession } from "./identity/sessions.js";
 import { readBearer } from "./identity/tokens.js";
 import { registerRoutingRoutes } from "./routing/http.js";
 import { computeDrivingRoute, suggestPlaces } from "./routing/google.js";
+import { registerCalendarRoutes } from "./calendar/http.js";
+import { registerLocalCors } from "./cors.js";
 import { registerSessionRoutes } from "./routes.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -17,8 +19,10 @@ const app = Fastify({ logger: true });
 const bus = await connectBus();
 
 await migrateDatabase();
+registerLocalCors(app);
 await app.register(websocket);
 registerSessionRoutes(app);
+registerCalendarRoutes(app);
 registerRoutingRoutes(app, {
   findSession: async (authorization) => {
     const token = readBearer(authorization);

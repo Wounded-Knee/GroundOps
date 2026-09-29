@@ -2,7 +2,7 @@
 
 ## Status
 
-**CURRENT SLICE**
+**Previous slice**
 
 **Derived from:** Development Methodology (`docs/02-development-methodology.md`) section 6, the routing boundary in Technical Architecture (`docs/04-technical-architecture.md`) section 8, and the routing and location distinctions in Architectural Specification (`docs/01-architecture..md`) sections 8, 11, and 31 and in `docs/03-domain-model.md`.
 

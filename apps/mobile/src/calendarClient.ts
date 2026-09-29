@@ -1,0 +1,152 @@
+import type { CalendarResponse, Driver, Sortie, SortieStop, SortieWriteRequest } from "@groundops/contracts";
+import { taskSortieType } from "@groundops/contracts";
+
+export async function ensureCurrentDriver(
+  apiUrl: string,
+  token: string,
+): Promise<Driver | "unauthorized" | "unreachable"> {
+  try {
+    const response = await fetch(`${apiUrl}/drivers/current`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const body: unknown = await response.json();
+    return isDriver(body) ? body : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+export async function requestCalendar(
+  apiUrl: string,
+  token: string,
+  from: string,
+  to: string,
+): Promise<CalendarResponse | "unauthorized" | "unreachable" | "rejected"> {
+  try {
+    const url = new URL(`${apiUrl}/calendar`);
+    url.searchParams.set("from", from);
+    url.searchParams.set("to", to);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 400 || response.status === 409) {
+      return "rejected";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const body: unknown = await response.json();
+    return isCalendarResponse(body) ? body : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+export async function authorSortie(
+  apiUrl: string,
+  token: string,
+  body: SortieWriteRequest,
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
+  return writeSortie(apiUrl, token, "POST", "/sorties", body);
+}
+
+export async function reviseSortie(
+  apiUrl: string,
+  token: string,
+  sortieId: string,
+  body: SortieWriteRequest,
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
+  return writeSortie(apiUrl, token, "PATCH", `/sorties/${sortieId}`, body);
+}
+
+async function writeSortie(
+  apiUrl: string,
+  token: string,
+  method: "POST" | "PATCH",
+  path: string,
+  body: SortieWriteRequest,
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
+  try {
+    const response = await fetch(`${apiUrl}${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 400 || response.status === 404 || response.status === 409) {
+      return "rejected";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const parsed: unknown = await response.json();
+    return isSortie(parsed) ? parsed : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+function isCalendarResponse(value: unknown): value is CalendarResponse {
+  if (typeof value !== "object" || value === null || !("sorties" in value)) {
+    return false;
+  }
+  const sorties = value.sorties;
+  return Array.isArray(sorties) && sorties.every(isSortie);
+}
+
+function isDriver(value: unknown): value is Driver {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.id === "string" && record.id.length > 0 && typeof record.userId === "string";
+}
+
+function isSortie(value: unknown): value is Sortie {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    record.id.length > 0 &&
+    record.type === taskSortieType &&
+    typeof record.label === "string" &&
+    typeof record.scheduledStart === "string" &&
+    typeof record.scheduledEnd === "string" &&
+    (record.passengerName === null || typeof record.passengerName === "string") &&
+    (record.passengerPhone === null || typeof record.passengerPhone === "string") &&
+    Array.isArray(record.stops) &&
+    record.stops.every(isStop)
+  );
+}
+
+function isStop(value: unknown): value is SortieStop {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.label === "string" &&
+    record.label.length > 0 &&
+    typeof record.latitude === "number" &&
+    Number.isFinite(record.latitude) &&
+    typeof record.longitude === "number" &&
+    Number.isFinite(record.longitude)
+  );
+}

@@ -44,6 +44,8 @@ module.exports = () => {
       },
       plugins: [
         ...(appJson.expo.plugins ?? []),
+        "expo-sqlite",
+        "@react-native-community/datetimepicker",
         [
           "expo-maps",
           {

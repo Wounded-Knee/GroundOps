@@ -51,11 +51,13 @@ export function NavigationScreen({
   signOutMessage,
   onSignOut,
   onUnauthorized,
+  onOpenCalendar,
 }: {
   token: string;
   signOutMessage: string | null;
   onSignOut: () => void;
   onUnauthorized: () => void;
+  onOpenCalendar: () => void;
 }) {
   const mapRef = useRef<MapHandle>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
@@ -495,6 +497,11 @@ export function NavigationScreen({
             {finding ? <Text style={styles.message}>Finding route…</Text> : null}
             {browseMessage ? <Text style={styles.message}>{browseMessage}</Text> : null}
             {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
+            {showSignOut ? (
+              <Pressable onPress={onOpenCalendar}>
+                <Text style={styles.signOut}>Calendar</Text>
+              </Pressable>
+            ) : null}
             {showSignOut ? (
               <Pressable onPress={onSignOut}>
                 <Text style={styles.signOut}>Sign out</Text>

@@ -3,6 +3,7 @@ export function NavigationScreen(_props: {
   signOutMessage: string | null;
   onSignOut: () => void;
   onUnauthorized: () => void;
+  onOpenCalendar: () => void;
 }): null {
   return null;
 }

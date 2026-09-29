@@ -83,3 +83,41 @@ export type DrivingRoute = {
 export type DrivingRouteResponse = {
   route: DrivingRoute;
 };
+
+/** Platform sortie type this slice authors. */
+export const taskSortieType = "task";
+
+export type Driver = {
+  id: string;
+  userId: string;
+};
+
+export type SortieStop = {
+  label: string;
+  latitude: number;
+  longitude: number;
+};
+
+export type Sortie = {
+  id: string;
+  type: typeof taskSortieType;
+  label: string;
+  scheduledStart: string;
+  scheduledEnd: string;
+  passengerName: string | null;
+  passengerPhone: string | null;
+  stops: SortieStop[];
+};
+
+export type SortieWriteRequest = {
+  label: string;
+  scheduledStart: string;
+  scheduledEnd: string;
+  passengerName: string | null;
+  passengerPhone: string | null;
+  stops: SortieStop[];
+};
+
+export type CalendarResponse = {
+  sorties: Sortie[];
+};
