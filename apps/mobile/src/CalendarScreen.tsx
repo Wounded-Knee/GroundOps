@@ -617,6 +617,7 @@ function SortieSummary({
         <Text style={styles.summaryTitle}>{sortie.label}</Text>
         <SummaryRow label="Arrival" value={when(sortie.arrivalAt)} />
         <SummaryRow label="Start" value={when(sortie.scheduledStart)} />
+        <SummaryRow label="Depart from" value={sortie.departureAddress.length > 0 ? sortie.departureAddress : "—"} />
         <SummaryRow label="End" value={when(sortie.scheduledEnd)} />
         <SummaryRow label="Passenger" value={sortie.passengerName ?? "—"} />
         <SummaryRow label="Phone" value={sortie.passengerPhone ? formatUsPhone(sortie.passengerPhone) : "—"} />

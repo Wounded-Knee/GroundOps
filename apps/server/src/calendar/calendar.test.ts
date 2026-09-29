@@ -116,6 +116,7 @@ describe("calendar", () => {
       assert.equal(authored.arrivalAt, "2026-09-02T15:00:00.000Z");
       assert.equal(authored.scheduledStart, "2026-09-02T15:00:00.000Z");
       assert.equal(authored.scheduledEnd, "2026-09-02T16:00:00.000Z");
+      assert.equal(authored.departureAddress, "Driver location");
 
       const earlier = await authorSortie(
         first.user,
@@ -170,7 +171,7 @@ describe("calendar", () => {
       const createdEvents = await eventsFor(authored.id);
       assert.deepEqual(
         createdEvents.map((event) => event.type),
-        ["sortie.created"],
+        ["sortie.created", "sortie.schedule_computed"],
       );
       assert.equal(createdEvents[0]?.label, "Crew move");
     } finally {
@@ -347,6 +348,7 @@ describe("calendar", () => {
       assert.equal(created.json().arrivalAt, "2026-09-08T12:00:00.000Z");
       assert.equal(created.json().scheduledStart, "2026-09-08T12:00:00.000Z");
       assert.equal(created.json().scheduledEnd, "2026-09-08T13:00:00.000Z");
+      assert.equal(created.json().departureAddress, "Driver location");
       const sortieId = created.json().id as string;
 
       const blank = await app.inject({
@@ -642,7 +644,7 @@ describe("calendar", () => {
 
       const ended = await authorSortie(
         person.user,
-        task("Closed", new Date("2026-08-01T15:00:00.000Z")),
+        task("Closed", new Date("2026-09-08T15:00:00.000Z")),
         {
           ...deps,
           now: () => new Date("2026-09-10T00:00:00.000Z"),
@@ -721,6 +723,79 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
+
+  it("starts a later sortie from the previous sortie's destination", async () => {
+    const person = await createSession({
+      sub: `calendar-chain-${crypto.randomUUID()}`,
+      displayName: "Chain",
+      email: null,
+    });
+    const laterOrigin = { label: "Later origin", latitude: 41, longitude: -73 };
+    const laterDestination = { label: "Later destination", latitude: 41.2, longitude: -73.2 };
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id);
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        lookupAddress: async () => "Driver location",
+        driveDuration: async (origin, destination) => {
+          if (destination.latitude === laterOrigin.latitude && origin.latitude === destinationStop.latitude) {
+            return 1800;
+          }
+          if (destination.latitude === originStop.latitude && origin.latitude === driverFix.latitude) {
+            return 0;
+          }
+          return 3600;
+        },
+      };
+      const first = await authorSortie(person.user, task("First", new Date("2026-09-02T15:00:00.000Z")), deps);
+      assert.equal(typeof first, "object");
+      if (typeof first !== "object") {
+        return;
+      }
+      assert.equal(first.scheduledStart, "2026-09-02T15:00:00.000Z");
+      assert.equal(first.departureAddress, "Driver location");
+
+      const secondArrival = new Date("2026-09-02T18:00:00.000Z");
+      const second = await authorSortie(
+        person.user,
+        task("Second", secondArrival, { stops: [laterOrigin, laterDestination] }),
+        deps,
+      );
+      assert.equal(typeof second, "object");
+      if (typeof second !== "object") {
+        return;
+      }
+      assert.equal(second.scheduledStart, "2026-09-02T17:30:00.000Z");
+      assert.equal(second.scheduledEnd, "2026-09-02T19:00:00.000Z");
+      assert.equal(second.departureAddress, destinationStop.label);
+      const anchor = await db
+        .select({ latitude: sortie.scheduleOriginLatitude })
+        .from(sortie)
+        .where(eq(sortie.id, second.id));
+      assert.equal(anchor[0]?.latitude, destinationStop.latitude);
+
+      const moved = await recordObservation(
+        person.user,
+        {
+          observedAt: new Date("2026-09-01T16:00:00.000Z"),
+          latitude: 40.2,
+          longitude: -74,
+          accuracyMeters: 10,
+        },
+        deps,
+      );
+      assert.equal(moved, "ok");
+      const kept = await db
+        .select({ scheduledStart: sortie.scheduledStart })
+        .from(sortie)
+        .where(eq(sortie.id, second.id));
+      assert.equal(kept[0]?.scheduledStart.toISOString(), second.scheduledStart);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
 });
 
 async function companiesFor(userId: string): Promise<string[]> {
@@ -764,6 +839,7 @@ const scheduleDeps: ScheduleDeps = {
   now: () => scheduleNow,
   driveDuration: async (origin, destination) =>
     destination.latitude === originStop.latitude && origin.latitude !== originStop.latitude ? 0 : 3600,
+  lookupAddress: async () => "Driver location",
 };
 
 function task(label: string, arrivalAt: Date, extra?: Partial<SortieInput>): SortieInput {

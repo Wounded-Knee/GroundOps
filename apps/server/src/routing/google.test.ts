@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { computeDriveDuration, computeDrivingRoute, mapGoogleRoute, mapManeuver, suggestPlaces } from "./google.js";
+import { computeDriveDuration, computeDrivingRoute, lookupAddress, mapGoogleRoute, mapManeuver, suggestPlaces } from "./google.js";
 
 const encoded = "_p~iF~ps|U_ulLnnqC_mqNvxq`@";
 
@@ -281,5 +281,27 @@ describe("computeDriveDuration", () => {
     assert.equal(request.body.departureTime, "2026-09-02T14:30:00.000Z");
     assert.equal(request.body.travelMode, "DRIVE");
     assert.equal(Array.isArray(request.body.intermediates) ? request.body.intermediates.length : 0, 1);
+  });
+});
+
+describe("lookupAddress", () => {
+  it("returns the formatted address for a coordinate", async () => {
+    let requested = "";
+    const address = await lookupAddress(
+      { latitude: 40.7128, longitude: -74.006 },
+      {
+        apiKey: "test-key",
+        fetch: async (url) => {
+          requested = String(url);
+          return Response.json({
+            status: "OK",
+            results: [{ formatted_address: "City Hall, New York, NY, USA" }],
+          });
+        },
+      },
+    );
+    assert.equal(address, "City Hall, New York, NY, USA");
+    assert.match(requested, /latlng=40\.7128(%2C|,)-74\.006/);
+    assert.match(requested, /key=test-key/);
   });
 });

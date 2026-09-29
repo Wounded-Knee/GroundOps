@@ -3,6 +3,7 @@ import { decodePolyline } from "./polyline.js";
 
 const placesAutocompleteUrl = "https://places.googleapis.com/v1/places:autocomplete";
 const routesUrl = "https://routes.googleapis.com/directions/v2:computeRoutes";
+const geocodeUrl = "https://maps.googleapis.com/maps/api/geocode/json";
 const suggestionLimit = 5;
 const biasRadiusMeters = 50_000;
 
@@ -134,6 +135,47 @@ export async function computeDriveDuration(
   } catch {
     return "failed";
   }
+}
+
+/** Reverse-geocodes a coordinate into a formatted address. */
+export async function lookupAddress(
+  position: GeoCoordinate,
+  client: Partial<GoogleClient> = {},
+): Promise<string | null> {
+  const resolved = resolveClient(client);
+  if (resolved === "failed") {
+    return null;
+  }
+
+  const url = new URL(geocodeUrl);
+  url.searchParams.set("latlng", `${position.latitude},${position.longitude}`);
+  url.searchParams.set("key", resolved.apiKey);
+
+  try {
+    const response = await resolved.fetch(url.toString(), { method: "GET" });
+    if (!response.ok) {
+      return null;
+    }
+    return readFormattedAddress(await response.json());
+  } catch {
+    return null;
+  }
+}
+
+export function readFormattedAddress(body: unknown): string | null {
+  if (!isRecord(body) || !Array.isArray(body.results)) {
+    return null;
+  }
+  for (const result of body.results) {
+    if (!isRecord(result) || typeof result.formatted_address !== "string") {
+      continue;
+    }
+    const address = result.formatted_address.trim();
+    if (address.length > 0) {
+      return address;
+    }
+  }
+  return null;
 }
 
 export function readRouteDuration(body: unknown): number | "no-route" {

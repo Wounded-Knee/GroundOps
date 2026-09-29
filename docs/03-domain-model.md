@@ -196,7 +196,7 @@ A sortie has one **company of record**: the company the sortie belongs to. That 
 
 A sortie may be unassigned. A sortie may contain an ordered series of stops. A sortie's routing is a result obtained through a replaceable routing capability. The domain model does not depend on a particular routing provider's representation.
 
-On the driver calendar, the authored schedule fact is the arrival at the origin: the time the driver is to arrive there. The scheduled start and the scheduled end are computed results, cached on the sortie. They are not a second kind of appointment. The start is the arrival minus the traffic-aware drive from the driver's latest location observation to the origin. The end is the arrival plus the traffic-aware drive from the origin through each waypoint to the destination, including projected traffic for that departure. The calendar draws the cached window.
+On the driver calendar, the authored schedule fact is the arrival at the origin: the time the driver is to arrive there. The scheduled start and the scheduled end are computed results, cached on the sortie. They are not a second kind of appointment. The start is the arrival minus the traffic-aware drive to the origin. When another sortie has an earlier arrival, that drive starts at the earlier sortie's destination, which is where the driver plans to be before leaving for this origin. The earliest sortie starts that drive from the driver's latest location observation. The end is the arrival plus the traffic-aware drive from the origin through each waypoint to the destination, including projected traffic for that departure. The calendar draws the cached window. The summary of a sortie shows the address of the place that drive started from, which is the same origin used to compute the start.
 
 **What it is not.** A sortie is not a calendar event, a draft, a booking object, a telephone call, or a taxi job. Creation channel does not create a different downstream object. Customer and passenger details are data carried by the sortie according to its type. They are not a universal passenger entity.
 
@@ -276,7 +276,7 @@ A **location observation** is a timestamped GPS fix from a driver's device.
 
 Observations are the stored form of location. A continuous track is not a domain object. A track can be reconstructed from observations. Observations taken during a sortie may be associated with that sortie so the movement can be reconstructed later.
 
-Each stored observation is one fix: the time reported by the device, a coordinate, and accuracy when the device provides it. The client does not record every GPS tick. It reports a fix after a meaningful move, or after a few minutes while the signed-in app is in the foreground. The latest observation is the driver's current position for the approach leg of a sortie window. A later observation recomputes that cached window when it is at least ten miles from the position used for the previous successful computation, and only while the cached end is still in the future. Off duty still stops transmission. A slice that has no duty reports while the signed-in app is in the foreground. Observations are not broadcast as precise location.
+Each stored observation is one fix: the time reported by the device, a coordinate, and accuracy when the device provides it. The client does not record every GPS tick. It reports a fix after a meaningful move, or after a few minutes while the signed-in app is in the foreground. The latest observation is the driver's current position for the approach leg of a sortie that has no earlier sortie on the calendar. A later observation recomputes that cached window when it is at least ten miles from the position used for the previous successful computation, and only while the cached end is still in the future. A sortie that follows another uses the previous sortie's destination instead, and a GPS move does not recompute it. Off duty still stops transmission. A slice that has no duty reports while the signed-in app is in the foreground. Observations are not broadcast as precise location.
 
 Retention of observations follows the effective retention policy.
 
@@ -430,7 +430,7 @@ These rules are universal. Company configuration chooses among platform-supporte
 6. Off duty stops GPS transmission.
 7. Precise driver location is not generally visible to every driver.
 8. A driver traffic report stays distinct from routing-provider traffic data.
-9. The latest location observation is the position used for a sortie's approach drive. A move of at least ten miles from the position of the previous successful computation recomputes the cached window while that window's end is still in the future.
+9. The latest location observation is the approach position for a sortie with no earlier arrival. A later sortie approaches from the previous sortie's destination. A move of at least ten miles from the position of the previous successful computation recomputes a cached window that still starts from the driver's position, while that window's end is still in the future.
 
 ## 5.4 Facilities and schedule facts that must not collapse
 

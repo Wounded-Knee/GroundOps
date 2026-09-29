@@ -20,6 +20,64 @@ export type ComputedWindow = {
   scheduledEnd: Date;
 };
 
+export type SortiePlace = {
+  id: string;
+  arrivalAt: Date;
+  destination: GeoCoordinate;
+  destinationLabel: string;
+};
+
+export type ApproachOrigin = GeoCoordinate & {
+  label: string | null;
+};
+
+/** The drive to this origin starts at the previous sortie's destination when one is earlier on the schedule. */
+export function approachOrigin(
+  places: SortiePlace[],
+  arrivalAt: Date,
+  id: string | null,
+  currentPosition: GeoCoordinate | null,
+): ApproachOrigin | null {
+  const previous = previousPlace(places, arrivalAt, id);
+  if (previous) {
+    return { ...previous.destination, label: previous.destinationLabel };
+  }
+  if (!currentPosition) {
+    return null;
+  }
+  return { ...currentPosition, label: null };
+}
+
+function previousPlace(places: SortiePlace[], arrivalAt: Date, id: string | null): SortiePlace | null {
+  let previous: SortiePlace | null = null;
+  for (const place of places) {
+    if (id !== null && place.id === id) {
+      continue;
+    }
+    if (!sortsBefore(place, arrivalAt, id)) {
+      continue;
+    }
+    if (previous === null || sortsBefore(previous, place.arrivalAt, place.id)) {
+      previous = place;
+    }
+  }
+  return previous;
+}
+
+function sortsBefore(place: SortiePlace, arrivalAt: Date, id: string | null): boolean {
+  const arrivalDelta = place.arrivalAt.getTime() - arrivalAt.getTime();
+  if (arrivalDelta < 0) {
+    return true;
+  }
+  if (arrivalDelta > 0) {
+    return false;
+  }
+  if (id === null) {
+    return true;
+  }
+  return place.id < id;
+}
+
 export async function computeWindow(
   position: GeoCoordinate,
   stops: SortieStop[],

@@ -52,7 +52,7 @@ Domain rules are plain TypeScript modules. The HTTP framework does not own them.
 
 Commands, queries, and observations are **HTTP JSON**.
 
-A location observation is one of those HTTP writes. The schedule computation that turns an arrival and that position into a cached sortie window also runs on the server, in the request that needs it. The routing call is provider-replaceable. Its result is stored on the sortie row. Precise location is not published on the bus.
+A location observation is one of those HTTP writes. The schedule computation that turns an arrival and that position into a cached sortie window also runs on the server, in the request that needs it. The routing call is provider-replaceable. Its result is stored on the sortie row, including the address of the place the start drive used. Precise location is not published on the bus.
 
 The server commits authoritative state, then publishes the resulting domain event. Connected clients hear that event through the server's WebSocket gateway.
 

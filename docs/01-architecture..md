@@ -669,7 +669,7 @@ The routing provider must be replaceable.
 
 Google Maps is an initial provider but must not be embedded as an irreplaceable core dependency.
 
-A sortie window uses that traffic-aware multi-stop duration, including projected traffic for a departure time. The driver authors an arrival at the origin. The scheduled start is that arrival minus the drive from the driver's current position to the origin. The scheduled end is that arrival plus the drive from the origin through each stop to the destination. The result is cached on the sortie.
+A sortie window uses that traffic-aware multi-stop duration, including projected traffic for a departure time. The driver authors an arrival at the origin. The scheduled start is that arrival minus the drive to the origin. The drive starts at the previous sortie's destination when this sortie follows another on the calendar, and at the driver's current position when it does not. The scheduled end is that arrival plus the drive from the origin through each stop to the destination. The result is cached on the sortie, including the address of the place the start drive used.
 
 ---
 
@@ -727,7 +727,7 @@ Any change to:
 
 may trigger recalculation.
 
-Current location triggers that recalculation when the driver has moved at least ten miles from the position used for the last successful computation of that sortie. The cached end of a sortie that is already past is left unchanged.
+Current location triggers that recalculation when the driver has moved at least ten miles from the position used for the last successful computation, and only for a sortie whose approach still starts from that position. A sortie that follows another keeps the previous sortie's destination as its approach start. The cached origin includes the address of that starting place. The cached end of a sortie that is already past is left unchanged.
 
 ---
 

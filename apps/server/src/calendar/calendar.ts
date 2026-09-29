@@ -8,7 +8,7 @@ import {
 } from "@groundops/contracts";
 import { and, asc, desc, eq, gt, inArray, lt } from "drizzle-orm";
 import { db } from "../db.js";
-import { computeDriveDuration } from "../routing/google.js";
+import { computeDriveDuration, lookupAddress } from "../routing/google.js";
 import {
   company,
   driver,
@@ -18,7 +18,15 @@ import {
   sortie,
   sortieStop,
 } from "../schema.js";
-import { computeWindow, movedFarEnough, scheduleBackoffMs, type DriveDuration } from "./schedule.js";
+import {
+  approachOrigin,
+  computeWindow,
+  movedFarEnough,
+  scheduleBackoffMs,
+  type ApproachOrigin,
+  type DriveDuration,
+  type SortiePlace,
+} from "./schedule.js";
 
 const fallbackCompanyName = "Company";
 const sortieCreated = "sortie.created";
@@ -42,11 +50,13 @@ export type ObservationInput = {
 
 export type ScheduleDeps = {
   driveDuration: DriveDuration;
+  lookupAddress?: (position: GeoCoordinate) => Promise<string | null>;
   now: () => Date;
 };
 
 export const defaultScheduleDeps: ScheduleDeps = {
   driveDuration: computeDriveDuration,
+  lookupAddress,
   now: () => new Date(),
 };
 
@@ -70,7 +80,11 @@ type SortieRow = {
   passengerPhone: string | null;
 };
 
-type OpenSortie = SortieRow & {
+type StoredSortie = SortieRow & {
+  scheduleOriginLabel: string | null;
+};
+
+type OpenSortie = StoredSortie & {
   scheduleOriginLatitude: number | null;
   scheduleOriginLongitude: number | null;
   scheduleFailedAt: Date | null;
@@ -112,6 +126,7 @@ export async function readCalendar(
       arrivalAt: sortie.arrivalAt,
       scheduledStart: sortie.scheduledStart,
       scheduledEnd: sortie.scheduledEnd,
+      scheduleOriginLabel: sortie.scheduleOriginLabel,
       passengerName: sortie.passengerName,
       passengerPhone: sortie.passengerPhone,
     })
@@ -146,7 +161,7 @@ export async function authorSortie(
   if (!companyId) {
     return "no-driver";
   }
-  const position = await latestObservation(db, author.id);
+  const position = await approachPosition(author.id, null, valid.arrivalAt);
   if (!position) {
     return "no-location";
   }
@@ -154,8 +169,9 @@ export async function authorSortie(
   if (window === "failed") {
     return "unavailable";
   }
+  const departureAddress = await originAddress(position, deps);
 
-  return db.transaction(async (tx) => {
+  const authored = await db.transaction(async (tx) => {
     const inserted = await tx
       .insert(sortie)
       .values({
@@ -168,6 +184,7 @@ export async function authorSortie(
         scheduledEnd: window.scheduledEnd,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
+        scheduleOriginLabel: departureAddress,
         scheduleFailedAt: null,
         passengerName: valid.passengerName,
         passengerPhone: valid.passengerPhone,
@@ -178,6 +195,7 @@ export async function authorSortie(
         arrivalAt: sortie.arrivalAt,
         scheduledStart: sortie.scheduledStart,
         scheduledEnd: sortie.scheduledEnd,
+        scheduleOriginLabel: sortie.scheduleOriginLabel,
         passengerName: sortie.passengerName,
         passengerPhone: sortie.passengerPhone,
       });
@@ -190,6 +208,10 @@ export async function authorSortie(
     await writeEvent(tx, sortieCreated, row, valid.stops);
     return toSortie(row, valid.stops);
   });
+  if (typeof authored === "object") {
+    await alignFollowingSorties(author.id, deps);
+  }
+  return authored;
 }
 
 export async function reviseSortie(
@@ -215,7 +237,7 @@ export async function reviseSortie(
   if (!existing[0]) {
     return "not-found";
   }
-  const position = await latestObservation(db, author.id);
+  const position = await approachPosition(author.id, sortieId, valid.arrivalAt);
   if (!position) {
     return "no-location";
   }
@@ -223,8 +245,9 @@ export async function reviseSortie(
   if (window === "failed") {
     return "unavailable";
   }
+  const departureAddress = await originAddress(position, deps);
 
-  return db.transaction(async (tx) => {
+  const revised = await db.transaction(async (tx) => {
     const updated = await tx
       .update(sortie)
       .set({
@@ -234,6 +257,7 @@ export async function reviseSortie(
         scheduledEnd: window.scheduledEnd,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
+        scheduleOriginLabel: departureAddress,
         scheduleFailedAt: null,
         passengerName: valid.passengerName,
         passengerPhone: valid.passengerPhone,
@@ -245,6 +269,7 @@ export async function reviseSortie(
         arrivalAt: sortie.arrivalAt,
         scheduledStart: sortie.scheduledStart,
         scheduledEnd: sortie.scheduledEnd,
+        scheduleOriginLabel: sortie.scheduleOriginLabel,
         passengerName: sortie.passengerName,
         passengerPhone: sortie.passengerPhone,
       });
@@ -258,6 +283,10 @@ export async function reviseSortie(
     await writeEvent(tx, sortieRevised, row, valid.stops);
     return toSortie(row, valid.stops);
   });
+  if (typeof revised === "object") {
+    await alignFollowingSorties(author.id, deps);
+  }
+  return revised;
 }
 
 export async function recordObservation(
@@ -286,35 +315,48 @@ export async function recordObservation(
 
 async function recomputeOpenSorties(driverId: string, position: GeoCoordinate, deps: ScheduleDeps): Promise<void> {
   const now = deps.now();
-  const rows = await db
-    .select({
-      id: sortie.id,
-      label: sortie.label,
-      arrivalAt: sortie.arrivalAt,
-      scheduledStart: sortie.scheduledStart,
-      scheduledEnd: sortie.scheduledEnd,
-      passengerName: sortie.passengerName,
-      passengerPhone: sortie.passengerPhone,
-      scheduleOriginLatitude: sortie.scheduleOriginLatitude,
-      scheduleOriginLongitude: sortie.scheduleOriginLongitude,
-      scheduleFailedAt: sortie.scheduleFailedAt,
-    })
-    .from(sortie)
-    .where(and(eq(sortie.authorDriverId, driverId), gt(sortie.scheduledEnd, now)));
+  const rows = await openSorties(driverId, now);
 
+  const places = await driverPlaces(driverId);
   for (const row of rows) {
-    await recomputeOne(row, position, now, deps);
+    if (approachOrigin(places, row.arrivalAt, row.id, null) !== null) {
+      continue;
+    }
+    await recomputeFrom(row, { ...position, label: null }, now, deps, true);
   }
 }
 
-async function recomputeOne(
+async function alignFollowingSorties(driverId: string, deps: ScheduleDeps): Promise<void> {
+  const now = deps.now();
+  const gps = await latestObservation(db, driverId);
+  const places = await driverPlaces(driverId);
+  const rows = await openSorties(driverId, now);
+  for (const row of rows) {
+    const origin = approachOrigin(places, row.arrivalAt, row.id, gps);
+    if (!origin) {
+      continue;
+    }
+    await recomputeFrom(row, origin, now, deps, false);
+  }
+}
+
+async function recomputeFrom(
   row: OpenSortie,
-  position: GeoCoordinate,
+  position: ApproachOrigin,
   now: Date,
   deps: ScheduleDeps,
+  requireMovement: boolean,
 ): Promise<void> {
   const anchor = anchorOf(row);
-  if (anchor && !movedFarEnough(anchor, position)) {
+  if (requireMovement) {
+    if (anchor && !movedFarEnough(anchor, position)) {
+      return;
+    }
+  } else if (anchor && samePlace(anchor, position)) {
+    const address = await originAddress(position, deps);
+    if (row.scheduleOriginLabel !== address) {
+      await db.update(sortie).set({ scheduleOriginLabel: address }).where(eq(sortie.id, row.id));
+    }
     return;
   }
   if (row.scheduleFailedAt && now.getTime() - row.scheduleFailedAt.getTime() < scheduleBackoffMs) {
@@ -330,6 +372,7 @@ async function recomputeOne(
     await db.update(sortie).set({ scheduleFailedAt: now }).where(eq(sortie.id, row.id));
     return;
   }
+  const address = await originAddress(position, deps);
 
   await db.transaction(async (tx) => {
     await tx
@@ -339,6 +382,7 @@ async function recomputeOne(
         scheduledEnd: window.scheduledEnd,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
+        scheduleOriginLabel: address,
         scheduleFailedAt: null,
       })
       .where(eq(sortie.id, row.id));
@@ -517,6 +561,81 @@ async function stopsBySortie(tx: Database, sortieIds: string[]): Promise<Map<str
   return grouped;
 }
 
+async function approachPosition(
+  driverId: string,
+  sortieId: string | null,
+  arrivalAt: Date,
+): Promise<ApproachOrigin | null> {
+  const places = await driverPlaces(driverId);
+  return approachOrigin(places, arrivalAt, sortieId, await latestObservation(db, driverId));
+}
+
+async function originAddress(origin: ApproachOrigin, deps: ScheduleDeps): Promise<string> {
+  const known = origin.label?.trim() ?? "";
+  if (known.length > 0) {
+    return known;
+  }
+  if (deps.lookupAddress) {
+    const looked = (await deps.lookupAddress(origin))?.trim() ?? "";
+    if (looked.length > 0) {
+      return looked;
+    }
+  }
+  return `${origin.latitude}, ${origin.longitude}`;
+}
+
+async function openSorties(driverId: string, now: Date): Promise<OpenSortie[]> {
+  return db
+    .select({
+      id: sortie.id,
+      label: sortie.label,
+      arrivalAt: sortie.arrivalAt,
+      scheduledStart: sortie.scheduledStart,
+      scheduledEnd: sortie.scheduledEnd,
+      passengerName: sortie.passengerName,
+      passengerPhone: sortie.passengerPhone,
+      scheduleOriginLatitude: sortie.scheduleOriginLatitude,
+      scheduleOriginLongitude: sortie.scheduleOriginLongitude,
+      scheduleOriginLabel: sortie.scheduleOriginLabel,
+      scheduleFailedAt: sortie.scheduleFailedAt,
+    })
+    .from(sortie)
+    .where(and(eq(sortie.authorDriverId, driverId), gt(sortie.scheduledEnd, now)));
+}
+
+async function driverPlaces(driverId: string): Promise<SortiePlace[]> {
+  const rows = await db
+    .select({
+      id: sortie.id,
+      arrivalAt: sortie.arrivalAt,
+      label: sortieStop.label,
+      latitude: sortieStop.latitude,
+      longitude: sortieStop.longitude,
+      position: sortieStop.position,
+    })
+    .from(sortie)
+    .innerJoin(sortieStop, eq(sortieStop.sortieId, sortie.id))
+    .where(eq(sortie.authorDriverId, driverId))
+    .orderBy(asc(sortie.id), asc(sortieStop.position));
+
+  const places: SortiePlace[] = [];
+  for (const row of rows) {
+    const destination = { latitude: row.latitude, longitude: row.longitude };
+    const current = places[places.length - 1];
+    if (current && current.id === row.id) {
+      current.destination = destination;
+      current.destinationLabel = row.label;
+      continue;
+    }
+    places.push({ id: row.id, arrivalAt: row.arrivalAt, destination, destinationLabel: row.label });
+  }
+  return places;
+}
+
+function samePlace(left: GeoCoordinate, right: GeoCoordinate): boolean {
+  return left.latitude === right.latitude && left.longitude === right.longitude;
+}
+
 async function latestObservation(tx: Database, driverId: string): Promise<GeoCoordinate | null> {
   const rows = await tx
     .select({
@@ -552,7 +671,7 @@ async function findCompanyId(tx: Database, driverId: string): Promise<string | n
   return rows[0]?.companyId ?? null;
 }
 
-function toSortie(row: SortieRow, stops: SortieStop[]): Sortie {
+function toSortie(row: StoredSortie, stops: SortieStop[]): Sortie {
   return {
     id: row.id,
     type: taskSortieType,
@@ -560,6 +679,7 @@ function toSortie(row: SortieRow, stops: SortieStop[]): Sortie {
     arrivalAt: row.arrivalAt.toISOString(),
     scheduledStart: row.scheduledStart.toISOString(),
     scheduledEnd: row.scheduledEnd.toISOString(),
+    departureAddress: row.scheduleOriginLabel ?? "",
     passengerName: row.passengerName,
     passengerPhone: row.passengerPhone,
     stops,

@@ -140,6 +140,7 @@ function isSortie(value: unknown): value is Sortie {
     typeof record.arrivalAt === "string" &&
     typeof record.scheduledStart === "string" &&
     typeof record.scheduledEnd === "string" &&
+    typeof record.departureAddress === "string" &&
     (record.passengerName === null || typeof record.passengerName === "string") &&
     (record.passengerPhone === null || typeof record.passengerPhone === "string") &&
     Array.isArray(record.stops) &&

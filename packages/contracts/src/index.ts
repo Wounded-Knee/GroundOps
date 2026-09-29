@@ -107,6 +107,7 @@ export type Sortie = {
   arrivalAt: string;
   scheduledStart: string;
   scheduledEnd: string;
+  departureAddress: string;
   passengerName: string | null;
   passengerPhone: string | null;
   stops: SortieStop[];

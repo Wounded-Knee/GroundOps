@@ -1,0 +1,1 @@
+ALTER TABLE "sortie" ADD COLUMN "schedule_origin_label" text;
