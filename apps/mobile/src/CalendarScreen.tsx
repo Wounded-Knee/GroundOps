@@ -1,6 +1,6 @@
 import type { Sortie, SortieWriteRequest } from "@groundops/contracts";
 import { useEffect, useRef, useState } from "react";
-import { PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { readCalendarCache, writeCalendarCache } from "./calendarCache";
 import { authorSortie, ensureCurrentDriver, requestCalendar, reviseSortie } from "./calendarClient";
@@ -49,7 +49,17 @@ type Ready = {
   dialog: DialogDraft | null;
 };
 
-type Screen = { status: "loading" } | { status: "unavailable" } | Ready;
+function emptyCalendar(anchor: Date): Ready {
+  return {
+    status: "ready",
+    scope: "month",
+    anchor,
+    sorties: [],
+    live: false,
+    message: null,
+    dialog: null,
+  };
+}
 
 type GridBox = {
   x: number;
@@ -70,7 +80,7 @@ export function CalendarScreen({
   onClose: () => void;
   onUnauthorized: () => void;
 }) {
-  const [screen, setScreen] = useState<Screen>({ status: "loading" });
+  const [screen, setScreen] = useState<Ready>(() => emptyCalendar(new Date()));
   const generation = useRef(0);
   const saving = useRef(false);
   const gridRef = useRef<View>(null);
@@ -85,6 +95,13 @@ export function CalendarScreen({
 
   async function load(scope: CalendarScope, anchor: Date, current: number): Promise<void> {
     const range = visibleRange(scope, anchor);
+    void readCalendarCache(userId).then((cached) => {
+      if (generation.current !== current || !cached) {
+        return;
+      }
+      setScreen((prev) => (prev.live || prev.message ? prev : { ...prev, sorties: cached.sorties }));
+    });
+
     const ensured = await ensureCurrentDriver(apiUrl, token);
     if (generation.current !== current) {
       return;
@@ -120,15 +137,14 @@ export function CalendarScreen({
     if (generation.current !== current) {
       return;
     }
-    setScreen({
-      status: "ready",
+    setScreen((prev) => ({
+      ...prev,
       scope,
       anchor,
       sorties: calendar.sorties,
       live: true,
       message: null,
-      dialog: null,
-    });
+    }));
   }
 
   async function showCached(scope: CalendarScope, anchor: Date, current: number): Promise<void> {
@@ -136,34 +152,26 @@ export function CalendarScreen({
     if (generation.current !== current) {
       return;
     }
-    if (!cached) {
-      setScreen({ status: "unavailable" });
-      return;
-    }
-    setScreen({
-      status: "ready",
+    setScreen((prev) => ({
+      ...prev,
       scope,
       anchor,
-      sorties: cached.sorties,
+      sorties: cached?.sorties ?? [],
       live: false,
-      message: couldNotRefresh,
+      message: cached ? couldNotRefresh : couldNotLoad,
       dialog: null,
-    });
+    }));
   }
 
   function showPeriod(scope: CalendarScope, anchor: Date): void {
     const current = ++generation.current;
-    setScreen((currentScreen) =>
-      currentScreen.status === "ready"
-        ? {
-            ...currentScreen,
-            scope,
-            anchor,
-            dialog: null,
-            message: currentScreen.live ? null : currentScreen.message,
-          }
-        : { status: "loading" },
-    );
+    setScreen((currentScreen) => ({
+      ...currentScreen,
+      scope,
+      anchor,
+      dialog: null,
+      message: currentScreen.live ? null : currentScreen.message,
+    }));
     void load(scope, anchor, current);
   }
 
@@ -224,7 +232,7 @@ export function CalendarScreen({
     setScreen({ ...ready, dialog, message: null });
   }
 
-  const ready = screen.status === "ready" ? screen : null;
+  const ready = screen;
   const days = ready
     ? ready.scope === "month"
       ? monthGridDays(ready.anchor)
@@ -254,10 +262,7 @@ export function CalendarScreen({
       <Pressable onPress={onClose} style={styles.back}>
         <Text style={styles.backText}>Back</Text>
       </Pressable>
-      {screen.status === "loading" ? <Text style={styles.message}>Loading calendar…</Text> : null}
-      {screen.status === "unavailable" ? <Text style={styles.message}>{couldNotLoad}</Text> : null}
-      {ready ? (
-        <View style={styles.body}>
+      <View style={styles.body}>
           <Text style={styles.period}>{periodLabel(ready.scope, ready.anchor)}</Text>
           <View style={styles.row}>
             {(["month", "week", "day"] as const).map((scope) => (
@@ -464,7 +469,6 @@ export function CalendarScreen({
             />
           ) : null}
         </View>
-      ) : null}
     </View>
   );
 }
@@ -699,7 +703,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#fff",
     padding: 16,
-    paddingTop: Platform.OS === "android" ? 36 : 16,
   },
   body: {
     flex: 1,

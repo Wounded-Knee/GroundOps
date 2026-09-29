@@ -3,16 +3,7 @@ import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { useEffect, useRef, useState } from "react";
-import {
-  Platform,
-  Pressable,
-  SafeAreaView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import {
   applyLocationFix,
@@ -395,7 +386,7 @@ export function NavigationScreen({
         showTraffic={guiding !== null || arrived !== null}
         followUser={nav.mode === "browse" && permission === "granted"}
       />
-      <SafeAreaView style={[StyleSheet.absoluteFill, styles.overlay]} pointerEvents="box-none">
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
         {showSearch ? (
           <View style={styles.searchCard} pointerEvents="auto">
             <TextInput
@@ -509,7 +500,7 @@ export function NavigationScreen({
             ) : null}
           </View>
         ) : null}
-      </SafeAreaView>
+      </View>
       {guiding || arrived ? <Awake /> : null}
     </View>
   );
@@ -543,9 +534,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: "#fff",
-  },
-  overlay: {
-    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) : 0,
   },
   searchCard: {
     margin: 12,

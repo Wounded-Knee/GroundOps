@@ -5,6 +5,7 @@ import * as WebBrowser from "expo-web-browser";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
 import { CalendarScreen } from "./src/CalendarScreen";
 import { clearCalendarCache } from "./src/calendarCache";
@@ -290,52 +291,54 @@ export default function App() {
   const showCalendar = phase.status === "signed-in" && calendarOpen;
 
   return (
-    <View style={driving || showCalendar ? styles.map : styles.container}>
-      {phase.status === "loading" ? <Text>Checking session…</Text> : null}
-      {phase.status === "signed-out" ? (
-        <SignIn message={phase.message} disabled={submitting} onSignIn={() => void onSignIn()} />
-      ) : null}
-      {phase.status === "offline" ? <Offline message={phase.message} onRetry={() => void onRetry()} /> : null}
-      {phase.status === "signed-in" && Platform.OS === "web" && !showCalendar ? (
-        <SignedIn
-          user={phase.user}
-          live={phase.live}
-          signOutMessage={phase.signOutMessage}
-          onSignOut={() => void onSignOut(phase.token)}
-          onOpenCalendar={() => setCalendarOpen(true)}
-        />
-      ) : null}
-      {phase.status === "signed-in" && Platform.OS === "web" && showCalendar ? (
-        <CalendarScreen
-          userId={phase.user.id}
-          token={phase.token}
-          onClose={() => setCalendarOpen(false)}
-          onUnauthorized={() => void onSessionRejected()}
-        />
-      ) : null}
-      {driving ? (
-        <View style={styles.map}>
-          <NavigationScreen
-            token={phase.token}
+    <AppFrame>
+      <View style={driving || showCalendar ? styles.map : styles.container}>
+        {phase.status === "loading" ? <Text>Checking session…</Text> : null}
+        {phase.status === "signed-out" ? (
+          <SignIn message={phase.message} disabled={submitting} onSignIn={() => void onSignIn()} />
+        ) : null}
+        {phase.status === "offline" ? <Offline message={phase.message} onRetry={() => void onRetry()} /> : null}
+        {phase.status === "signed-in" && Platform.OS === "web" && !showCalendar ? (
+          <SignedIn
+            user={phase.user}
+            live={phase.live}
             signOutMessage={phase.signOutMessage}
             onSignOut={() => void onSignOut(phase.token)}
-            onUnauthorized={() => void onSessionRejected()}
             onOpenCalendar={() => setCalendarOpen(true)}
           />
-          {showCalendar ? (
-            <View style={styles.calendarCover}>
-              <CalendarScreen
-                userId={phase.user.id}
-                token={phase.token}
-                onClose={() => setCalendarOpen(false)}
-                onUnauthorized={() => void onSessionRejected()}
-              />
-            </View>
-          ) : null}
-        </View>
-      ) : null}
-      <StatusBar style="auto" />
-    </View>
+        ) : null}
+        {phase.status === "signed-in" && Platform.OS === "web" && showCalendar ? (
+          <CalendarScreen
+            userId={phase.user.id}
+            token={phase.token}
+            onClose={() => setCalendarOpen(false)}
+            onUnauthorized={() => void onSessionRejected()}
+          />
+        ) : null}
+        {driving ? (
+          <View style={styles.map}>
+            <NavigationScreen
+              token={phase.token}
+              signOutMessage={phase.signOutMessage}
+              onSignOut={() => void onSignOut(phase.token)}
+              onUnauthorized={() => void onSessionRejected()}
+              onOpenCalendar={() => setCalendarOpen(true)}
+            />
+            {showCalendar ? (
+              <View style={styles.calendarCover}>
+                <CalendarScreen
+                  userId={phase.user.id}
+                  token={phase.token}
+                  onClose={() => setCalendarOpen(false)}
+                  onUnauthorized={() => void onSessionRejected()}
+                />
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        <StatusBar style="auto" />
+      </View>
+    </AppFrame>
   );
 }
 

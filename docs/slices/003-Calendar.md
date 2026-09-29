@@ -90,7 +90,7 @@ The client reads the calendar over HTTP for the range on screen. Month, week, an
 
 A failed author or revise leaves the cache unchanged. After a successful author or revise, the client reads the calendar again, and that read replaces the cache. When that follow-up read fails, the server has the change, the cache stays as it was, and the screen says the calendar could not be refreshed.
 
-When the server cannot be reached, the person can still switch month, week, and day, and can move with previous, next, and today. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days. A period that was never fetched is empty. Author, revise, and drag are refused. When no range has ever been fetched, the calendar is unavailable.
+The month, week, and day grids are drawn immediately. Sorties appear when the cache or the server read returns. When the server cannot be reached, the person can still switch month, week, and day, and can move with previous, next, and today. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days. A period that was never fetched is empty. Author, revise, and drag are refused. When no range has ever been fetched, the grid is still shown and the screen says the calendar could not be loaded.
 
 This slice does not publish on NATS. Another session sees a change on its next calendar read.
 
@@ -186,7 +186,7 @@ Sign out stays on the map on iOS and Android, and on the signed-in screen on web
 
 The person sees a failure in these cases:
 
-- The calendar request fails and no range is cached. The screen says the calendar could not be loaded.
+- The calendar request fails and no range is cached. The grid is shown and the screen says the calendar could not be loaded.
 - The calendar request fails and a range is cached. The screen shows that range and says the calendar could not be refreshed.
 - Author, revise, or drag is rejected, or the network is unreachable. The screen says the sortie was not saved. The calendar and the cache stay as they were. A dragged block returns to the times from the last successful read.
 - A follow-up read after a successful author or revise fails. The screen says the calendar could not be refreshed. The cache stays as it was.
@@ -261,7 +261,7 @@ The slice works when all of the following are true on the local stack:
 9. Dragging a sortie on the week or day grid moves or resizes it, and the stored start and end match the drop, snapped to 15 minutes. Dragging a chip to another day on the month grid changes the dates and keeps the clock times. A failed drop leaves the previous times.
 10. A missing, unknown, or revoked session is rejected on every endpoint in section 8. A session cannot revise another driver's sortie.
 11. After a successful read, when the server cannot be reached, the person can switch month, week, and day, move previous, next, and today, and open a day from the month grid or a week day heading. Cached sorties that fall on the visible days stay visible. The device does not apply an author, revise, or drag.
-12. When the server cannot be reached and no range is cached, the screen says the calendar could not be loaded.
+12. When the server cannot be reached and no range is cached, the grid is shown and the screen says the calendar could not be loaded.
 13. Sign-out revokes that session and clears the local calendar cache.
 14. On iOS and Android the calendar opens from the map and is unavailable during guidance and arrival. Guidance from slice 002 is unchanged. On web the calendar opens from the signed-in screen, which still shows identity, live-connection state, and sign out.
 15. The persisted sortie has its own id, type `task`, a company of record, an authoring driver, and its own stop rows. The database has no appointment table.
