@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { resolveApiUrl } from "./apiUrl";
+import { authorSortie, ensureCurrentDriver, reportLocationObservation } from "./calendarClient";
 import {
   applyLocationFix,
   distanceToStepEnd,
@@ -271,6 +272,75 @@ export function NavigationScreen({
     const requestId = ++routeRequest.current;
     setFinding(true);
     setNav({ mode: "browse", destination: suggestion, message: null });
+
+    const driver = await ensureCurrentDriver(apiUrl, token);
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (driver === "unauthorized") {
+      setFinding(false);
+      onUnauthorized();
+      return;
+    }
+    if (driver === "unreachable") {
+      setFinding(false);
+      setNav({ mode: "browse", destination: suggestion, message: "The sortie was not saved." });
+      return;
+    }
+
+    const reported = await reportLocationObservation(apiUrl, token, {
+      observedAt: new Date().toISOString(),
+      latitude: origin.latitude,
+      longitude: origin.longitude,
+      accuracyMeters: null,
+    });
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (reported === "unauthorized") {
+      setFinding(false);
+      onUnauthorized();
+      return;
+    }
+    if (reported !== "ok") {
+      setFinding(false);
+      setNav({ mode: "browse", destination: suggestion, message: "Location is required." });
+      return;
+    }
+
+    const authored = await authorSortie(apiUrl, token, {
+      label: "",
+      arrivalAt: null,
+      passengerName: null,
+      passengerPhone: null,
+      stops: [
+        {
+          role: "destination",
+          label: suggestion.label,
+          latitude: suggestion.latitude,
+          longitude: suggestion.longitude,
+        },
+      ],
+    });
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (authored === "unauthorized") {
+      setFinding(false);
+      onUnauthorized();
+      return;
+    }
+    if (authored === "no-location") {
+      setFinding(false);
+      setNav({ mode: "browse", destination: suggestion, message: "Location is required." });
+      return;
+    }
+    if (typeof authored === "string") {
+      setFinding(false);
+      setNav({ mode: "browse", destination: suggestion, message: "The sortie was not saved." });
+      return;
+    }
+
     const result = await requestDrivingRoute(apiUrl, token, origin, suggestion);
     if (requestId !== routeRequest.current) {
       return;

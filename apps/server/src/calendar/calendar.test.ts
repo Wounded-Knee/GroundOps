@@ -180,7 +180,7 @@ describe("calendar", () => {
     }
   });
 
-  it("revises a sortie and appends one event, and rejects an empty label", async () => {
+  it("revises a sortie and appends one event, and rejects a sortie with no stop", async () => {
     const person = await createSession({
       sub: `calendar-revise-${crypto.randomUUID()}`,
       displayName: "Reviser",
@@ -208,7 +208,7 @@ describe("calendar", () => {
 
       const empty = await authorSortie(
         person.user,
-        task("   ", new Date("2026-09-03T15:00:00.000Z")),
+        task("Nope", new Date("2026-09-03T15:00:00.000Z"), { stops: [] }),
         scheduleDeps,
       );
       assert.equal(empty, "invalid");
@@ -355,7 +355,7 @@ describe("calendar", () => {
         method: "POST",
         url: "/sorties",
         headers: { authorization: `Bearer ${person.token}` },
-        payload: taskJson(" ", "2026-09-08T12:00:00.000Z"),
+        payload: { ...taskJson(" ", "2026-09-08T12:00:00.000Z"), stops: [] },
       });
       assert.equal(blank.statusCode, 400);
 
@@ -406,15 +406,23 @@ describe("calendar", () => {
         }),
         scheduleDeps,
       );
-      const oneStop = await authorSortie(
+      const noStop = await authorSortie(
         person.user,
         task("One", new Date("2026-09-05T15:00:00.000Z"), {
-          stops: [originStop],
+          stops: [],
+        }),
+        scheduleDeps,
+      );
+      const loneWaypoint = await authorSortie(
+        person.user,
+        task("Waypoint", new Date("2026-09-05T15:00:00.000Z"), {
+          stops: [waypointStop],
         }),
         scheduleDeps,
       );
       assert.equal(badPhone, "invalid");
-      assert.equal(oneStop, "invalid");
+      assert.equal(noStop, "invalid");
+      assert.equal(loneWaypoint, "invalid");
 
       const authored = await authorSortie(
         person.user,
@@ -724,14 +732,79 @@ describe("calendar", () => {
     }
   });
 
+  it("accepts one address and computes an immediate arrival when no time is sent", async () => {
+    const person = await createSession({
+      sub: `calendar-one-${crypto.randomUUID()}`,
+      displayName: "One",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id);
+      const pickup = await authorSortie(
+        person.user,
+        task("", null, { stops: [originStop] }),
+        scheduleDeps,
+      );
+      assert.equal(typeof pickup, "object");
+      if (typeof pickup !== "object") {
+        return;
+      }
+      assert.equal(pickup.label, "");
+      assert.equal(pickup.arrivalAuthored, false);
+      assert.equal(pickup.arrivalAt, scheduleNow.toISOString());
+      assert.equal(pickup.scheduledStart, scheduleNow.toISOString());
+      assert.equal(pickup.scheduledEnd, scheduleNow.toISOString());
+      assert.equal(pickup.stops[0]?.role, "pickup");
+
+      const destination = await authorSortie(
+        person.user,
+        task("", null, { stops: [destinationStop] }),
+        scheduleDeps,
+      );
+      assert.equal(typeof destination, "object");
+      if (typeof destination !== "object") {
+        return;
+      }
+      assert.equal(destination.arrivalAuthored, false);
+      assert.equal(destination.arrivalAt, "2026-09-01T01:00:00.000Z");
+      assert.equal(destination.scheduledStart, scheduleNow.toISOString());
+      assert.equal(destination.scheduledEnd, "2026-09-01T01:00:00.000Z");
+      assert.equal(destination.stops[0]?.role, "destination");
+
+      const authoredPickup = new Date("2026-09-02T15:00:00.000Z");
+      const held = await authorSortie(
+        person.user,
+        task("", authoredPickup, { stops: [originStop] }),
+        scheduleDeps,
+      );
+      assert.equal(typeof held, "object");
+      if (typeof held !== "object") {
+        return;
+      }
+      assert.equal(held.arrivalAuthored, true);
+      assert.equal(held.arrivalAt, authoredPickup.toISOString());
+      assert.equal(held.scheduledStart, authoredPickup.toISOString());
+      assert.equal(held.scheduledEnd, authoredPickup.toISOString());
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
   it("starts a later sortie from the previous sortie's destination", async () => {
     const person = await createSession({
       sub: `calendar-chain-${crypto.randomUUID()}`,
       displayName: "Chain",
       email: null,
     });
-    const laterOrigin = { label: "Later origin", latitude: 41, longitude: -73 };
-    const laterDestination = { label: "Later destination", latitude: 41.2, longitude: -73.2 };
+    const laterOrigin = { role: "pickup" as const, label: "Later origin", latitude: 41, longitude: -73 };
+    const laterDestination = {
+      role: "destination" as const,
+      label: "Later destination",
+      latitude: 41.2,
+      longitude: -73.2,
+    };
 
     try {
       await ensureDriver(person.user);
@@ -828,9 +901,14 @@ async function eventsFor(
     .orderBy(operationalEvent.recordedAt);
 }
 
-const originStop = { label: "Origin", latitude: 40.7128, longitude: -74.006 };
-const destinationStop = { label: "Destination", latitude: 40.758, longitude: -73.9855 };
-const waypointStop = { label: "Waypoint", latitude: 40.73, longitude: -73.99 };
+const originStop = { role: "pickup" as const, label: "Origin", latitude: 40.7128, longitude: -74.006 };
+const destinationStop = {
+  role: "destination" as const,
+  label: "Destination",
+  latitude: 40.758,
+  longitude: -73.9855,
+};
+const waypointStop = { role: "waypoint" as const, label: "Waypoint", latitude: 40.73, longitude: -73.99 };
 
 const driverFix = { latitude: 40, longitude: -74 };
 const scheduleNow = new Date("2026-09-01T00:00:00.000Z");
@@ -842,7 +920,7 @@ const scheduleDeps: ScheduleDeps = {
   lookupAddress: async () => "Driver location",
 };
 
-function task(label: string, arrivalAt: Date, extra?: Partial<SortieInput>): SortieInput {
+function task(label: string, arrivalAt: Date | null, extra?: Partial<SortieInput>): SortieInput {
   return {
     label,
     arrivalAt,

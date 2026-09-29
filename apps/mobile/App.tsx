@@ -12,10 +12,9 @@ import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
 import { authorSortie, ensureCurrentDriver } from "./src/calendarClient";
-import { defaultInterval } from "./src/calendarTime";
 import { NavigationScreen } from "./src/NavigationScreen";
 import { SettingsScreen } from "./src/SettingsScreen";
-import { SortieDialog, emptyStops, type DialogDraft } from "./src/SortieDialog";
+import { SortieDialog, emptyPlaces, type DialogDraft } from "./src/SortieDialog";
 import {
   createSession,
   openAuthenticatedSocket,
@@ -311,10 +310,10 @@ export default function App() {
     setCompose({
       sortieId: null,
       label: "",
-      arrival: defaultInterval("day", new Date()).start,
+      arrival: null,
       passengerName: "",
       phone: "",
-      stops: emptyStops(),
+      ...emptyPlaces(),
     });
   }
 

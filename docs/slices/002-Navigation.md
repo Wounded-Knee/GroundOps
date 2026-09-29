@@ -8,7 +8,7 @@
 
 **Purpose:** A signed-in person can search for a place on the phone and follow full-screen driving guidance to it.
 
-This document is the implementation boundary. Sorties and a second routing provider stay outside this slice. Persisted location observations are written by the calendar slice, not by guidance. Technical Architecture section 8 leaves the on-device map toolkit to the navigation slice. This slice chooses `expo-maps`.
+This document is the implementation boundary for the map and for guidance. A second routing provider stays outside this slice. Choosing a Where to? suggestion authors a destination-only immediate sortie as slice 003 defines, before this screen previews a route or starts guidance. Persisted location observations are written by the calendar slice, not by guidance, except that this selection reports the current fix so that sortie can depart immediately. Technical Architecture section 8 leaves the on-device map toolkit to the navigation slice. This slice chooses `expo-maps`.
 
 A later slice that navigates a sortie reuses this screen and this route result. It does not introduce a second navigation model.
 
@@ -25,7 +25,7 @@ After this slice, a person who is signed in, as slice 001 defines, can on iOS or
 5. Arrive, or end guidance and return to the map.
 6. Sign out, so that session can no longer be used, as slice 001 defines.
 
-The destination is the place they select. This slice does not create a sortie, a driver, a company, or a vehicle.
+The destination is the place they select. Selecting it authors the sortie from slice 003. This slice does not create a company or a vehicle.
 
 On web, the signed-in screen from slice 001 stays as it is. Driving navigation is iOS and Android.
 
@@ -35,7 +35,7 @@ On web, the signed-in screen from slice 001 stays as it is. Driving navigation i
 
 One actor: a person who is signed in on the local development client.
 
-This slice does not create a driver record. The signed-in person still has no company, no role, and no driver state.
+Selecting a destination ensures the signed-in person is a driver, as slice 003 defines. This slice does not give that person a role.
 
 ---
 
@@ -116,11 +116,11 @@ A fix used for the map and for guidance is not, by that use, a **location observ
 
 # 6. State transitions
 
-The states below are the phone's presentation of a route result. The server's operational state does not change. No sortie, duty, availability, or other operational state exists to change.
+The states below are the phone's presentation of a route result. Selecting a suggestion also authors a sortie, as slice 003 defines. No duty or availability state changes.
 
 | From | To | What happens |
 | --- | --- | --- |
-| Map | Route preview | The person selects a suggestion. The server returns a driving route from the latest location fix. The map draws it. |
+| Map | Route preview | The person selects a suggestion. The server authors a destination-only immediate sortie for that driver, then returns a driving route from the latest location fix. The map draws it. If the sortie is not created, the map stays and guidance does not start. |
 | Route preview | Guiding | The person starts guidance. |
 | Guiding | Guiding | The current step advances, or a reroute replaces the route and guidance continues on the new route. |
 | Guiding | Arrived | The device is within 40 meters of the destination. |
@@ -182,15 +182,15 @@ Commands and queries are HTTP JSON. Zod validates input at the boundary. The pro
 
 A route the server returns has at least one step. A path is a list of latitude and longitude in degrees.
 
-The authorization rules in this slice: a session may request place suggestions and a driving route. A missing, unknown, or revoked token is rejected. There is no company check, because no company exists. There is no second credential and no policy engine.
+The authorization rules in this slice: a session may request place suggestions and a driving route. A missing, unknown, or revoked token is rejected. Place suggestions and driving routes do not check a company. There is no second credential and no policy engine.
 
 ---
 
 # 9. Persistence
 
-No new tables. Drizzle schema from slice 001 is unchanged.
+No new tables in this slice. Choosing a suggestion writes the sortie and the location observation that slice 003 defines.
 
-A place suggestion is not stored. A driving route is not stored. A device fix is not stored. Search and guidance are not operational history events.
+A driving route is not stored. Search and guidance are not operational history events beyond that sortie.
 
 Sign-out still revokes the session row from slice 001.
 
@@ -210,7 +210,7 @@ The slice works when all of the following are true on the local stack:
 
 1. A signed-in person on Android or iOS sees a full-screen map.
 2. A non-empty search shows at most five labeled suggestions. An empty query shows none, and the server does not call Google for it.
-3. With location available, selecting a suggestion draws one driving route from the current location and shows distance and duration.
+3. With location available, selecting a suggestion authors a destination-only immediate sortie, then draws one driving route from the current location and shows distance and duration. If that sortie is not created, the route is not drawn and guidance does not start.
 4. Starting guidance shows the current maneuver, the distance to it, remaining time, remaining distance, and arrival time, and the map follows the device heading-up.
 5. The phone speaks the instruction when guidance starts and when the maneuver changes, once each. Mute silences speech. Speech starts unmuted. Turning sound back on does not repeat the current instruction.
 6. A location fix within 30 meters of the current step's end shows the next step, and one fix changes at most one step.
@@ -222,7 +222,7 @@ The slice works when all of the following are true on the local stack:
 12. A route the server rejects does not start guidance.
 13. Sign-out revokes that session. On web, Navigation still shows identity and live-connection state. Sign out is on Settings.
 14. Both endpoints reject a missing, unknown, or revoked session. A successful response contains coordinates and plain-text instructions, and does not contain a Google place id or an encoded polyline.
-15. Nothing about the route is in PostgreSQL after guidance ends or the server restarts.
+15. The driving route is not stored. The sortie authored by the selection remains. Guidance geometry is not in PostgreSQL after guidance ends or the server restarts.
 16. The phone flow runs with `pnpm dev:server` and a local development build. Web runs with `pnpm dev:mobile` and stays on the signed-in screen. No EAS build and no store build are required.
 
 ---

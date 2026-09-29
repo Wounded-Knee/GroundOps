@@ -1,3 +1,4 @@
+import { stopRoles } from "@groundops/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { findActiveSession } from "../identity/sessions.js";
@@ -15,6 +16,7 @@ import {
 } from "./calendar.js";
 
 const stopBody = z.object({
+  role: z.enum(stopRoles),
   label: z.string(),
   latitude: z.number(),
   longitude: z.number(),
@@ -22,7 +24,7 @@ const stopBody = z.object({
 
 const writeBody = z.object({
   label: z.string(),
-  arrivalAt: z.string(),
+  arrivalAt: z.string().nullable(),
   passengerName: z.string().nullable(),
   passengerPhone: z.string().nullable(),
   stops: z.array(stopBody),
@@ -155,8 +157,8 @@ function readWrite(body: unknown): SortieInput | null {
   if (!parsed.success) {
     return null;
   }
-  const arrivalAt = new Date(parsed.data.arrivalAt);
-  if (Number.isNaN(arrivalAt.getTime())) {
+  const arrivalAt = parsed.data.arrivalAt === null ? null : new Date(parsed.data.arrivalAt);
+  if (arrivalAt !== null && Number.isNaN(arrivalAt.getTime())) {
     return null;
   }
   return {

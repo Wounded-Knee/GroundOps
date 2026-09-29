@@ -16,6 +16,7 @@ export type DriveDuration = (
 ) => Promise<number | "no-route" | "failed">;
 
 export type ComputedWindow = {
+  arrivalAt: Date;
   scheduledStart: Date;
   scheduledEnd: Date;
 };
@@ -81,39 +82,18 @@ function sortsBefore(place: SortiePlace, arrivalAt: Date, id: string | null): bo
 export async function computeWindow(
   position: GeoCoordinate,
   stops: SortieStop[],
-  arrivalAt: Date,
+  arrivalAt: Date | null,
   now: Date,
   driveDuration: DriveDuration,
 ): Promise<ComputedWindow | "failed"> {
-  const origin = stops[0];
-  const destination = stops[stops.length - 1];
-  if (!origin || !destination) {
+  const target = firstStop(stops);
+  if (!target) {
     return "failed";
   }
-
-  const approach = await approachSeconds(position, origin, arrivalAt, now, driveDuration);
-  if (approach === "failed") {
-    return "failed";
+  if (arrivalAt === null) {
+    return immediateWindow(position, stops, target, now, driveDuration);
   }
-
-  const intermediates = stops.slice(1, -1).map((stop) => ({
-    latitude: stop.latitude,
-    longitude: stop.longitude,
-  }));
-  const onward = await driveDuration(
-    { latitude: origin.latitude, longitude: origin.longitude },
-    { latitude: destination.latitude, longitude: destination.longitude },
-    intermediates,
-    futureDeparture(arrivalAt, now),
-  );
-  if (typeof onward !== "number") {
-    return "failed";
-  }
-
-  return {
-    scheduledStart: new Date(arrivalAt.getTime() - approach * 1000),
-    scheduledEnd: new Date(arrivalAt.getTime() + onward * 1000),
-  };
+  return authoredWindow(position, stops, target, arrivalAt, now, driveDuration);
 }
 
 export function distanceMeters(from: GeoCoordinate, to: GeoCoordinate): number {
@@ -130,14 +110,89 @@ export function movedFarEnough(from: GeoCoordinate, to: GeoCoordinate): boolean 
   return distanceMeters(from, to) >= recomputeMeters;
 }
 
+async function authoredWindow(
+  position: GeoCoordinate,
+  stops: SortieStop[],
+  target: SortieStop,
+  arrivalAt: Date,
+  now: Date,
+  driveDuration: DriveDuration,
+): Promise<ComputedWindow | "failed"> {
+  const approach = await approachSeconds(position, coordinate(target), arrivalAt, now, driveDuration);
+  if (approach === "failed") {
+    return "failed";
+  }
+  const onward = await onwardSeconds(stops, arrivalAt, now, driveDuration);
+  if (onward === "failed") {
+    return "failed";
+  }
+  return {
+    arrivalAt,
+    scheduledStart: new Date(arrivalAt.getTime() - approach * 1000),
+    scheduledEnd: new Date(arrivalAt.getTime() + onward * 1000),
+  };
+}
+
+async function immediateWindow(
+  position: GeoCoordinate,
+  stops: SortieStop[],
+  target: SortieStop,
+  now: Date,
+  driveDuration: DriveDuration,
+): Promise<ComputedWindow | "failed"> {
+  const approach = await driveDuration(position, coordinate(target), [], futureDeparture(now, now));
+  if (typeof approach !== "number") {
+    return "failed";
+  }
+  const arrivalAt = new Date(now.getTime() + approach * 1000);
+  const onward = await onwardSeconds(stops, arrivalAt, now, driveDuration);
+  if (onward === "failed") {
+    return "failed";
+  }
+  return {
+    arrivalAt,
+    scheduledStart: new Date(now.getTime()),
+    scheduledEnd: new Date(arrivalAt.getTime() + onward * 1000),
+  };
+}
+
+function firstStop(stops: SortieStop[]): SortieStop | null {
+  return stops.find((stop) => stop.role === "pickup") ?? stops.find((stop) => stop.role === "destination") ?? null;
+}
+
+async function onwardSeconds(
+  stops: SortieStop[],
+  departureAt: Date,
+  now: Date,
+  driveDuration: DriveDuration,
+): Promise<number | "failed"> {
+  const pickup = stops.find((stop) => stop.role === "pickup");
+  const destination = stops.find((stop) => stop.role === "destination");
+  if (!pickup || !destination) {
+    return 0;
+  }
+  const intermediates = stops.filter((stop) => stop.role === "waypoint").map(coordinate);
+  const onward = await driveDuration(
+    coordinate(pickup),
+    coordinate(destination),
+    intermediates,
+    futureDeparture(departureAt, now),
+  );
+  return typeof onward === "number" ? onward : "failed";
+}
+
+function coordinate(stop: SortieStop): GeoCoordinate {
+  return { latitude: stop.latitude, longitude: stop.longitude };
+}
+
 async function approachSeconds(
   position: GeoCoordinate,
-  origin: SortieStop,
+  origin: GeoCoordinate,
   arrivalAt: Date,
   now: Date,
   driveDuration: DriveDuration,
 ): Promise<number | "failed"> {
-  const originCoordinate = { latitude: origin.latitude, longitude: origin.longitude };
+  const originCoordinate = origin;
   const firstDeparture = futureDeparture(arrivalAt, now);
   const first = await driveDuration(position, originCoordinate, [], firstDeparture);
   if (typeof first !== "number") {

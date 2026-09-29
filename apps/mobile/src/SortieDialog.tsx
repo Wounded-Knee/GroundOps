@@ -1,4 +1,4 @@
-import type { PlaceSuggestion, SortieStop, SortieWriteRequest } from "@groundops/contracts";
+import type { PlaceSuggestion, SortieStop, SortieWriteRequest, StopRole } from "@groundops/contracts";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { createElement, useState } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -13,10 +13,12 @@ export type StopDraft = {
 export type DialogDraft = {
   sortieId: string | null;
   label: string;
-  arrival: Date;
+  arrival: Date | null;
   passengerName: string;
   phone: string;
-  stops: StopDraft[];
+  pickup: StopDraft;
+  destination: StopDraft;
+  waypoints: StopDraft[];
 };
 
 type PickerTarget = "arrival-date" | "arrival-time";
@@ -40,69 +42,48 @@ export function SortieDialog({
   const [arrival, setArrival] = useState(draft.arrival);
   const [passengerName, setPassengerName] = useState(draft.passengerName);
   const [phone, setPhone] = useState(draft.phone);
-  const [stops, setStops] = useState(draft.stops);
+  const [pickup, setPickup] = useState(draft.pickup);
+  const [destination, setDestination] = useState(draft.destination);
+  const [waypoints, setWaypoints] = useState(draft.waypoints);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
 
   function applyPicked(target: PickerTarget, picked: Date): void {
     if (target === "arrival-date") {
-      setArrival((current) => withPickedDate(current, picked));
+      setArrival((current) => withPickedDate(current ?? new Date(), picked));
     } else {
-      setArrival((current) => withPickedTime(current, picked));
+      setArrival((current) => withPickedTime(current ?? new Date(), picked));
     }
     if (Platform.OS !== "ios") {
       setPicker(null);
     }
   }
 
-  function updateStop(index: number, query: string): void {
-    setStops((current) =>
-      current.map((stop, stopIndex) => {
-        if (stopIndex !== index) {
-          return stop;
-        }
-        const chosen = stop.chosen && stop.chosen.label === query ? stop.chosen : null;
-        return { query, chosen };
-      }),
-    );
-  }
-
-  function chooseStop(index: number, suggestion: PlaceSuggestion): void {
-    setStops((current) =>
-      current.map((stop, stopIndex) =>
-        stopIndex === index ? { query: suggestion.label, chosen: suggestion } : stop,
-      ),
-    );
-  }
-
-  function addWaypoint(): void {
-    setStops((current) => [
-      current[0] ?? { query: "", chosen: null },
-      ...current.slice(1, -1),
-      { query: "", chosen: null },
-      current[current.length - 1] ?? { query: "", chosen: null },
-    ]);
-  }
-
-  function removeWaypoint(index: number): void {
-    setStops((current) => current.filter((_, stopIndex) => stopIndex !== index));
+  function clearEnd(which: "pickup" | "destination"): void {
+    if (which === "pickup") {
+      setPickup(blankStop());
+    } else {
+      setDestination(blankStop());
+    }
+    setWaypoints([]);
   }
 
   function save(): void {
-    const chosen = chosenStops(stops);
-    if (!chosen) {
+    const stops = chosenStops(pickup, destination, waypoints);
+    if (!stops) {
       onSave("invalid");
       return;
     }
     const digits = phoneDigits(phone);
     onSave({
       label,
-      arrivalAt: arrival.toISOString(),
+      arrivalAt: arrival ? arrival.toISOString() : null,
       passengerName: passengerName.trim().length === 0 ? null : passengerName.trim(),
       passengerPhone: digits.length === 0 ? null : digits,
-      stops: chosen,
+      stops,
     });
   }
 
+  const bothEnds = pickup.chosen !== null && destination.chosen !== null;
   const pickerMode = picker === "arrival-date" ? "date" : "time";
 
   return (
@@ -112,28 +93,32 @@ export function SortieDialog({
         <Text style={styles.fieldLabel}>Label</Text>
         <TextInput value={label} onChangeText={setLabel} style={styles.input} />
         <View style={styles.arrivalRow}>
-          <View style={styles.arrivalHalf}>
-            <PickerButton
-              label="Arrival date"
-              value={arrival.toLocaleDateString()}
-              onPress={() => setPicker("arrival-date")}
-            />
-          </View>
-          <View style={styles.arrivalHalf}>
-            <PickerButton
-              label="Arrival time"
-              value={arrival.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-              onPress={() => setPicker("arrival-time")}
-            />
-          </View>
+          {arrival ? (
+            <>
+              <View style={styles.arrivalHalf}>
+                <PickerButton
+                  label="Arrival date"
+                  value={arrival.toLocaleDateString()}
+                  onPress={() => setPicker("arrival-date")}
+                />
+              </View>
+              <View style={styles.arrivalHalf}>
+                <PickerButton
+                  label="Arrival time"
+                  value={arrival.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                  onPress={() => setPicker("arrival-time")}
+                />
+              </View>
+            </>
+          ) : (
+            <View style={styles.arrivalHalf}>
+              <PickerButton label="Arrival" value="Leave now" onPress={() => setArrival(new Date())} />
+            </View>
+          )}
         </View>
-        {picker ? (
+        {arrival && picker ? (
           Platform.OS === "web" ? (
-            <WebPicker
-              mode={pickerMode}
-              value={arrival}
-              onPicked={(picked) => applyPicked(picker, picked)}
-            />
+            <WebPicker mode={pickerMode} value={arrival} onPicked={(picked) => applyPicked(picker, picked)} />
           ) : (
             <DateTimePicker
               value={arrival}
@@ -143,6 +128,17 @@ export function SortieDialog({
               onDismiss={() => setPicker(null)}
             />
           )
+        ) : null}
+        {arrival ? (
+          <Pressable
+            onPress={() => {
+              setArrival(null);
+              setPicker(null);
+            }}
+            style={styles.secondary}
+          >
+            <Text style={styles.secondaryText}>Leave now</Text>
+          </Pressable>
         ) : null}
         <Text style={styles.fieldLabel}>Passenger name</Text>
         <TextInput value={passengerName} onChangeText={setPassengerName} style={styles.input} />
@@ -154,27 +150,44 @@ export function SortieDialog({
           inputMode={Platform.OS === "web" ? "tel" : undefined}
           style={styles.input}
         />
-        {stops.map((stop, index) => (
-          <View key={`${stopRole(index, stops.length)}-${index}`}>
-            <AddressPicker
-              label={stopRole(index, stops.length)}
-              appearance="field"
-              query={stop.query}
+        <PlaceField
+          label="Pickup"
+          stop={pickup}
+          token={token}
+          clearLabel="Clear pickup"
+          onChange={setPickup}
+          onClear={() => clearEnd("pickup")}
+          onUnauthorized={onUnauthorized}
+        />
+        {waypoints.map((stop, index) => (
+          <View key={`waypoint-${index}`}>
+            <PlaceField
+              label="Waypoint"
+              stop={stop}
               token={token}
-              onQueryChange={(query) => updateStop(index, query)}
-              onSelect={(suggestion) => chooseStop(index, suggestion)}
+              onChange={(next) =>
+                setWaypoints((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)))
+              }
+              onClear={() => setWaypoints((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+              clearLabel="Remove waypoint"
               onUnauthorized={onUnauthorized}
             />
-            {index > 0 && index < stops.length - 1 ? (
-              <Pressable onPress={() => removeWaypoint(index)} style={styles.secondary}>
-                <Text style={styles.secondaryText}>Remove waypoint</Text>
-              </Pressable>
-            ) : null}
           </View>
         ))}
-        <Pressable onPress={addWaypoint} style={styles.secondary}>
-          <Text style={styles.secondaryText}>Add waypoint</Text>
-        </Pressable>
+        <PlaceField
+          label="Destination"
+          stop={destination}
+          token={token}
+          clearLabel="Clear destination"
+          onChange={setDestination}
+          onClear={() => clearEnd("destination")}
+          onUnauthorized={onUnauthorized}
+        />
+        {bothEnds ? (
+          <Pressable onPress={() => setWaypoints((current) => [...current, blankStop()])} style={styles.secondary}>
+            <Text style={styles.secondaryText}>Add waypoint</Text>
+          </Pressable>
+        ) : null}
         {message ? <Text style={styles.message}>{message}</Text> : null}
         <Pressable onPress={save} style={styles.primary}>
           <Text style={styles.primaryText}>Save</Text>
@@ -183,6 +196,46 @@ export function SortieDialog({
           <Text style={styles.secondaryText}>Cancel</Text>
         </Pressable>
       </ScrollView>
+    </View>
+  );
+}
+
+function PlaceField({
+  label,
+  stop,
+  token,
+  clearLabel = "Clear",
+  onChange,
+  onClear,
+  onUnauthorized,
+}: {
+  label: string;
+  stop: StopDraft;
+  token: string;
+  clearLabel?: string;
+  onChange: (stop: StopDraft) => void;
+  onClear: () => void;
+  onUnauthorized: () => void;
+}) {
+  return (
+    <View>
+      <AddressPicker
+        label={label}
+        appearance="field"
+        query={stop.query}
+        token={token}
+        onQueryChange={(query) => {
+          const chosen = stop.chosen && stop.chosen.label === query ? stop.chosen : null;
+          onChange({ query, chosen });
+        }}
+        onSelect={(suggestion) => onChange({ query: suggestion.label, chosen: suggestion })}
+        onUnauthorized={onUnauthorized}
+      />
+      {stop.chosen ? (
+        <Pressable onPress={onClear} style={styles.secondary}>
+          <Text style={styles.secondaryText}>{clearLabel}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -211,28 +264,35 @@ function WebPicker({ mode, value, onPicked }: { mode: "date" | "time"; value: Da
   });
 }
 
-function chosenStops(stops: StopDraft[]): SortieStop[] | null {
-  const origin = stops[0]?.chosen;
-  const destination = stops[stops.length - 1]?.chosen;
-  if (!origin || !destination) {
+function chosenStops(pickup: StopDraft, destination: StopDraft, waypoints: StopDraft[]): SortieStop[] | null {
+  if (!pickup.chosen && !destination.chosen) {
     return null;
   }
-  const waypoints = stops.slice(1, -1).flatMap((stop) => (stop.chosen ? [stop.chosen] : []));
-  return [origin, ...waypoints, destination].map((stop) => ({
-    label: stop.label,
-    latitude: stop.latitude,
-    longitude: stop.longitude,
-  }));
+  const stops: SortieStop[] = [];
+  if (pickup.chosen) {
+    stops.push(toStop("pickup", pickup.chosen));
+  }
+  if (pickup.chosen && destination.chosen) {
+    for (const waypoint of waypoints) {
+      if (!waypoint.chosen) {
+        return null;
+      }
+      stops.push(toStop("waypoint", waypoint.chosen));
+    }
+  }
+  if (destination.chosen) {
+    stops.push(toStop("destination", destination.chosen));
+  }
+  return stops;
 }
 
-function stopRole(index: number, count: number): string {
-  if (index === 0) {
-    return "Origin";
-  }
-  if (index === count - 1) {
-    return "Destination";
-  }
-  return "Waypoint";
+function toStop(role: StopRole, suggestion: PlaceSuggestion): SortieStop {
+  return {
+    role,
+    label: suggestion.label,
+    latitude: suggestion.latitude,
+    longitude: suggestion.longitude,
+  };
 }
 
 function dateInputValue(date: Date): string {
@@ -263,21 +323,41 @@ function pad(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-export function emptyStops(): StopDraft[] {
-  return [
-    { query: "", chosen: null },
-    { query: "", chosen: null },
-  ];
+function blankStop(): StopDraft {
+  return { query: "", chosen: null };
 }
 
-export function stopsFromSortie(stops: SortieStop[]): StopDraft[] {
-  if (stops.length < 2) {
-    return emptyStops();
-  }
-  return stops.map((stop) => ({
+function draftFromStop(stop: SortieStop): StopDraft {
+  return {
     query: stop.label,
     chosen: { label: stop.label, name: stop.label, detail: "", latitude: stop.latitude, longitude: stop.longitude },
-  }));
+  };
+}
+
+export function emptyPlaces(): Pick<DialogDraft, "pickup" | "destination" | "waypoints"> {
+  return { pickup: blankStop(), destination: blankStop(), waypoints: [] };
+}
+
+export function placesFromSortie(stops: SortieStop[]): Pick<DialogDraft, "pickup" | "destination" | "waypoints"> {
+  const pickup = stops.find((stop) => stop.role === "pickup");
+  const destination = stops.find((stop) => stop.role === "destination");
+  return {
+    pickup: pickup ? draftFromStop(pickup) : blankStop(),
+    destination: destination ? draftFromStop(destination) : blankStop(),
+    waypoints: stops.filter((stop) => stop.role === "waypoint").map(draftFromStop),
+  };
+}
+
+export function sortieTitle(sortie: { label: string; stops: SortieStop[] }): string {
+  const label = sortie.label.trim();
+  if (label.length > 0) {
+    return label;
+  }
+  return (
+    sortie.stops.find((stop) => stop.role === "pickup")?.label ??
+    sortie.stops.find((stop) => stop.role === "destination")?.label ??
+    ""
+  );
 }
 
 const styles = StyleSheet.create({

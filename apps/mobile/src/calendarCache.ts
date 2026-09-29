@@ -101,6 +101,7 @@ function isSortie(value: unknown): value is Sortie {
     record.type === taskSortieType &&
     typeof record.label === "string" &&
     typeof record.arrivalAt === "string" &&
+    typeof record.arrivalAuthored === "boolean" &&
     typeof record.scheduledStart === "string" &&
     typeof record.scheduledEnd === "string" &&
     typeof record.departureAddress === "string" &&
@@ -117,6 +118,7 @@ function isStop(value: unknown): value is SortieStop {
   }
   const record = value as Record<string, unknown>;
   return (
+    (record.role === "pickup" || record.role === "waypoint" || record.role === "destination") &&
     typeof record.label === "string" &&
     record.label.length > 0 &&
     typeof record.latitude === "number" &&

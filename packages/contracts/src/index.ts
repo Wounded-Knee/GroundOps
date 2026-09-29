@@ -94,7 +94,12 @@ export type Driver = {
   userId: string;
 };
 
+export const stopRoles = ["pickup", "waypoint", "destination"] as const;
+
+export type StopRole = (typeof stopRoles)[number];
+
 export type SortieStop = {
+  role: StopRole;
   label: string;
   latitude: number;
   longitude: number;
@@ -105,6 +110,7 @@ export type Sortie = {
   type: typeof taskSortieType;
   label: string;
   arrivalAt: string;
+  arrivalAuthored: boolean;
   scheduledStart: string;
   scheduledEnd: string;
   departureAddress: string;
@@ -115,7 +121,7 @@ export type Sortie = {
 
 export type SortieWriteRequest = {
   label: string;
-  arrivalAt: string;
+  arrivalAt: string | null;
   passengerName: string | null;
   passengerPhone: string | null;
   stops: SortieStop[];

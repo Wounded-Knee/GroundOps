@@ -179,11 +179,6 @@ export function hourSlot(day: Date, hour: number): Interval {
   return { start, end: new Date(start.getTime() + 60 * 60 * 1000) };
 }
 
-export function defaultInterval(scope: CalendarScope, anchor: Date): Interval {
-  const day = scope === "month" ? new Date(anchor.getFullYear(), anchor.getMonth(), 1) : startOfDay(anchor);
-  return hourSlot(day, 9);
-}
-
 export function blockOnDay(start: Date, end: Date, day: Date): { top: number; height: number } | null {
   const dayStart = startOfDay(day);
   const dayEnd = addDays(dayStart, 1);

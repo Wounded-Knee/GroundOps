@@ -8,7 +8,6 @@ import {
   blockOnDay,
   calendarDayDelta,
   dayDeltaFromPixels,
-  defaultInterval,
   formatUsPhone,
   hourHeight,
   hourLabel,
@@ -23,7 +22,7 @@ import {
   weekDays,
   type CalendarScope,
 } from "./calendarTime";
-import { SortieDialog, emptyStops, stopsFromSortie, type DialogDraft } from "./SortieDialog";
+import { SortieDialog, emptyPlaces, placesFromSortie, sortieTitle, type DialogDraft } from "./SortieDialog";
 
 const couldNotLoad = "The calendar could not be loaded.";
 const couldNotRefresh = "The calendar could not be refreshed.";
@@ -355,7 +354,7 @@ export function CalendarScreen({
                       {chips.map((sortie) => (
                         <MonthChip
                           key={sortie.id}
-                          label={sortie.label}
+                          label={sortieTitle(sortie)}
                           enabled={ready.live && !ready.dialog && !ready.summary}
                           onOpen={() => openSummary(ready, sortie)}
                           onMove={(pageX, pageY) => {
@@ -438,7 +437,7 @@ export function CalendarScreen({
                         return (
                           <HourBlock
                             key={sortie.id}
-                            label={sortie.label}
+                            label={sortieTitle(sortie)}
                             top={block.top}
                             height={block.height}
                             enabled={ready.live && !ready.dialog && !ready.summary}
@@ -464,7 +463,7 @@ export function CalendarScreen({
             <Pressable
               style={styles.primary}
               onPress={() => {
-                openDialog(ready, dialogForCreate(defaultInterval(ready.scope, ready.anchor).start));
+                openDialog(ready, dialogForCreate(null));
               }}
             >
               <Text style={styles.primaryText}>Author sortie</Text>
@@ -510,21 +509,21 @@ function dialogFor(sortie: Sortie): DialogDraft {
   return {
     sortieId: sortie.id,
     label: sortie.label,
-    arrival: new Date(sortie.arrivalAt),
+    arrival: sortie.arrivalAuthored ? new Date(sortie.arrivalAt) : null,
     passengerName: sortie.passengerName ?? "",
     phone: formatUsPhone(sortie.passengerPhone ?? ""),
-    stops: stopsFromSortie(sortie.stops),
+    ...placesFromSortie(sortie.stops),
   };
 }
 
-function dialogForCreate(arrival: Date): DialogDraft {
+function dialogForCreate(arrival: Date | null): DialogDraft {
   return {
     sortieId: null,
     label: "",
     arrival,
     passengerName: "",
     phone: "",
-    stops: emptyStops(),
+    ...emptyPlaces(),
   };
 }
 
@@ -619,7 +618,7 @@ function SortieSummary({
   return (
     <View style={styles.backdrop}>
       <ScrollView contentContainerStyle={styles.summaryCard}>
-        <Text style={styles.summaryTitle}>{sortie.label}</Text>
+        <Text style={styles.summaryTitle}>{sortieTitle(sortie)}</Text>
         <SummaryRow label="Arrival" value={when(sortie.arrivalAt)} />
         <SummaryRow label="Start" value={when(sortie.scheduledStart)} />
         <SummaryRow label="Depart from" value={sortie.departureAddress.length > 0 ? sortie.departureAddress : "—"} />
@@ -627,7 +626,7 @@ function SortieSummary({
         <SummaryRow label="Passenger" value={sortie.passengerName ?? "—"} />
         <SummaryRow label="Phone" value={sortie.passengerPhone ? formatUsPhone(sortie.passengerPhone) : "—"} />
         {sortie.stops.map((stop, index) => (
-          <SummaryRow key={`${stop.label}-${index}`} label={stopRole(index, sortie.stops.length)} value={stop.label} />
+          <SummaryRow key={`${stop.role}-${stop.label}-${index}`} label={stopRoleLabel(stop.role)} value={stop.label} />
         ))}
         <Pressable onPress={onRevise} style={styles.primary}>
           <Text style={styles.primaryText}>Revise</Text>
@@ -649,11 +648,11 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function stopRole(index: number, count: number): string {
-  if (index === 0) {
-    return "Origin";
+function stopRoleLabel(role: Sortie["stops"][number]["role"]): string {
+  if (role === "pickup") {
+    return "Pickup";
   }
-  if (index === count - 1) {
+  if (role === "destination") {
     return "Destination";
   }
   return "Waypoint";

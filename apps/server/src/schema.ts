@@ -1,6 +1,19 @@
-import { doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import type { StopRole } from "@groundops/contracts";
+import {
+  boolean,
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 type StoredStop = {
+  role: StopRole;
   label: string;
   latitude: number;
   longitude: number;
@@ -83,6 +96,7 @@ export const sortie = pgTable("sortie", {
   type: text("type").notNull(),
   label: text("label").notNull(),
   arrivalAt: timestamp("arrival_at", { withTimezone: true, mode: "date" }).notNull(),
+  arrivalAuthored: boolean("arrival_authored").notNull().default(true),
   scheduledStart: timestamp("scheduled_start", { withTimezone: true, mode: "date" }).notNull(),
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true, mode: "date" }).notNull(),
   scheduleOriginLatitude: doublePrecision("schedule_origin_latitude"),
@@ -94,7 +108,7 @@ export const sortie = pgTable("sortie", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 
-/** Ordered places on a sortie. Position 0 is the origin. The last position is the destination. */
+/** Ordered places on a sortie. A pickup, when present, is first. A destination, when present, is last. */
 export const sortieStop = pgTable(
   "sortie_stop",
   {
@@ -103,6 +117,7 @@ export const sortieStop = pgTable(
       .notNull()
       .references(() => sortie.id),
     position: integer("position").notNull(),
+    role: text("role").notNull(),
     label: text("label").notNull(),
     latitude: doublePrecision("latitude").notNull(),
     longitude: doublePrecision("longitude").notNull(),
