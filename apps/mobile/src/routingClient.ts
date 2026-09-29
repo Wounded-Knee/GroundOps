@@ -95,7 +95,9 @@ function readSuggestion(value: unknown): PlaceSuggestion | null {
   if (!coordinate) {
     return null;
   }
-  return { label: value.label, ...coordinate };
+  const name = typeof value.name === "string" && value.name.length > 0 ? value.name : value.label;
+  const detail = typeof value.detail === "string" ? value.detail : "";
+  return { label: value.label, name, detail, ...coordinate };
 }
 
 function readRoute(value: unknown): DrivingRoute | null {

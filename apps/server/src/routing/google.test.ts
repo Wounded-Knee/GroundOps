@@ -152,7 +152,11 @@ describe("suggestPlaces", () => {
               {
                 placePrediction: {
                   placeId: "secret-place",
-                  text: { text: "Central Library" },
+                  text: { text: "Denny's, 123 Main St, Springfield, IL, USA" },
+                  structuredFormat: {
+                    mainText: { text: "Denny's" },
+                    secondaryText: { text: "123 Main St, Springfield, IL, USA" },
+                  },
                 },
               },
             ],
@@ -166,8 +170,51 @@ describe("suggestPlaces", () => {
       },
     });
 
-    assert.deepEqual(result, [{ label: "Central Library", latitude: 40.1, longitude: -75.1 }]);
+    assert.deepEqual(result, [
+      {
+        label: "Denny's, 123 Main St, Springfield, IL, USA",
+        name: "Denny's",
+        detail: "123 Main St, Springfield, IL, USA",
+        latitude: 40.1,
+        longitude: -75.1,
+      },
+    ]);
     assert.equal(JSON.stringify(result).includes("secret-place"), false);
+  });
+
+  it("keeps the placename in the label when the prediction text is only the postal address", async () => {
+    const result = await suggestPlaces("denny", null, {
+      apiKey: "test-key",
+      fetch: async (url) => {
+        if (url.endsWith(":autocomplete")) {
+          return Response.json({
+            suggestions: [
+              {
+                placePrediction: {
+                  placeId: "diner",
+                  text: { text: "123 Main St, Springfield, IL, USA" },
+                  structuredFormat: {
+                    mainText: { text: "Denny's" },
+                    secondaryText: { text: "123 Main St, Springfield, IL, USA" },
+                  },
+                },
+              },
+            ],
+          });
+        }
+        return Response.json({ location: { latitude: 39.8, longitude: -89.6 } });
+      },
+    });
+
+    assert.deepEqual(result, [
+      {
+        label: "Denny's, 123 Main St, Springfield, IL, USA",
+        name: "Denny's",
+        detail: "123 Main St, Springfield, IL, USA",
+        latitude: 39.8,
+        longitude: -89.6,
+      },
+    ]);
   });
 });
 

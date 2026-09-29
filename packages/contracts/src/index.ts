@@ -54,6 +54,8 @@ export type PlaceSuggestionsRequest = {
 
 export type PlaceSuggestion = GeoCoordinate & {
   label: string;
+  name: string;
+  detail: string;
 };
 
 export type PlaceSuggestionsResponse = {

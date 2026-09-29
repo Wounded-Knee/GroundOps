@@ -120,7 +120,8 @@ export function AddressPicker({
           onPress={() => choose(suggestion)}
           style={appearance === "field" ? styles.fieldSuggestion : styles.searchSuggestion}
         >
-          <Text style={styles.suggestionText}>{suggestion.label}</Text>
+          <Text style={styles.suggestionText}>{suggestion.name}</Text>
+          {suggestion.detail.length > 0 ? <Text style={styles.suggestionDetail}>{suggestion.detail}</Text> : null}
         </Pressable>
       ))}
     </View>
@@ -193,5 +194,9 @@ const styles = StyleSheet.create({
   suggestionText: {
     color: ink,
     fontSize: 16,
+  },
+  suggestionDetail: {
+    color: hint,
+    fontSize: 14,
   },
 });

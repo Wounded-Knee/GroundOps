@@ -253,9 +253,16 @@ function latLngLocation(coordinate: GeoCoordinate): Record<string, unknown> {
   };
 }
 
+type ReadPrediction = {
+  placeId: string;
+  label: string;
+  name: string;
+  detail: string;
+};
+
 async function locatePrediction(
   client: GoogleClient,
-  prediction: { placeId: string; label: string },
+  prediction: ReadPrediction,
   sessionToken: string,
 ): Promise<PlaceSuggestion | null> {
   try {
@@ -275,33 +282,58 @@ async function locatePrediction(
     if (!coordinate) {
       return null;
     }
-    return { label: prediction.label, latitude: coordinate.latitude, longitude: coordinate.longitude };
+    return {
+      label: prediction.label,
+      name: prediction.name,
+      detail: prediction.detail,
+      latitude: coordinate.latitude,
+      longitude: coordinate.longitude,
+    };
   } catch {
     return null;
   }
 }
 
-function readPredictions(body: unknown): { placeId: string; label: string }[] {
+function readPredictions(body: unknown): ReadPrediction[] {
   if (!isRecord(body) || !Array.isArray(body.suggestions)) {
     return [];
   }
-  const predictions: { placeId: string; label: string }[] = [];
+  const predictions: ReadPrediction[] = [];
   for (const suggestion of body.suggestions) {
     if (!isRecord(suggestion) || !isRecord(suggestion.placePrediction)) {
       continue;
     }
     const prediction = suggestion.placePrediction;
     const placeId = readPlaceId(prediction);
-    const label = isRecord(prediction.text) && typeof prediction.text.text === "string" ? prediction.text.text.trim() : "";
+    const text = readFormattableText(prediction.text);
+    const structured = isRecord(prediction.structuredFormat) ? prediction.structuredFormat : null;
+    const mainText = structured ? readFormattableText(structured.mainText) : "";
+    const detail = structured ? readFormattableText(structured.secondaryText) : "";
+    const name = mainText.length > 0 ? mainText : text;
+    const label = placeLabel(text, name, detail);
     if (placeId.length === 0 || label.length === 0) {
       continue;
     }
-    predictions.push({ placeId, label });
+    predictions.push({ placeId, label, name, detail });
     if (predictions.length === suggestionLimit) {
       break;
     }
   }
   return predictions;
+}
+
+function readFormattableText(value: unknown): string {
+  if (!isRecord(value) || typeof value.text !== "string") {
+    return "";
+  }
+  return value.text.trim();
+}
+
+function placeLabel(text: string, name: string, detail: string): string {
+  if (name.length > 0 && !text.toLowerCase().includes(name.toLowerCase())) {
+    return detail.length > 0 ? `${name}, ${detail}` : name;
+  }
+  return text;
 }
 
 function readPlaceId(prediction: Record<string, unknown>): string {

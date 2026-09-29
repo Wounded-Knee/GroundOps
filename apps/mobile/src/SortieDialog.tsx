@@ -273,7 +273,7 @@ export function stopsFromSortie(stops: SortieStop[]): StopDraft[] {
   }
   return stops.map((stop) => ({
     query: stop.label,
-    chosen: { label: stop.label, latitude: stop.latitude, longitude: stop.longitude },
+    chosen: { label: stop.label, name: stop.label, detail: "", latitude: stop.latitude, longitude: stop.longitude },
   }));
 }
 

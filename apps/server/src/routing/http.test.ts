@@ -75,7 +75,8 @@ describe("routing http", () => {
   it("returns a driving route for a session", async () => {
     const app = appWith({
       findSession: async (authorization) => (authorization === "Bearer token" ? session : null),
-      suggestPlaces: async () => [{ label: "Library", latitude: 1, longitude: 2 }] satisfies PlaceSuggestion[],
+      suggestPlaces: async () =>
+        [{ label: "Library", name: "Library", detail: "", latitude: 1, longitude: 2 }] satisfies PlaceSuggestion[],
       computeDrivingRoute: async () => route,
     });
     const response = await app.inject({
