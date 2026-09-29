@@ -46,7 +46,8 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
       appleRef.current?.setCameraPosition(position);
       return;
     }
-    googleRef.current?.setCameraPosition({ ...position, duration: 700 });
+    // Shorter than the ~1s GPS cadence so heading corrections finish before the next fix.
+    googleRef.current?.setCameraPosition({ ...position, duration: 350 });
   }
 
   useImperativeHandle(ref, () => ({

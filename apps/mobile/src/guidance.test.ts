@@ -3,10 +3,16 @@ import { describe, it } from "node:test";
 import type { DrivingRoute, GeoCoordinate, RouteStep } from "@groundops/contracts";
 import {
   applyLocationFix,
+  distanceMeters,
   formatMeters,
   formatSeconds,
+  guidanceLookAheadMeters,
+  offsetAlongBearing,
+  pathLengthMeters,
+  projectOntoPath,
   remainingDistanceMeters,
   remainingDurationSeconds,
+  smoothBearing,
 } from "./guidance.js";
 
 const origin: GeoCoordinate = { latitude: 0, longitude: 0 };
@@ -111,15 +117,56 @@ describe("guidance", () => {
     assert.equal(returned.shouldReroute, false);
   });
 
-  it("computes remaining distance and time from the current step", () => {
+  it("computes remaining distance along the route path and duration from the current step", () => {
     const route = routeWithEnds(100, 50);
     const fix = north(origin, 75);
+    assert.ok(Math.abs(pathLengthMeters(route.path) - 150) < 2);
+    const projection = projectOntoPath(fix, route.path);
+    assert.ok(Math.abs(projection.alongMeters - 75) < 2);
+    assert.ok(Math.abs(projection.remainingMeters - 75) < 2);
+    assert.ok(projection.distanceToPathMeters < 1);
     assert.ok(Math.abs(remainingDistanceMeters(fix, route, 0) - 75) < 2);
     assert.ok(Math.abs(remainingDurationSeconds(fix, route, 0) - 65) < 1);
     assert.equal(formatMeters(850), "850 m");
     assert.equal(formatMeters(1500), "1.5 km");
     assert.equal(formatSeconds(90), "2 min");
     assert.equal(formatSeconds(5400), "1 hr 30 min");
+  });
+
+  it("projects a point onto a bent path using along-route distance", () => {
+    const corner = north(origin, 100);
+    const end = east(corner, 100);
+    const path = [origin, corner, end];
+    assert.ok(Math.abs(pathLengthMeters(path) - 200) < 2);
+    const midway = north(origin, 50);
+    const first = projectOntoPath(midway, path);
+    assert.ok(Math.abs(first.alongMeters - 50) < 2);
+    assert.ok(Math.abs(first.remainingMeters - 150) < 2);
+    const onSecond = east(corner, 40);
+    const second = projectOntoPath(onSecond, path);
+    assert.ok(Math.abs(second.alongMeters - 140) < 3);
+    assert.ok(Math.abs(second.remainingMeters - 60) < 3);
+  });
+
+  it("offsets along bearing north and east by the requested meters", () => {
+    const northTarget = offsetAlongBearing(origin, 0, guidanceLookAheadMeters);
+    assert.ok(Math.abs(distanceMeters(origin, northTarget) - guidanceLookAheadMeters) < 1);
+    assert.ok(northTarget.latitude > origin.latitude);
+    assert.ok(Math.abs(northTarget.longitude - origin.longitude) < 1e-9);
+
+    const eastTarget = offsetAlongBearing(origin, 90, guidanceLookAheadMeters);
+    assert.ok(Math.abs(distanceMeters(origin, eastTarget) - guidanceLookAheadMeters) < 1);
+    assert.ok(eastTarget.longitude > origin.longitude);
+    assert.ok(Math.abs(eastTarget.latitude - origin.latitude) < 1e-9);
+  });
+
+  it("smooths oscillating course so the camera bearing does not whip back and forth", () => {
+    assert.equal(smoothBearing(null, 200), 200);
+    const first = smoothBearing(200, 220);
+    assert.ok(first > 200 && first < 220);
+    // +20 then -20 raw would reverse; smoothed stays near the first correction.
+    const second = smoothBearing(first, 200);
+    assert.ok(Math.abs(second - first) < Math.abs(200 - first));
   });
 });
 

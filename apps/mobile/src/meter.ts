@@ -1,11 +1,16 @@
 import type { GeoCoordinate, Tariff } from "@groundops/contracts";
-import { distanceMeters } from "./guidance";
+import { distanceMeters, offRouteMeters, projectOntoPath } from "./guidance";
 
 /** Below this GPS-derived speed, the segment is wait. */
 export const stationarySpeedMps = 2;
 /** Displacement at or below this is treated as stationary GPS noise, not miles. */
 export const stationaryDisplacementMeters = 5;
 export const meterAccuracyMeters = 50;
+/**
+ * GPS silence after a moving sample that implies the vehicle stopped.
+ * Matches the navigation watch distance interval: no 5 m update in this window means < 1 m/s.
+ */
+export const gpsSilenceStationarySeconds = 5;
 const metersPerMile = 1609.344;
 
 export type MeterSample = {
@@ -14,10 +19,16 @@ export type MeterSample = {
   accuracyMeters: number | null;
 };
 
+/** Motion relative to successive GPS samples; unknown until the second sample. */
+export type MeterMotion = "unknown" | "stationary" | "moving";
+
 export type MeterState = {
   milesTraveled: number;
   waitSeconds: number;
   last: MeterSample | null;
+  /** Last projected distance along the current route path. */
+  alongMeters: number | null;
+  motion: MeterMotion;
 };
 
 export type MeterCharges = {
@@ -28,42 +39,89 @@ export type MeterCharges = {
   estimateCents: number;
 };
 
+export type RouteMeterSample = MeterSample & {
+  routePath: GeoCoordinate[];
+};
+
 export function emptyMeter(): MeterState {
-  return { milesTraveled: 0, waitSeconds: 0, last: null };
+  return { milesTraveled: 0, waitSeconds: 0, last: null, alongMeters: null, motion: "unknown" };
+}
+
+/** Reset path tracking after a reroute without clearing cumulative miles or wait. */
+export function resetMeterRouteProgress(state: MeterState, alongMeters: number | null): MeterState {
+  return { ...state, alongMeters };
 }
 
 /**
- * Stationary vs moving is decided only from GPS positions: displacement over elapsed time.
- * Device-reported speed is not used.
+ * Advance the meter from a GPS sample against the active route path.
+ * Miles traveled increase only with forward progress along the polyline.
+ * Off-route samples update wait/motion only.
  */
-export function advanceMeter(state: MeterState, sample: MeterSample): MeterState {
+export function advanceMeterAlongRoute(state: MeterState, sample: RouteMeterSample): MeterState {
   if (sample.accuracyMeters !== null && sample.accuracyMeters > meterAccuracyMeters) {
     return state;
   }
+
   const previous = state.last;
+  const projection =
+    sample.routePath.length >= 2 ? projectOntoPath(sample.fix, sample.routePath) : null;
+  const onRoute = projection !== null && projection.distanceToPathMeters <= offRouteMeters;
+
   if (!previous) {
-    return { ...state, last: sample };
+    return {
+      ...state,
+      last: sample,
+      alongMeters: onRoute ? projection.alongMeters : state.alongMeters,
+      motion: "unknown",
+    };
   }
+
   const elapsedSeconds = Math.max(0, (sample.observedAtMs - previous.observedAtMs) / 1000);
   if (elapsedSeconds <= 0) {
-    return { ...state, last: sample };
+    return {
+      ...state,
+      last: sample,
+      alongMeters: onRoute ? projection.alongMeters : state.alongMeters,
+    };
   }
+
   const movedMeters = distanceMeters(previous.fix, sample.fix);
-  if (isStationary(movedMeters, elapsedSeconds)) {
+  const stationary = isStationary(movedMeters, elapsedSeconds);
+
+  if (stationary) {
     return {
       milesTraveled: state.milesTraveled,
       waitSeconds: state.waitSeconds + elapsedSeconds,
       last: sample,
+      alongMeters: onRoute ? projection.alongMeters : state.alongMeters,
+      motion: "stationary",
     };
   }
+
+  let milesTraveled = state.milesTraveled;
+  let alongMeters = state.alongMeters;
+  if (onRoute && projection) {
+    if (alongMeters !== null && projection.alongMeters > alongMeters) {
+      milesTraveled += (projection.alongMeters - alongMeters) / metersPerMile;
+    }
+    alongMeters = projection.alongMeters;
+  }
+
   return {
-    milesTraveled: state.milesTraveled + movedMeters / metersPerMile,
+    milesTraveled,
     waitSeconds: state.waitSeconds,
     last: sample,
+    alongMeters,
+    motion: "moving",
   };
 }
 
-/** Continues wait while location updates are sparse and the last fix is still current. */
+/**
+ * Continues wait at least once per second while stopped.
+ * Accrues when the last GPS segment was stationary, when motion is still unknown
+ * (parked before a second fix — common with distance-interval watches), or after
+ * enough GPS silence following movement that the vehicle must have stopped.
+ */
 export function tickMeterWait(state: MeterState, nowMs: number): MeterState {
   const previous = state.last;
   if (!previous) {
@@ -73,10 +131,14 @@ export function tickMeterWait(state: MeterState, nowMs: number): MeterState {
   if (elapsedSeconds < 1) {
     return state;
   }
+  if (state.motion === "moving" && elapsedSeconds < gpsSilenceStationarySeconds) {
+    return state;
+  }
   return {
-    milesTraveled: state.milesTraveled,
+    ...state,
     waitSeconds: state.waitSeconds + elapsedSeconds,
     last: { ...previous, observedAtMs: nowMs },
+    motion: "stationary",
   };
 }
 
@@ -114,14 +176,12 @@ export function meterCharges(
   };
 }
 
-/** Progress is traveled / (traveled + remaining). Remaining comes from the live route, so a wrong-way detour that triggers a longer reroute shrinks the fill. */
-export function progressFraction(milesTraveled: number, remainingMeters: number): number {
-  const remainingMiles = Math.max(0, remainingMeters) / metersPerMile;
-  const total = milesTraveled + remainingMiles;
-  if (total <= 0) {
+/** Proximity to destination along the active route: 1 - remaining/baseline. */
+export function progressFraction(remainingMeters: number, baselineRemainingMeters: number): number {
+  if (baselineRemainingMeters <= 0) {
     return 1;
   }
-  return Math.min(1, Math.max(0, milesTraveled / total));
+  return Math.min(1, Math.max(0, 1 - Math.max(0, remainingMeters) / baselineRemainingMeters));
 }
 
 export function formatMiles(miles: number): string {

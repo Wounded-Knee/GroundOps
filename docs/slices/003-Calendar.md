@@ -49,7 +49,7 @@ The API uses host PostgreSQL. The client JavaScript is the Expo development serv
 
 The calendar runs on web, iOS, and Android. Web is the Expo development server. iOS and Android use the local development build from slice 002, because the map that opens the calendar still uses `expo-maps`. Arrival date and time use `@react-native-community/datetimepicker` on each platform. That picker is a native module, so the development build includes it. This slice adds no EAS build, no store build, and no deployed environment.
 
-The local calendar cache uses `expo-sqlite` on each of those platforms. Place suggestions use the server endpoint from slice 002. The signed-in app reports foreground GPS fixes to the server. Drive time for a sortie window uses the Google routing key slice 002 already requires. `.env.example` is unchanged.
+The local calendar cache uses `expo-sqlite` on each of those platforms. Place suggestions use the server endpoint from slice 002. The signed-in app reports GPS fixes to the server while open and, on iOS and Android, while backgrounded. Drive time for a sortie window uses the Google routing key slice 002 already requires. `.env.example` is unchanged.
 
 ---
 
@@ -67,7 +67,7 @@ The first place to reach is the pickup when the sortie has one, otherwise the de
 
 An authored arrival uses the previous sortie's last place when this arrival is later than another of that driver's sorties, and otherwise the latest stored observation. An omitted arrival uses only that observation. If the observation is required and the driver has none, the write is rejected and the screen says location is required. If the routing call fails, the write is rejected and the sortie is left unchanged. Saving a sortie also refreshes any still-open sortie whose approach start changed because of that write. A later observation recomputes a still-open sortie that starts from the driver's position when the new fix is at least ten miles from the coordinate of the last successful computation, or when that coordinate is missing. It does not recompute a sortie that starts from a previous place. An authored arrival stays put and the window is refreshed around it. An arrival the server computed is computed again as an immediate departure from the new fix. A sortie whose cached end is already past is left unchanged. A failed recompute leaves the cached window and the coordinate unchanged and is not retried for five minutes. That recompute appends `sortie.schedule_computed`. It is not a revise.
 
-While the person is signed in and the app is in the foreground, the client reports location observations. It sends a fix when the device has moved at least 100 meters from the last accepted report, or five minutes have passed, and it drops a fix whose accuracy is worse than 100 meters. Off-duty suppression is not applied, because this slice has no duty. Background location stays out. An observation is not broadcast, and no other driver can read it.
+While the person is signed in, the client reports location observations in the foreground and in the background on iOS and Android. It sends a fix when the device has moved at least 100 meters from the last accepted report, or five minutes have passed, and it drops a fix whose accuracy is worse than 100 meters. Off-duty suppression is not applied, because this slice has no duty. An observation is not broadcast, and no other driver can read it. Web reports only while the tab is open.
 
 A sortie has at least one stop, and that stop is a pickup or a destination. It may have both. Position order is the pickup when present, then any waypoints, then the destination when present. Waypoints require both a pickup and a destination. Each stop is a place suggestion the person chose: a role, a label, and a coordinate. Suggestions come from `POST /place-suggestions`, as slice 002 defines. The client does not call Google. A stop has no place id. Text that was typed and not chosen is not a stop. When the label is empty, the calendar shows the pickup address, or the destination address when there is no pickup.
 
@@ -289,7 +289,7 @@ The slice works when all of the following are true on the local stack:
 - Duty, availability, dispatch shifts, duty shifts, and vehicle assignment
 - Sortie types other than `task`, and a type registry
 - Driving-route geometry from these stops, and opening guidance for a single stop. Opening guidance for a full sortie is slice 004
-- Background location, and stopping GPS reports while off duty
+- Off-duty suppression of GPS reports
 - All-day sorties, recurrence, reminders, more than one calendar, colors, guests, and search
 - Conflict detection, feasibility, and schedule margins
 - Another company's occupied time on this calendar

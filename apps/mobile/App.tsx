@@ -24,6 +24,7 @@ import {
   revokeSession,
 } from "./src/sessionClient";
 import { deleteStoredSession, readStoredSession, writeStoredSession } from "./src/sessionStore";
+import { stopLocationObservationUpdates } from "./src/locationObservationReporting";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -267,6 +268,7 @@ export default function App() {
     }
     await deleteStoredSession();
     await forgetCalendarCache();
+    await stopLocationObservationUpdates();
     resetChrome();
     setPhase({ status: "signed-out", message: null });
   }
@@ -275,6 +277,7 @@ export default function App() {
     generation.current += 1;
     await deleteStoredSession();
     await forgetCalendarCache();
+    await stopLocationObservationUpdates();
     resetChrome();
     setPhase({ status: "signed-out", message: null });
   }

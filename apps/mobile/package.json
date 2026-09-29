@@ -6,6 +6,7 @@
     "@expo/vector-icons": "~15.0.3",
     "@groundops/contracts": "workspace:*",
     "@react-native-community/datetimepicker": "9.1.0",
+    "@react-native-community/slider": "5.2.0",
     "expo": "~57.0.25",
     "expo-auth-session": "~57.0.13",
     "expo-constants": "~57.0.19",
@@ -17,6 +18,7 @@
     "expo-speech": "~57.0.3",
     "expo-sqlite": "~57.0.3",
     "expo-status-bar": "~57.0.1",
+    "expo-task-manager": "~57.0.21",
     "expo-web-browser": "~57.0.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -38,6 +40,15 @@
     "run:android": "../../scripts/android.sh run",
     "ios": "node --env-file=../../.env ./scripts/expo-with-env.mjs start --ios",
     "web": "node --env-file=../../.env ./scripts/expo-with-env.mjs start --web"
+  },
+  "expo": {
+    "autolinking": {
+      "android": {
+        "buildFromSource": [
+          "expo-maps"
+        ]
+      }
+    }
   },
   "private": true
 }

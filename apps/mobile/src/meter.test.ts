@@ -1,16 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { defaultTariff } from "@groundops/contracts";
+import type { GeoCoordinate } from "@groundops/contracts";
 import {
-  advanceMeter,
+  advanceMeterAlongRoute,
   emptyMeter,
   formatMoney,
+  gpsSilenceStationarySeconds,
   isStationary,
   meterCharges,
   progressFraction,
+  resetMeterRouteProgress,
   stationaryDisplacementMeters,
   tickMeterWait,
 } from "./meter";
+
+const origin: GeoCoordinate = { latitude: 40, longitude: -74 };
+const path: GeoCoordinate[] = [origin, north(origin, 1000), north(origin, 2000)];
 
 describe("meter", () => {
   it("charges flag, distance, and wait from the tariff snapshot", () => {
@@ -32,56 +38,160 @@ describe("meter", () => {
     assert.equal(isStationary(5, 10), true);
   });
 
-  it("accumulates wait when GPS position holds and miles when it moves", () => {
-    const first = advanceMeter(emptyMeter(), {
-      fix: { latitude: 40, longitude: -74 },
+  it("accumulates wait when GPS holds and miles from forward progress along the route", () => {
+    const first = advanceMeterAlongRoute(emptyMeter(), {
+      fix: origin,
       observedAtMs: 1_000,
       accuracyMeters: 10,
+      routePath: path,
     });
-    const waited = advanceMeter(first, {
-      fix: { latitude: 40, longitude: -74 },
+    const waited = advanceMeterAlongRoute(first, {
+      fix: origin,
       observedAtMs: 61_000,
       accuracyMeters: 10,
+      routePath: path,
     });
     assert.ok(waited.waitSeconds >= 59);
     assert.equal(waited.milesTraveled, 0);
+    assert.equal(waited.motion, "stationary");
 
-    const moved = advanceMeter(waited, {
-      fix: { latitude: 40.01, longitude: -74 },
+    const moved = advanceMeterAlongRoute(waited, {
+      fix: north(origin, 500),
       observedAtMs: 91_000,
       accuracyMeters: 10,
+      routePath: path,
     });
-    assert.ok(moved.milesTraveled > 0);
+    assert.ok(moved.milesTraveled > 0.3);
+    assert.ok(moved.milesTraveled < 0.35);
     assert.equal(moved.waitSeconds, waited.waitSeconds);
+    assert.equal(moved.motion, "moving");
   });
 
-  it("keeps accumulating wait when location callbacks pause", () => {
-    const parked = advanceMeter(emptyMeter(), {
-      fix: { latitude: 40, longitude: -74 },
+  it("does not add miles from off-route haversine displacement", () => {
+    const onRoute = advanceMeterAlongRoute(emptyMeter(), {
+      fix: origin,
       observedAtMs: 1_000,
       accuracyMeters: 10,
+      routePath: path,
     });
-    const ticked = tickMeterWait(parked, 31_000);
+    const off = advanceMeterAlongRoute(onRoute, {
+      fix: east(origin, 200),
+      observedAtMs: 11_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    assert.equal(off.milesTraveled, 0);
+    assert.equal(off.motion, "moving");
+  });
+
+  it("does not subtract miles when along-route distance decreases", () => {
+    const start = advanceMeterAlongRoute(emptyMeter(), {
+      fix: origin,
+      observedAtMs: 1_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    const forward = advanceMeterAlongRoute(start, {
+      fix: north(origin, 800),
+      observedAtMs: 21_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    const back = advanceMeterAlongRoute(forward, {
+      fix: north(origin, 400),
+      observedAtMs: 41_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    assert.equal(back.milesTraveled, forward.milesTraveled);
+  });
+
+  it("ticks wait once per second while parked, including before a second GPS fix", () => {
+    const parked = advanceMeterAlongRoute(emptyMeter(), {
+      fix: origin,
+      observedAtMs: 1_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    assert.equal(parked.motion, "unknown");
+    const firstTick = tickMeterWait(parked, 2_000);
+    assert.ok(firstTick.waitSeconds >= 1);
+    assert.equal(firstTick.motion, "stationary");
+    const secondTick = tickMeterWait(firstTick, 3_000);
+    assert.ok(secondTick.waitSeconds >= firstTick.waitSeconds + 1);
+
+    const still = advanceMeterAlongRoute(parked, {
+      fix: origin,
+      observedAtMs: 2_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    assert.equal(still.motion, "stationary");
+    const ticked = tickMeterWait(still, 32_000);
     assert.ok(ticked.waitSeconds >= 29);
     assert.equal(ticked.milesTraveled, 0);
+
+    const moving = advanceMeterAlongRoute(still, {
+      fix: north(origin, 100),
+      observedAtMs: 12_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    assert.equal(moving.motion, "moving");
+    assert.equal(
+      tickMeterWait(moving, 12_000 + (gpsSilenceStationarySeconds * 1000 - 1)).waitSeconds,
+      moving.waitSeconds,
+    );
+    const afterSilence = tickMeterWait(moving, 12_000 + gpsSilenceStationarySeconds * 1000);
+    assert.ok(afterSilence.waitSeconds >= moving.waitSeconds + gpsSilenceStationarySeconds);
+    assert.equal(afterSilence.motion, "stationary");
   });
 
-  it("ignores inaccurate fixes and shrinks progress when remaining grows after a detour", () => {
-    const started = advanceMeter(emptyMeter(), {
-      fix: { latitude: 40, longitude: -74 },
+  it("ignores inaccurate fixes and measures progress from remaining versus baseline", () => {
+    const started = advanceMeterAlongRoute(emptyMeter(), {
+      fix: origin,
       observedAtMs: 1_000,
       accuracyMeters: 10,
+      routePath: path,
     });
-    const ignored = advanceMeter(started, {
-      fix: { latitude: 40.02, longitude: -74 },
+    const ignored = advanceMeterAlongRoute(started, {
+      fix: north(origin, 500),
       observedAtMs: 2_000,
       accuracyMeters: 80,
+      routePath: path,
     });
     assert.equal(ignored.milesTraveled, started.milesTraveled);
-    assert.equal(progressFraction(0, 1609.344), 0);
-    assert.equal(progressFraction(1, 0), 1);
-    const beforeDetour = progressFraction(1, 1609.344);
-    const afterDetour = progressFraction(5, 8 * 1609.344);
-    assert.ok(afterDetour < beforeDetour);
+    assert.equal(progressFraction(1609.344, 1609.344), 0);
+    assert.equal(progressFraction(0, 1609.344), 1);
+    assert.equal(progressFraction(0, 0), 1);
+    assert.ok(progressFraction(800, 1609.344) > 0.4);
+    assert.ok(progressFraction(800, 1609.344) < 0.6);
+    assert.equal(progressFraction(2000, 1609.344), 0);
+  });
+
+  it("resets along-route tracking without clearing miles or wait", () => {
+    const state = {
+      milesTraveled: 1.5,
+      waitSeconds: 40,
+      last: {
+        fix: origin,
+        observedAtMs: 1_000,
+        accuracyMeters: 10,
+      },
+      alongMeters: 900,
+      motion: "moving" as const,
+    };
+    const reset = resetMeterRouteProgress(state, 10);
+    assert.equal(reset.milesTraveled, 1.5);
+    assert.equal(reset.waitSeconds, 40);
+    assert.equal(reset.alongMeters, 10);
   });
 });
+
+function north(from: GeoCoordinate, meters: number): GeoCoordinate {
+  return { latitude: from.latitude + meters / 111_320, longitude: from.longitude };
+}
+
+function east(from: GeoCoordinate, meters: number): GeoCoordinate {
+  return { latitude: from.latitude, longitude: from.longitude + meters / (111_320 * Math.cos((from.latitude * Math.PI) / 180)) };
+}

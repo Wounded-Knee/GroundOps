@@ -2,7 +2,7 @@ import type { DrivingRoute, GeoCoordinate, PlaceSuggestion, SortieStop, Tariff }
 import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { resolveApiUrl } from "./apiUrl";
@@ -14,15 +14,29 @@ import {
   distanceToStepEnd,
   formatMeters,
   formatSeconds,
-  guidanceTilt,
-  guidanceZoom,
+  guidanceLookAheadMeters,
   maneuverLabel,
+  offsetAlongBearing,
   overviewCamera,
+  pathLengthMeters,
+  projectOntoPath,
   remainingDistanceMeters,
   remainingDurationSeconds,
+  smoothBearing,
   travelBearing,
 } from "./guidance";
-import { advanceMeter, emptyMeter, tickMeterWait, type MeterState } from "./meter";
+import {
+  ensureGuidanceCameraPrefsLoaded,
+  getGuidanceCameraPrefs,
+  subscribeGuidanceCameraPrefs,
+} from "./guidanceCameraPrefs";
+import {
+  advanceMeterAlongRoute,
+  emptyMeter,
+  resetMeterRouteProgress,
+  tickMeterWait,
+  type MeterState,
+} from "./meter";
 import type { MeterDisplay } from "./MeterStrip";
 import { PlatformMap, type MapCamera, type MapHandle } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
@@ -91,6 +105,11 @@ export function NavigationScreen({
   const [routeEpoch, setRouteEpoch] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [meter, setMeter] = useState<MeterState>(emptyMeter());
+  const cameraPrefs = useSyncExternalStore(
+    subscribeGuidanceCameraPrefs,
+    getGuidanceCameraPrefs,
+    getGuidanceCameraPrefs,
+  );
 
   const navRef = useRef(nav);
   navRef.current = nav;
@@ -98,6 +117,7 @@ export function NavigationScreen({
   fixRef.current = fix;
   const meterRef = useRef(meter);
   meterRef.current = meter;
+  const baselineRemainingRef = useRef(0);
   const bearingRef = useRef<number | null>(null);
   const centered = useRef(false);
   const routeRequest = useRef(0);
@@ -125,6 +145,37 @@ export function NavigationScreen({
     mapRef.current?.setCamera(camera);
   }
 
+  function guidanceCameraFrom(at: GeoCoordinate): MapCamera {
+    const bearing = bearingRef.current ?? 0;
+    // Look-ahead keeps the fix near bottom-center on a heading-up camera.
+    const target = offsetAlongBearing(at, bearing, guidanceLookAheadMeters);
+    return {
+      latitude: target.latitude,
+      longitude: target.longitude,
+      zoom: cameraPrefs.zoom,
+      tilt: cameraPrefs.tilt,
+      bearing,
+    };
+  }
+
+  function snapshotProgressBaseline(at: GeoCoordinate | null, route: DrivingRoute): void {
+    if (at && route.path.length >= 2) {
+      baselineRemainingRef.current = projectOntoPath(at, route.path).remainingMeters;
+      return;
+    }
+    baselineRemainingRef.current = pathLengthMeters(route.path) || route.distanceMeters;
+  }
+
+  function applyRouteToMeter(at: GeoCoordinate | null, route: DrivingRoute): MeterState {
+    const along =
+      at && route.path.length >= 2 ? projectOntoPath(at, route.path).alongMeters : null;
+    const next = resetMeterRouteProgress(meterRef.current, along);
+    meterRef.current = next;
+    setMeter(next);
+    snapshotProgressBaseline(at, route);
+    return next;
+  }
+
   function publishMeter(nextMeter: MeterState, current: NavState, at: GeoCoordinate | null): void {
     if (current.mode !== "guiding" && current.mode !== "arrived") {
       onMeterReading?.(null);
@@ -142,6 +193,7 @@ export function NavigationScreen({
       milesTraveled: nextMeter.milesTraveled,
       waitSeconds: nextMeter.waitSeconds,
       remainingMeters: remaining,
+      baselineRemainingMeters: baselineRemainingRef.current,
       tariff: current.tariff,
     });
   }
@@ -158,20 +210,16 @@ export function NavigationScreen({
     const destination = placeFromStop(stop);
     const started = emptyMeter();
     setMeter(started);
+    meterRef.current = started;
     bearingRef.current = travelBearing(course, compass);
     rerouteInFlight.current = false;
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     const origin = fixRef.current;
     if (origin) {
-      sendGuidanceCamera({
-        latitude: origin.latitude,
-        longitude: origin.longitude,
-        zoom: guidanceZoom,
-        tilt: guidanceTilt,
-        bearing: bearingRef.current ?? 0,
-      });
+      sendGuidanceCamera(guidanceCameraFrom(origin));
     }
+    snapshotProgressBaseline(origin, sortieGuide.route);
     const next: NavState = {
       mode: "guiding",
       kind: "sortie",
@@ -219,14 +267,16 @@ export function NavigationScreen({
           const sampleFix = { latitude: location.coords.latitude, longitude: location.coords.longitude };
           setFix(sampleFix);
           const heading = location.coords.heading;
-          setCourse(typeof heading === "number" && heading >= 0 ? heading : null);
+          const nextCourse = typeof heading === "number" && heading >= 0 ? heading : null;
+          setCourse(nextCourse);
           const currentNav = navRef.current;
           if (currentNav.mode === "guiding" || currentNav.mode === "arrived") {
             if (currentNav.kind === "sortie") {
-              const advanced = advanceMeter(meterRef.current, {
+              const advanced = advanceMeterAlongRoute(meterRef.current, {
                 fix: sampleFix,
                 observedAtMs: Date.now(),
                 accuracyMeters: typeof location.coords.accuracy === "number" ? location.coords.accuracy : null,
+                routePath: currentNav.route.path,
               });
               meterRef.current = advanced;
               setMeter(advanced);
@@ -298,23 +348,20 @@ export function NavigationScreen({
     return () => clearInterval(timer);
   }, [nav.mode]);
 
+  // Prefer GPS course for the camera; only follow compass when course is absent so
+  // high-rate heading ticks do not restart Android camera animations.
+  const bearingInput = course !== null && course >= 0 ? course : compass;
+
   useEffect(() => {
     const current = navRef.current;
     if (!fix || (current.mode !== "guiding" && current.mode !== "arrived")) {
       guidedCameraRef.current = null;
       return;
     }
-    const observed = travelBearing(course, compass);
-    if (observed !== null) {
-      bearingRef.current = observed;
+    if (bearingInput !== null) {
+      bearingRef.current = smoothBearing(bearingRef.current, bearingInput);
     }
-    sendGuidanceCamera({
-      latitude: fix.latitude,
-      longitude: fix.longitude,
-      zoom: guidanceZoom,
-      tilt: guidanceTilt,
-      bearing: bearingRef.current ?? 0,
-    });
+    sendGuidanceCamera(guidanceCameraFrom(fix));
     if (current.mode !== "guiding") {
       return;
     }
@@ -378,8 +425,9 @@ export function NavigationScreen({
               offRouteSince: null,
               rerouteMessage: null,
             };
+            const nextMeter = applyRouteToMeter(origin, result);
             setNav(updated);
-            publishMeter(meterRef.current, updated, origin);
+            publishMeter(nextMeter, updated, origin);
             setRouteEpoch((epoch) => epoch + 1);
           })();
         }
@@ -455,11 +503,16 @@ export function NavigationScreen({
       };
       setNav(updated);
       if (updated.kind === "sortie") {
-        publishMeter(meterRef.current, updated, origin);
+        const nextMeter = applyRouteToMeter(origin, result);
+        publishMeter(nextMeter, updated, origin);
       }
       setRouteEpoch((epoch) => epoch + 1);
     })();
-  }, [fix, course, compass, nav.mode, token, onUnauthorized]);
+  }, [fix, bearingInput, nav.mode, token, onUnauthorized, cameraPrefs.zoom, cameraPrefs.tilt]);
+
+  useEffect(() => {
+    void ensureGuidanceCameraPrefsLoaded();
+  }, []);
 
   useEffect(() => {
     if (nav.mode === "guiding") {
@@ -609,13 +662,7 @@ export function NavigationScreen({
     offRouteSinceRef.current = null;
     const origin = fixRef.current;
     if (origin) {
-      sendGuidanceCamera({
-        latitude: origin.latitude,
-        longitude: origin.longitude,
-        zoom: guidanceZoom,
-        tilt: guidanceTilt,
-        bearing: bearingRef.current ?? 0,
-      });
+      sendGuidanceCamera(guidanceCameraFrom(origin));
     }
     const tariffResult = await requestTariff(apiUrl, token);
     if (tariffResult === "unauthorized") {
@@ -625,6 +672,8 @@ export function NavigationScreen({
     const tariff = typeof tariffResult === "string" ? null : tariffResult;
     const started = emptyMeter();
     setMeter(started);
+    meterRef.current = started;
+    snapshotProgressBaseline(origin, nav.route);
     const next: NavState = {
       mode: "guiding",
       kind: "sortie",
@@ -653,6 +702,8 @@ export function NavigationScreen({
     setFinding(false);
     setQuery("");
     setMeter(emptyMeter());
+    meterRef.current = emptyMeter();
+    baselineRemainingRef.current = 0;
     setNav({ mode: "browse", destination: null, message: null });
     onMeterReading?.(null);
     onMeterEnded?.();

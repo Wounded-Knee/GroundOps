@@ -35,6 +35,17 @@ module.exports = () => {
       scheme: googleSchemes(),
       android: {
         ...android,
+        permissions: [
+          ...(android.permissions ?? []),
+          "ACCESS_COARSE_LOCATION",
+          "ACCESS_FINE_LOCATION",
+          "ACCESS_BACKGROUND_LOCATION",
+          "FOREGROUND_SERVICE",
+          "FOREGROUND_SERVICE_LOCATION",
+          // TaskManager persists location jobs across reboot; JobScheduler requires this.
+          "RECEIVE_BOOT_COMPLETED",
+          "WAKE_LOCK",
+        ],
         config: {
           ...(android.config ?? {}),
           googleMaps: {
@@ -57,8 +68,14 @@ module.exports = () => {
           "expo-location",
           {
             locationWhenInUsePermission: "Allow Groundops to use your location while you navigate.",
+            locationAlwaysAndWhenInUsePermission:
+              "Allow Groundops to use your location in the background so schedule windows stay accurate.",
+            isIosBackgroundLocationEnabled: true,
+            isAndroidBackgroundLocationEnabled: true,
+            isAndroidForegroundServiceEnabled: true,
           },
         ],
+        "expo-task-manager",
       ],
     },
   };

@@ -6,6 +6,10 @@ export const offRouteMilliseconds = 5_000;
 export const arrivalMeters = 40;
 export const guidanceTilt = 50;
 export const guidanceZoom = 17.5;
+/** iOS look-ahead: keep the fix near the bottom of a heading-up camera. */
+export const guidanceLookAheadMeters = 220;
+/** Android guidance framing: top content padding as a fraction of window height. */
+export const guidanceFrameTopFraction = 0.42;
 
 export type FixResult = {
   arrived: boolean;
@@ -54,7 +58,72 @@ export function applyLocationFix(input: {
   };
 }
 
+export type PathProjection = {
+  alongMeters: number;
+  remainingMeters: number;
+  distanceToPathMeters: number;
+};
+
+/** Total length of a polyline along its segments. */
+export function pathLengthMeters(path: GeoCoordinate[]): number {
+  if (path.length < 2) {
+    return 0;
+  }
+  let total = 0;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const start = path[index];
+    const end = path[index + 1];
+    if (!start || !end) {
+      continue;
+    }
+    total += distanceMeters(start, end);
+  }
+  return total;
+}
+
+/** Project a point onto the route polyline; distances are along the path (road geometry). */
+export function projectOntoPath(point: GeoCoordinate, path: GeoCoordinate[]): PathProjection {
+  const first = path[0];
+  if (!first) {
+    return { alongMeters: 0, remainingMeters: 0, distanceToPathMeters: Number.POSITIVE_INFINITY };
+  }
+  if (path.length === 1) {
+    const distance = distanceMeters(point, first);
+    return { alongMeters: 0, remainingMeters: 0, distanceToPathMeters: distance };
+  }
+
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let bestAlong = 0;
+  let traversed = 0;
+
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const start = path[index];
+    const end = path[index + 1];
+    if (!start || !end) {
+      continue;
+    }
+    const segmentLength = distanceMeters(start, end);
+    const projection = projectOntoSegment(point, start, end);
+    if (projection.distance < bestDistance) {
+      bestDistance = projection.distance;
+      bestAlong = traversed + projection.alongMeters;
+    }
+    traversed += segmentLength;
+  }
+
+  const total = traversed;
+  const alongMeters = Math.min(total, Math.max(0, bestAlong));
+  return {
+    alongMeters,
+    remainingMeters: Math.max(0, total - alongMeters),
+    distanceToPathMeters: bestDistance,
+  };
+}
+
 export function remainingDistanceMeters(fix: GeoCoordinate, route: DrivingRoute, stepIndex: number): number {
+  if (route.path.length >= 2) {
+    return projectOntoPath(fix, route.path).remainingMeters;
+  }
   const step = route.steps[stepIndex];
   if (!step) {
     return 0;
@@ -145,6 +214,38 @@ export function travelBearing(course: number | null, compass: number | null): nu
   return null;
 }
 
+/** Shortest signed turn from `from` to `to`, degrees in (-180, 180]. */
+export function bearingDeltaDegrees(from: number, to: number): number {
+  return ((to - from + 540) % 360) - 180;
+}
+
+/**
+ * Low-pass GPS course noise for the heading-up camera. Raw course often swings
+ * ±15–25° between 1 Hz fixes; animating each swing looks like the map jerks back.
+ * Snaps when within half a degree so identical targets do not emit asymptotic micro-updates.
+ */
+export function smoothBearing(previous: number | null, next: number, alpha = 0.35): number {
+  if (previous === null) {
+    return next;
+  }
+  const smoothed = (previous + alpha * bearingDeltaDegrees(previous, next) + 360) % 360;
+  return Math.abs(bearingDeltaDegrees(smoothed, next)) < 0.5 ? next : smoothed;
+}
+
+/** Move `meters` along `bearingDegrees` (clockwise from north) from `from`. */
+export function offsetAlongBearing(
+  from: GeoCoordinate,
+  bearingDegrees: number,
+  meters: number,
+): GeoCoordinate {
+  const bearing = radians(bearingDegrees);
+  const northMeters = meters * Math.cos(bearing);
+  const eastMeters = meters * Math.sin(bearing);
+  const latitude = from.latitude + northMeters / 111_320;
+  const longitude = from.longitude + eastMeters / (111_320 * Math.cos(radians(from.latitude)));
+  return { latitude, longitude };
+}
+
 export function formatMeters(meters: number): string {
   const rounded = Math.max(0, Math.round(meters));
   if (rounded < 1000) {
@@ -207,15 +308,27 @@ function remainingFraction(fix: GeoCoordinate, step: RouteStep): number {
   return Math.min(1, Math.max(0, distanceToStepEnd(fix, step) / step.distanceMeters));
 }
 
-function distanceToSegmentMeters(point: GeoCoordinate, start: GeoCoordinate, end: GeoCoordinate): number {
+function projectOntoSegment(
+  point: GeoCoordinate,
+  start: GeoCoordinate,
+  end: GeoCoordinate,
+): { distance: number; alongMeters: number } {
   const origin = toMeters(start, point);
   const segment = toMeters(start, end);
   const lengthSquared = segment.x * segment.x + segment.y * segment.y;
   if (lengthSquared === 0) {
-    return Math.hypot(origin.x, origin.y);
+    return { distance: Math.hypot(origin.x, origin.y), alongMeters: 0 };
   }
   const progress = Math.min(1, Math.max(0, (origin.x * segment.x + origin.y * segment.y) / lengthSquared));
-  return Math.hypot(origin.x - segment.x * progress, origin.y - segment.y * progress);
+  const length = Math.sqrt(lengthSquared);
+  return {
+    distance: Math.hypot(origin.x - segment.x * progress, origin.y - segment.y * progress),
+    alongMeters: length * progress,
+  };
+}
+
+function distanceToSegmentMeters(point: GeoCoordinate, start: GeoCoordinate, end: GeoCoordinate): number {
+  return projectOntoSegment(point, start, end).distance;
 }
 
 function toMeters(origin: GeoCoordinate, point: GeoCoordinate): { x: number; y: number } {

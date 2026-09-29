@@ -1,8 +1,17 @@
 import type { Tariff } from "@groundops/contracts";
+import Slider from "@react-native-community/slider";
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { ensureCurrentDriver, requestTariff, saveTariff } from "./calendarClient";
+import {
+  defaultGuidanceCameraPrefs,
+  ensureGuidanceCameraPrefsLoaded,
+  guidanceTiltRange,
+  guidanceZoomRange,
+  normalizeGuidanceCameraPrefs,
+  saveGuidanceCameraPrefs,
+} from "./guidanceCameraPrefs";
 
 const apiUrl = resolveApiUrl();
 const couldNotLoad = "The tariff could not be loaded.";
@@ -22,15 +31,23 @@ export function SettingsScreen({
   const [flagText, setFlagText] = useState("");
   const [mileText, setMileText] = useState("");
   const [waitText, setWaitText] = useState("");
+  const [zoom, setZoom] = useState(defaultGuidanceCameraPrefs.zoom);
+  const [tilt, setTilt] = useState(defaultGuidanceCameraPrefs.tilt);
   const [message, setMessage] = useState<string | null>(null);
   const [editable, setEditable] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingCamera, setSavingCamera] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     async function load(): Promise<void> {
       setMessage(null);
       setEditable(false);
+      const camera = await ensureGuidanceCameraPrefsLoaded();
+      if (!cancelled) {
+        setZoom(camera.zoom);
+        setTilt(camera.tilt);
+      }
       const driver = await ensureCurrentDriver(apiUrl, token);
       if (cancelled) {
         return;
@@ -92,13 +109,55 @@ export function SettingsScreen({
     setWaitText(centsToField(saved.perWaitMinuteCents));
   }
 
+  async function onSaveCamera(): Promise<void> {
+    if (savingCamera) {
+      return;
+    }
+    setSavingCamera(true);
+    setMessage(null);
+    const saved = await saveGuidanceCameraPrefs(normalizeGuidanceCameraPrefs({ zoom, tilt }));
+    setSavingCamera(false);
+    setZoom(saved.zoom);
+    setTilt(saved.tilt);
+  }
+
   return (
-    <View style={styles.screen}>
+    <ScrollView contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Settings</Text>
+      <Text style={styles.section}>Guidance camera</Text>
+      <View style={styles.row}>
+        <SliderField
+          label="Zoom"
+          value={zoom}
+          minimumValue={guidanceZoomRange.min}
+          maximumValue={guidanceZoomRange.max}
+          step={0.5}
+          formatValue={formatZoom}
+          onChange={setZoom}
+        />
+        <SliderField
+          label="Tilt"
+          value={tilt}
+          minimumValue={guidanceTiltRange.min}
+          maximumValue={guidanceTiltRange.max}
+          step={1}
+          formatValue={formatTilt}
+          onChange={setTilt}
+        />
+      </View>
+      <Pressable
+        style={[styles.button, styles.save, savingCamera ? styles.disabled : null]}
+        disabled={savingCamera}
+        onPress={() => void onSaveCamera()}
+      >
+        <Text style={styles.buttonText}>Save camera</Text>
+      </Pressable>
       <Text style={styles.section}>Meter tariff</Text>
-      <Field label="Flag drop ($)" value={flagText} editable={editable} onChange={setFlagText} />
-      <Field label="Per mile ($)" value={mileText} editable={editable} onChange={setMileText} />
-      <Field label="Per wait minute ($)" value={waitText} editable={editable} onChange={setWaitText} />
+      <View style={styles.row}>
+        <Field label="Flag drop ($)" value={flagText} editable={editable} onChange={setFlagText} />
+        <Field label="Per mile ($)" value={mileText} editable={editable} onChange={setMileText} />
+        <Field label="Per wait minute ($)" value={waitText} editable={editable} onChange={setWaitText} />
+      </View>
       <Pressable
         style={[styles.button, styles.save, !editable || saving ? styles.disabled : null]}
         disabled={!editable || saving}
@@ -111,6 +170,46 @@ export function SettingsScreen({
       <Pressable style={styles.button} onPress={onSignOut}>
         <Text style={styles.buttonText}>Sign out</Text>
       </Pressable>
+    </ScrollView>
+  );
+}
+
+function SliderField({
+  label,
+  value,
+  minimumValue,
+  maximumValue,
+  step,
+  formatValue,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  minimumValue: number;
+  maximumValue: number;
+  step: number;
+  formatValue: (value: number) => string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>
+        {label} · {formatValue(value)}
+      </Text>
+      <Text style={styles.rangeHint}>
+        {minimumValue}–{maximumValue}
+      </Text>
+      <Slider
+        style={styles.slider}
+        value={value}
+        minimumValue={minimumValue}
+        maximumValue={maximumValue}
+        step={step}
+        minimumTrackTintColor="#1A73E8"
+        maximumTrackTintColor="#ccc"
+        thumbTintColor="#1A73E8"
+        onValueChange={onChange}
+      />
     </View>
   );
 }
@@ -169,9 +268,17 @@ function parseMoneyCents(text: string): number | null {
   return Math.round(dollars * 100);
 }
 
+function formatZoom(value: number): string {
+  return value.toFixed(1);
+}
+
+function formatTilt(value: number): string {
+  return `${Math.round(value)}°`;
+}
+
 const styles = StyleSheet.create({
   screen: {
-    flex: 1,
+    flexGrow: 1,
     backgroundColor: "#fff",
     padding: 24,
     justifyContent: "center",
@@ -187,19 +294,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     marginBottom: 4,
+    marginTop: 8,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
   },
   field: {
+    flex: 1,
     gap: 4,
+    minWidth: 0,
   },
   label: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#444",
+  },
+  rangeHint: {
+    fontSize: 12,
+    color: "#888",
+  },
+  slider: {
+    width: "100%",
+    height: 40,
   },
   input: {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#ccc",
     borderRadius: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingVertical: 10,
     fontSize: 16,
     backgroundColor: "#fff",

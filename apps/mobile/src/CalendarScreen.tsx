@@ -694,11 +694,11 @@ function SortieSummary({
         {message ? <Text style={styles.message}>{message}</Text> : null}
         <View style={styles.summaryActions}>
           {onGuide ? (
-            <Pressable onPress={onGuide} style={styles.primary}>
+            <Pressable onPress={onGuide} style={[styles.primary, styles.summaryAction]}>
               <Text style={styles.primaryText}>Guide</Text>
             </Pressable>
           ) : null}
-          <Pressable onPress={onRevise} style={styles.primary}>
+          <Pressable onPress={onRevise} style={[styles.primary, styles.summaryAction]}>
             <Text style={styles.primaryText}>Revise</Text>
           </Pressable>
         </View>
@@ -974,12 +974,15 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 12,
   },
+  summaryAction: {
+    flex: 1,
+    marginTop: 0,
+  },
   message: {
     marginTop: 12,
     fontSize: 16,
   },
   primary: {
-    flex: 1,
     backgroundColor: "#111",
     borderRadius: 8,
     paddingVertical: 14,

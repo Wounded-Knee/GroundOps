@@ -13,6 +13,7 @@ export type MeterDisplay = {
   milesTraveled: number;
   waitSeconds: number;
   remainingMeters: number;
+  baselineRemainingMeters: number;
   tariff: Tariff | null;
 };
 
@@ -29,7 +30,7 @@ export function MeterStrip({
     reading.waitSeconds,
     reading.remainingMeters,
   );
-  const fill = progressFraction(reading.milesTraveled, reading.remainingMeters);
+  const fill = progressFraction(reading.remainingMeters, reading.baselineRemainingMeters);
   const fare = charges ? formatMoney(charges.totalCents) : "—";
   return (
     <Pressable accessibilityLabel="Meter" onPress={onPress} style={styles.track}>

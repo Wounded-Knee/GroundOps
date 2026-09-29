@@ -10,5 +10,6 @@ minimumReleaseAgeExclude:
   - expo-modules-core@57.0.19
   - expo-modules-jsi@57.1.1
   - expo@57.0.25
+  - expo-task-manager@57.0.21
 patchedDependencies:
   expo-maps@57.0.3: patches/expo-maps@57.0.3.patch

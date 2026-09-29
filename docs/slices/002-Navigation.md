@@ -151,7 +151,7 @@ On iOS and Android, the map is the Navigation destination after sign-in. A persi
 
 **Route preview.** The route is drawn, with the destination. The screen shows distance, expected duration, and two actions: start guidance, and dismiss.
 
-**Guiding.** The search field is not shown. A card shows the maneuver, the distance to the end of the current step, and the instruction. The camera follows the device, heading-up and tilted. The bearing follows the device course when the fix includes one, otherwise the device heading. When neither is available, the camera still centers on the fix. A bar shows remaining time, remaining distance, arrival time, and two controls: end guidance, and mute. Where the toolkit exposes a traffic layer, that layer is on. The spoken duration still comes only from the route response.
+**Guiding.** The search field is not shown. A card shows the maneuver, the distance to the end of the current step, and the instruction. The camera follows the device, heading-up and tilted, framed so the fix stays near the bottom center of the screen (Android map content padding; iOS look-ahead along the travel bearing). The bearing follows the device course when the fix includes one, otherwise the device heading. When neither is available, the camera still frames from the fix with a north bearing. A bar shows remaining time, remaining distance, arrival time, and two controls: end guidance, and mute. Where the toolkit exposes a traffic layer, that layer is on. The spoken duration still comes only from the route response.
 
 **Arrived.** The card shows that the person has arrived. End guidance returns to the map.
 

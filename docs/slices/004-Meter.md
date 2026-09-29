@@ -17,7 +17,7 @@ This document is the implementation boundary. The platform object is a **cost es
 After this slice, a person who is signed in, as slice 001 defines, and who has a driver and authored sorties, as slice 003 defines, can:
 
 1. On iOS or Android, open a sortie they authored and start guidance for its stops. The map and guidance chrome from slice 002 present that route.
-2. While that guidance is in use, see a strip about 1em high directly above the bottom bar on every signed-in screen. The strip shows miles traveled, wait minutes, and the cumulative fare, and fills as a progress bar of miles traveled against miles remaining.
+2. While that guidance is in use, see a strip about 1em high directly above the bottom bar on every signed-in screen. The strip shows miles traveled, wait minutes, and the cumulative fare, and fills as a progress bar of proximity to the destination (remaining versus the baseline when the current route was set).
 3. Tap that strip to open an overlay of the detailed meter reading, including a fare estimate for the entire trip.
 4. On every platform, open Settings, see the driver's tariff — flag drop, dollars per mile, and dollars per wait minute — and save new rates. Those rates program the meter.
 5. Sign out, so that session can no longer be used, as slice 001 defines.
@@ -110,7 +110,7 @@ A missing location fix, a rejected route, or a route the provider will not compu
 
 **Guiding a sortie.** The guidance chrome from slice 002 is unchanged: maneuver card, remaining time and distance, mute, and end guidance. The meter strip appears above the bottom bar.
 
-**Meter strip.** While sortie guidance is in use, a strip about 1em high sits directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie. The traveled fraction fills from the left in the existing accent blue (`#1A73E8`) on a light track. At the start the bar is empty. When remaining distance is 0 the bar is full. A longer reroute can shrink the fill because remaining distance grew. Text stays dark and reads, in order, miles traveled to one decimal, wait as whole minutes, and the cumulative total. Tapping the strip opens the overlay.
+**Meter strip.** While sortie guidance is in use, a strip about 1em high sits directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie. Fill is proximity along the active route: empty when remaining equals the baseline snapshotted when that route was set (start or successful reroute), full when remaining is 0. If remaining grows above the baseline before a reroute, fill stays empty. Text stays dark and reads, in order, miles traveled to one decimal, wait as whole minutes, and the cumulative total. Tapping the strip opens the overlay.
 
 **Meter overlay.** A card over the current screen. It shows wait as minutes and seconds, the flag, both charges, both rates from the snapshot, miles remaining, the cumulative total, and the trip estimate. Close dismisses it and leaves the meter running.
 
@@ -171,14 +171,14 @@ The slice works when all of the following are true on the local stack:
 
 1. On iOS or Android, a signed-in driver can open a sortie they authored and tap Guide. With a location fix, Navigation opens in guidance for a route from that fix through the sortie's stops.
 2. Reaching a stop short of the destination continues guidance toward the remaining stops. Within 40 meters of the final stop, the screen shows arrival.
-3. While sortie guidance is in use, a strip about 1em high appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie, showing miles traveled, wait minutes, and the cumulative total, with fill for miles traveled against miles remaining.
+3. While sortie guidance is in use, a strip about 1em high appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie, showing miles traveled, wait minutes, and the cumulative total, with fill for proximity to the destination from remaining versus the route baseline.
 4. Tapping the strip opens an overlay with wait as minutes and seconds, the flag, both charges, both rates, miles remaining, the cumulative total, and the trip estimate. Close dismisses the overlay and leaves the meter running.
 5. Ending guidance clears the route and removes the strip. Sign-out does the same.
 6. Starting guidance for a destination authored from search shows the meter. A route that is not a sortie does not.
 7. On every platform, Settings shows flag drop, dollars per mile, and dollars per wait minute. Saving valid rates persists them. Reloading Settings, and opening Settings on a second session for the same user, shows the saved rates. Defaults are $3.00, $2.50, and $0.40 when none were saved.
 8. An empty or invalid tariff field does not save. Zero is allowed. Amounts are non-negative and at most two decimal places.
 9. A meter started under one tariff keeps that snapshot when Settings later saves different rates. The next Guide uses the new rates.
-10. Miles accumulate only while GPS position moves. Wait accumulates while the GPS position is stationary (displacement at or below 5 meters, or below 2 m/s from successive fixes). Device-reported speed is not used. A fix worse than 50 meters accuracy does not change the reading. Miles traveled do not reset on reroute. After a route deviation, remaining miles are taken from the replacement route so the progress bar reflects traveled versus the new remaining distance.
+10. Miles traveled and miles remaining are road distance along the active route polyline (GPS projected onto the path). Miles increase only with forward progress along that path; off-route displacement does not add miles until a reroute. Wait accumulates while the GPS position is stationary (displacement at or below 5 meters, or below 2 m/s from successive fixes). The one-second wait ticker keeps wait advancing at least once per second while stopped — including when GPS is silent before a second fix, or after enough silence following movement that the vehicle must have stopped — and does not bill ordinary driving GPS gaps as wait. Device-reported speed is not used. A fix worse than 50 meters accuracy does not change the reading. Miles traveled do not reset on reroute. After a successful reroute or next-stop route, remaining and the progress baseline come from the replacement route so the progress bar is proximity: 1 − remaining / baseline.
 11. Guide without a location fix, or with a failed route, does not start guidance and does not show the strip.
 12. A missing, unknown, or revoked session is rejected on every endpoint in section 8. A session cannot request a route for another driver's sortie, and cannot read or replace another driver's tariff.
 13. On web, Settings still edits the tariff. Guide is not shown. The meter strip does not appear.
