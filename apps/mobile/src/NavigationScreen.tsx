@@ -40,16 +40,10 @@ const apiUrl = resolveApiUrl();
 
 export function NavigationScreen({
   token,
-  signOutMessage,
-  onSignOut,
   onUnauthorized,
-  onOpenCalendar,
 }: {
   token: string;
-  signOutMessage: string | null;
-  onSignOut: () => void;
   onUnauthorized: () => void;
-  onOpenCalendar: () => void;
 }) {
   const mapRef = useRef<MapHandle>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
@@ -352,7 +346,6 @@ export function NavigationScreen({
   const arrived = nav.mode === "arrived" ? nav : null;
   const preview = nav.mode === "preview" ? nav : null;
   const showSearch = nav.mode === "browse" || nav.mode === "preview";
-  const showSignOut = showSearch;
   const route = preview?.route ?? guiding?.route ?? arrived?.route ?? null;
   const destination = nav.destination;
   const step = guiding ? guiding.route.steps[guiding.stepIndex] : null;
@@ -469,17 +462,6 @@ export function NavigationScreen({
           <View style={styles.footer} pointerEvents="auto">
             {finding ? <Text style={styles.message}>Finding route…</Text> : null}
             {browseMessage ? <Text style={styles.message}>{browseMessage}</Text> : null}
-            {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
-            {showSignOut ? (
-              <Pressable onPress={onOpenCalendar}>
-                <Text style={styles.signOut}>Calendar</Text>
-              </Pressable>
-            ) : null}
-            {showSignOut ? (
-              <Pressable onPress={onSignOut}>
-                <Text style={styles.signOut}>Sign out</Text>
-              </Pressable>
-            ) : null}
           </View>
         ) : null}
       </View>
@@ -597,10 +579,5 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 16,
     marginTop: 8,
-  },
-  signOut: {
-    fontSize: 16,
-    color: "#333",
-    padding: 8,
   },
 });

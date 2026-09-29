@@ -1,4 +1,4 @@
-import type { User } from "@groundops/contracts";
+import type { SortieWriteRequest, User } from "@groundops/contracts";
 import * as AuthSession from "expo-auth-session";
 import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
@@ -7,10 +7,15 @@ import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
+import { BottomNav, type SignedInDestination } from "./src/BottomNav";
 import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
+import { authorSortie, ensureCurrentDriver } from "./src/calendarClient";
+import { defaultInterval } from "./src/calendarTime";
 import { NavigationScreen } from "./src/NavigationScreen";
+import { SettingsScreen } from "./src/SettingsScreen";
+import { SortieDialog, emptyStops, type DialogDraft } from "./src/SortieDialog";
 import {
   createSession,
   openAuthenticatedSocket,
@@ -31,6 +36,8 @@ const googleDiscovery = {
   authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
   tokenEndpoint: "https://oauth2.googleapis.com/token",
 };
+const notSaved = "The sortie was not saved.";
+const locationRequired = "Location is required to schedule the sortie.";
 
 if (__DEV__) {
   console.log(`Google redirect URI: ${redirectUri}`);
@@ -53,8 +60,12 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>({ status: "loading" });
   const [nonce, setNonce] = useState(() => Crypto.randomUUID());
   const [submitting, setSubmitting] = useState(false);
-  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [destination, setDestination] = useState<SignedInDestination>("navigation");
+  const [compose, setCompose] = useState<DialogDraft | null>(null);
+  const [composeMessage, setComposeMessage] = useState<string | null>(null);
+  const [calendarReload, setCalendarReload] = useState(0);
   const generation = useRef(0);
+  const composeSaving = useRef(false);
 
   const [request, , promptAsync] = AuthSession.useAuthRequest(
     {
@@ -99,7 +110,7 @@ export default function App() {
         await deleteStoredSession();
         await forgetCalendarCache();
         if (!cancelled) {
-          setCalendarOpen(false);
+          resetChrome();
           setPhase({ status: "signed-out", message: null });
         }
         return;
@@ -158,6 +169,12 @@ export default function App() {
     };
   }, [sessionToken]);
 
+  function resetChrome(): void {
+    setDestination("navigation");
+    setCompose(null);
+    setComposeMessage(null);
+  }
+
   async function classifyClosedSocket(token: string, currentGeneration: number): Promise<void> {
     const current = await readCurrentUser(apiUrl, token);
     if (generation.current !== currentGeneration) {
@@ -169,7 +186,7 @@ export default function App() {
       if (generation.current !== currentGeneration) {
         return;
       }
-      setCalendarOpen(false);
+      resetChrome();
       setPhase({ status: "signed-out", message: null });
       return;
     }
@@ -215,6 +232,7 @@ export default function App() {
         return;
       }
       await writeStoredSession(created.token);
+      resetChrome();
       setPhase({
         status: "signed-in",
         token: created.token,
@@ -242,7 +260,7 @@ export default function App() {
     }
     await deleteStoredSession();
     await forgetCalendarCache();
-    setCalendarOpen(false);
+    resetChrome();
     setPhase({ status: "signed-out", message: null });
   }
 
@@ -250,7 +268,7 @@ export default function App() {
     generation.current += 1;
     await deleteStoredSession();
     await forgetCalendarCache();
-    setCalendarOpen(false);
+    resetChrome();
     setPhase({ status: "signed-out", message: null });
   }
 
@@ -271,7 +289,7 @@ export default function App() {
     if (current === "unauthorized") {
       await deleteStoredSession();
       await forgetCalendarCache();
-      setCalendarOpen(false);
+      resetChrome();
       setPhase({ status: "signed-out", message: null });
       return;
     }
@@ -288,57 +306,124 @@ export default function App() {
     });
   }
 
-  const driving = phase.status === "signed-in" && Platform.OS !== "web";
-  const showCalendar = phase.status === "signed-in" && calendarOpen;
+  function openCompose(): void {
+    setComposeMessage(null);
+    setCompose({
+      sortieId: null,
+      label: "",
+      arrival: defaultInterval("day", new Date()).start,
+      passengerName: "",
+      phone: "",
+      stops: emptyStops(),
+    });
+  }
+
+  function onNavigate(next: SignedInDestination): void {
+    setCompose(null);
+    setComposeMessage(null);
+    setDestination(next);
+  }
+
+  async function saveCompose(token: string, body: SortieWriteRequest | "invalid"): Promise<void> {
+    if (body === "invalid") {
+      setComposeMessage(notSaved);
+      return;
+    }
+    if (composeSaving.current) {
+      return;
+    }
+    composeSaving.current = true;
+    const ensured = await ensureCurrentDriver(apiUrl, token);
+    if (ensured === "unauthorized") {
+      composeSaving.current = false;
+      await onSessionRejected();
+      return;
+    }
+    if (ensured === "unreachable") {
+      composeSaving.current = false;
+      setComposeMessage(notSaved);
+      return;
+    }
+    const saved = await authorSortie(apiUrl, token, body);
+    composeSaving.current = false;
+    if (saved === "unauthorized") {
+      await onSessionRejected();
+      return;
+    }
+    if (saved === "no-location") {
+      setComposeMessage(locationRequired);
+      return;
+    }
+    if (typeof saved === "string") {
+      setComposeMessage(notSaved);
+      return;
+    }
+    setCompose(null);
+    setComposeMessage(null);
+    setCalendarReload((current) => current + 1);
+  }
+
+  const signedIn = phase.status === "signed-in";
 
   return (
     <AppFrame>
-      <View style={driving || showCalendar ? styles.map : styles.container}>
+      <View style={signedIn ? styles.signedIn : styles.container}>
         {phase.status === "loading" ? <Text>Checking session…</Text> : null}
         {phase.status === "signed-out" ? (
           <SignIn message={phase.message} disabled={submitting} onSignIn={() => void onSignIn()} />
         ) : null}
         {phase.status === "offline" ? <Offline message={phase.message} onRetry={() => void onRetry()} /> : null}
-        {phase.status === "signed-in" ? (
-          <LocationReporter token={phase.token} onUnauthorized={() => void onSessionRejected()} />
-        ) : null}
-        {phase.status === "signed-in" && Platform.OS === "web" && !showCalendar ? (
-          <SignedIn
-            user={phase.user}
-            live={phase.live}
-            signOutMessage={phase.signOutMessage}
-            onSignOut={() => void onSignOut(phase.token)}
-            onOpenCalendar={() => setCalendarOpen(true)}
-          />
-        ) : null}
-        {phase.status === "signed-in" && Platform.OS === "web" && showCalendar ? (
-          <CalendarScreen
-            userId={phase.user.id}
-            token={phase.token}
-            onClose={() => setCalendarOpen(false)}
-            onUnauthorized={() => void onSessionRejected()}
-          />
-        ) : null}
-        {driving ? (
-          <View style={styles.map}>
-            <NavigationScreen
-              token={phase.token}
-              signOutMessage={phase.signOutMessage}
-              onSignOut={() => void onSignOut(phase.token)}
-              onUnauthorized={() => void onSessionRejected()}
-              onOpenCalendar={() => setCalendarOpen(true)}
-            />
-            {showCalendar ? (
-              <View style={styles.calendarCover}>
-                <CalendarScreen
-                  userId={phase.user.id}
+        {signedIn ? (
+          <>
+            <LocationReporter token={phase.token} onUnauthorized={() => void onSessionRejected()} />
+            <View style={styles.content}>
+              {Platform.OS !== "web" ? (
+                <NavigationScreen token={phase.token} onUnauthorized={() => void onSessionRejected()} />
+              ) : null}
+              {Platform.OS === "web" && destination === "navigation" ? (
+                <View style={styles.webIdentity}>
+                  <SignedInIdentity user={phase.user} live={phase.live} />
+                </View>
+              ) : null}
+              {destination === "calendar" ? (
+                <View style={styles.cover}>
+                  <CalendarScreen
+                    userId={phase.user.id}
+                    token={phase.token}
+                    reloadToken={calendarReload}
+                    onUnauthorized={() => void onSessionRejected()}
+                  />
+                </View>
+              ) : null}
+              {destination === "settings" ? (
+                <View style={styles.cover}>
+                  <SettingsScreen
+                    signOutMessage={phase.signOutMessage}
+                    onSignOut={() => void onSignOut(phase.token)}
+                  />
+                </View>
+              ) : null}
+              {compose ? (
+                <SortieDialog
+                  draft={compose}
                   token={phase.token}
-                  onClose={() => setCalendarOpen(false)}
+                  message={composeMessage}
+                  onCancel={() => {
+                    setCompose(null);
+                    setComposeMessage(null);
+                  }}
                   onUnauthorized={() => void onSessionRejected()}
+                  onSave={(body) => void saveCompose(phase.token, body)}
                 />
-              </View>
-            ) : null}
-          </View>
+              ) : null}
+            </View>
+            <BottomNav
+              destination={destination}
+              composeOpen={compose !== null}
+              onNavigate={onNavigate}
+              onCompose={openCompose}
+            />
+          </>
         ) : null}
         <StatusBar style="auto" />
       </View>
@@ -365,18 +450,12 @@ function SignIn({
   );
 }
 
-function SignedIn({
+function SignedInIdentity({
   user,
   live,
-  signOutMessage,
-  onSignOut,
-  onOpenCalendar,
 }: {
   user: User;
   live: "authenticated" | "closed";
-  signOutMessage: string | null;
-  onSignOut: () => void;
-  onOpenCalendar: () => void;
 }) {
   return (
     <>
@@ -386,13 +465,6 @@ function SignedIn({
           ? "Live connection authenticated"
           : "Live connection not authenticated"}
       </Text>
-      {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
-      <Pressable style={styles.button} onPress={onOpenCalendar}>
-        <Text style={styles.buttonText}>Calendar</Text>
-      </Pressable>
-      <Pressable style={[styles.button, styles.signOutButton]} onPress={onSignOut}>
-        <Text style={styles.buttonText}>Sign out</Text>
-      </Pressable>
     </>
   );
 }
@@ -493,20 +565,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 24,
   },
-  map: {
+  signedIn: {
     flex: 1,
     backgroundColor: "#fff",
   },
-  calendarCover: {
+  content: {
+    flex: 1,
+  },
+  webIdentity: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  cover: {
     position: "absolute",
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
     backgroundColor: "#fff",
-  },
-  signOutButton: {
-    marginTop: 12,
   },
   identity: {
     fontSize: 20,

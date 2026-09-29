@@ -111,7 +111,7 @@ The client has two screens.
 
 **Sign-in.** One action: sign in with Google. This screen is the entry screen.
 
-**Signed in.** Shows the user's display name when the profile has one, otherwise the email, otherwise that the person is signed in. Shows whether the live connection is authenticated. One action: sign out.
+**Signed in.** On web, Navigation shows the user's display name when the profile has one, otherwise the email, otherwise that the person is signed in, and whether the live connection is authenticated. Sign out is on Settings.
 
 The person sees a failure in these cases:
 

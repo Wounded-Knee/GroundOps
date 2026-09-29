@@ -143,9 +143,9 @@ Remaining distance is the distance from the device to the end of the current ste
 
 # 7. Interfaces
 
-On iOS and Android, the map is the screen after sign-in.
+On iOS and Android, the map is the Navigation destination after sign-in. A persistent bottom bar stays on screen during browse, preview, guidance, and arrival. Its destinations are Navigation, New Sortie, Settings, and Calendar. Sign out is on Settings.
 
-**Map.** The map fills the screen. One search field. The person's location when permission is granted. One action: sign out. Sign out is on this screen, and is not shown during guidance or arrival.
+**Map.** The map fills the screen. One search field. The person's location when permission is granted. The map has no sign-out control.
 
 **Suggestions.** While the query is non-empty, up to five labels. Selecting a label requests the route. An empty query shows no suggestions.
 
@@ -157,7 +157,7 @@ On iOS and Android, the map is the screen after sign-in.
 
 The phone speaks with the device speech synthesizer. It speaks the current step's instruction once when guidance starts, once when the current step changes, and once on arrival. Mute silences speech. The control starts unmuted. Turning sound back on does not repeat the current instruction.
 
-On web, the screen is the slice 001 signed-in screen: identity, whether the live connection is authenticated, and sign out.
+On web, Navigation shows the slice 001 signed-in identity and live-connection state. Sign out is on Settings.
 
 The person sees a failure in these cases:
 
@@ -220,7 +220,7 @@ The slice works when all of the following are true on the local stack:
 10. Ending guidance, or dismissing a preview, returns to the map and clears the route.
 11. Denied location permission, or no fix, leaves the person on the map and does not start a route.
 12. A route the server rejects does not start guidance.
-13. Sign-out revokes that session. Web still shows the slice 001 signed-in screen, with identity, live-connection state, and sign out.
+13. Sign-out revokes that session. On web, Navigation still shows identity and live-connection state. Sign out is on Settings.
 14. Both endpoints reject a missing, unknown, or revoked session. A successful response contains coordinates and plain-text instructions, and does not contain a Google place id or an encoded polyline.
 15. Nothing about the route is in PostgreSQL after guidance ends or the server restarts.
 16. The phone flow runs with `pnpm dev:server` and a local development build. Web runs with `pnpm dev:mobile` and stays on the signed-in screen. No EAS build and no store build are required.

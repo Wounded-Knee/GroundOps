@@ -69,12 +69,12 @@ type GridBox = {
 export function CalendarScreen({
   userId,
   token,
-  onClose,
+  reloadToken = 0,
   onUnauthorized,
 }: {
   userId: string;
   token: string;
-  onClose: () => void;
+  reloadToken?: number;
   onUnauthorized: () => void;
 }) {
   const [screen, setScreen] = useState<Ready>(() => emptyCalendar(new Date()));
@@ -92,6 +92,14 @@ export function CalendarScreen({
     const current = ++generation.current;
     void load("month", new Date(), current);
   }, [token, userId]);
+
+  useEffect(() => {
+    if (reloadToken === 0) {
+      return;
+    }
+    const current = ++generation.current;
+    void load(shown.current.scope, shown.current.anchor, current);
+  }, [reloadToken]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
@@ -286,9 +294,6 @@ export function CalendarScreen({
 
   return (
     <View style={styles.screen}>
-      <Pressable onPress={onClose} style={styles.back}>
-        <Text style={styles.backText}>Back</Text>
-      </Pressable>
       <View style={styles.body}>
           <Text style={styles.period}>{periodLabel(ready.scope, ready.anchor)}</Text>
           <View style={styles.row}>
@@ -734,13 +739,6 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
-  },
-  back: {
-    alignSelf: "flex-start",
-    paddingVertical: 8,
-  },
-  backText: {
-    fontSize: 16,
   },
   period: {
     fontSize: 24,

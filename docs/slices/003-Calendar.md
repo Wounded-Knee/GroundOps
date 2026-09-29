@@ -24,7 +24,7 @@ After this slice, a person who is signed in, as slice 001 defines, can:
 6. See the last fetched calendar range when the server cannot be reached.
 7. Sign out, so that session can no longer be used, as slice 001 defines. Sign-out clears the local calendar cache.
 
-On iOS and Android the calendar opens from the map. During guidance and arrival it stays unavailable. On web it opens from the signed-in screen.
+On every platform the calendar opens from the bottom bar. It stays available during guidance and arrival. Authoring is also available from the New Sortie control on that bar.
 
 Search and driving guidance from slice 002 stay as they are.
 
@@ -177,7 +177,7 @@ A rejected session creates no driver and no sortie. An empty label, fewer than t
 
 **Scope.** Month, week, and day. Switching scope reads the range that scope shows.
 
-**Create.** One action in every scope opens the dialog. In week and day, tapping an empty hour opens the dialog with that hour as the arrival. The author action uses 9:00 on the anchor day, or on the first day of the month when the scope is month.
+**Create.** One action in every scope opens the dialog. In week and day, tapping an empty hour opens the dialog with that hour as the arrival. The author action uses 9:00 on the anchor day, or on the first day of the month when the scope is month. The New Sortie control on the bottom bar opens the same dialog over the current screen, with arrival defaulted to 9:00 today, and ensures a driver before save.
 
 **Summary.** Tapping a sortie opens it. The summary shows the label, the arrival, the cached start, the address the start was driven from, the cached end, the passenger name, the phone, and each stop in order. Revise opens the dialog. Close dismisses the summary.
 
@@ -187,11 +187,7 @@ A rejected session creates no driver and no sortie. An empty label, fewer than t
 
 When the server cannot be reached and a range is cached, month, week, day, previous, next, and today stay available. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are unavailable. A period that was never fetched is empty.
 
-On iOS and Android the map remains the screen after sign-in. The map has one action to open the calendar. That action is hidden during guidance and arrival. Leaving the calendar returns to the map.
-
-On web, the signed-in screen from slice 001 has one action to open the calendar. Leaving the calendar returns to that screen. Identity, whether the live connection is authenticated, and sign out stay on that screen.
-
-Sign out stays on the map on iOS and Android, and on the signed-in screen on web. The calendar has no sign-out action.
+On every platform a persistent bottom bar opens Navigation, New Sortie, Settings, and Calendar. Leaving the calendar returns to Navigation. Sign out is on Settings. The calendar has no sign-out action.
 
 The person sees a failure in these cases:
 
@@ -275,7 +271,7 @@ The slice works when all of the following are true on the local stack:
 11. After a successful read, when the server cannot be reached, the person can switch month, week, and day, move previous, next, and today, and open a day from the month grid or a week day heading. Cached sorties that fall on the visible days stay visible. The device does not apply an author, revise, or drag.
 12. When the server cannot be reached and no range is cached, the grid is shown and the screen says the calendar could not be loaded.
 13. Sign-out revokes that session and clears the local calendar cache.
-14. On iOS and Android the calendar opens from the map and is unavailable during guidance and arrival. Guidance from slice 002 is unchanged. On web the calendar opens from the signed-in screen, which still shows identity, live-connection state, and sign out.
+14. On every platform the calendar opens from the bottom bar and stays available during guidance and arrival. Guidance from slice 002 is unchanged. New Sortie opens the author dialog from any destination. On web, Navigation still shows identity and live-connection state. Sign out is on Settings.
 15. The persisted sortie has its own id, type `task`, a company of record, an authoring driver, and its own stop rows. The database has no appointment table.
 16. The flow runs with `pnpm dev:server` and `pnpm dev:mobile` on web, and with the local development build on iOS and Android. No EAS build and no store build are required.
 17. Tapping a sortie opens a summary of the label, the arrival, the cached start, the address the start was driven from, the cached end, the passenger fields, and the stops. That address is the same origin used to compute the start. Revise on that summary opens the dialog.

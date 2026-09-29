@@ -24,12 +24,14 @@ type PickerTarget = "arrival-date" | "arrival-time";
 export function SortieDialog({
   draft,
   token,
+  message = null,
   onSave,
   onCancel,
   onUnauthorized,
 }: {
   draft: DialogDraft;
   token: string;
+  message?: string | null;
   onSave: (body: SortieWriteRequest | "invalid") => void;
   onCancel: () => void;
   onUnauthorized: () => void;
@@ -173,6 +175,7 @@ export function SortieDialog({
         <Pressable onPress={addWaypoint} style={styles.secondary}>
           <Text style={styles.secondaryText}>Add waypoint</Text>
         </Pressable>
+        {message ? <Text style={styles.message}>{message}</Text> : null}
         <Pressable onPress={save} style={styles.primary}>
           <Text style={styles.primaryText}>Save</Text>
         </Pressable>
@@ -345,6 +348,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   secondaryText: {
+    fontSize: 16,
+  },
+  message: {
+    marginTop: 8,
     fontSize: 16,
   },
 });
