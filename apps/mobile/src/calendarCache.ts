@@ -100,6 +100,7 @@ function isSortie(value: unknown): value is Sortie {
     typeof record.id === "string" &&
     record.type === taskSortieType &&
     typeof record.label === "string" &&
+    typeof record.arrivalAt === "string" &&
     typeof record.scheduledStart === "string" &&
     typeof record.scheduledEnd === "string" &&
     (record.passengerName === null || typeof record.passengerName === "string") &&

@@ -669,6 +669,8 @@ The routing provider must be replaceable.
 
 Google Maps is an initial provider but must not be embedded as an irreplaceable core dependency.
 
+A sortie window uses that traffic-aware multi-stop duration, including projected traffic for a departure time. The driver authors an arrival at the origin. The scheduled start is that arrival minus the drive from the driver's current position to the origin. The scheduled end is that arrival plus the drive from the origin through each stop to the destination. The result is cached on the sortie.
+
 ---
 
 # 12. Variable Waiting
@@ -725,6 +727,8 @@ Any change to:
 
 may trigger recalculation.
 
+Current location triggers that recalculation when the driver has moved at least ten miles from the position used for the last successful computation of that sortie. The cached end of a sortie that is already past is left unchanged.
+
 ---
 
 ## 13.1 Human override
@@ -752,6 +756,8 @@ Examples:
 * Scheduled departure
 * Actual departure
 * Completion time
+
+Scheduled arrival is the authored fact: the time the driver is to arrive at the origin. Scheduled start and scheduled end are the computed window cached from routing. They are not entered as a separate appointment.
 
 This permits later reconstruction of operational performance.
 
@@ -816,6 +822,8 @@ GPS is modeled primarily as timestamped observations.
 A continuous track should not initially be treated as a fundamental domain object.
 
 Tracks can be reconstructed from observations.
+
+Each stored observation is one fix: device time, coordinate, and accuracy. Fixes are sampled. They are not recorded on every GPS tick, and they are not broadcast as precise location.
 
 Location history may be associated with sorties so that actual movement during a sortie can be reconstructed.
 

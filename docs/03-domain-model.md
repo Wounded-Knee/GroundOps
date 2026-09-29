@@ -196,6 +196,8 @@ A sortie has one **company of record**: the company the sortie belongs to. That 
 
 A sortie may be unassigned. A sortie may contain an ordered series of stops. A sortie's routing is a result obtained through a replaceable routing capability. The domain model does not depend on a particular routing provider's representation.
 
+On the driver calendar, the authored schedule fact is the arrival at the origin: the time the driver is to arrive there. The scheduled start and the scheduled end are computed results, cached on the sortie. They are not a second kind of appointment. The start is the arrival minus the traffic-aware drive from the driver's latest location observation to the origin. The end is the arrival plus the traffic-aware drive from the origin through each waypoint to the destination, including projected traffic for that departure. The calendar draws the cached window.
+
 **What it is not.** A sortie is not a calendar event, a draft, a booking object, a telephone call, or a taxi job. Creation channel does not create a different downstream object. Customer and passenger details are data carried by the sortie according to its type. They are not a universal passenger entity.
 
 **Relationships.** One company of record. One platform-defined sortie type. Zero responsible drivers before acceptance, and exactly one after acceptance. Zero or more offers. Location observations and communications may be associated with it. Its history is a sequence of operational events.
@@ -252,6 +254,8 @@ The **driver calendar** is the driver's set of operational commitments over time
 
 It may contain sorties, dispatch shifts, duty shifts, vehicle assignments, and other operational commitments. It is an operational system. Feasibility considers time, geography, routing, traffic, current location, current activity, future activity, vehicle assignment, driver capabilities, sortie requirements, facility protocols, and waiting. Those calculations belong to the scheduling document.
 
+A sortie on this calendar is drawn from its cached start to its cached end. The time the driver enters is the arrival at the origin. Tapping the sortie shows that sortie's data, including the arrival and the cached window.
+
 A permanent relationship does not have to be repeated as a calendar event. A driver who always uses the same vehicle does not need a vehicle-assignment event for every day merely to restate that fact.
 
 **What it is not.** The calendar is not a list of static appointments. A sortie on the calendar is still a sortie, not a generic appointment record. Another company's commitment may appear to a viewing company as occupied time, without that company's confidential detail.
@@ -271,6 +275,8 @@ The identity of the current dispatcher can be made known to the company's driver
 A **location observation** is a timestamped GPS fix from a driver's device.
 
 Observations are the stored form of location. A continuous track is not a domain object. A track can be reconstructed from observations. Observations taken during a sortie may be associated with that sortie so the movement can be reconstructed later.
+
+Each stored observation is one fix: the time reported by the device, a coordinate, and accuracy when the device provides it. The client does not record every GPS tick. It reports a fix after a meaningful move, or after a few minutes while the signed-in app is in the foreground. The latest observation is the driver's current position for the approach leg of a sortie window. A later observation recomputes that cached window when it is at least ten miles from the position used for the previous successful computation, and only while the cached end is still in the future. Off duty still stops transmission. A slice that has no duty reports while the signed-in app is in the foreground. Observations are not broadcast as precise location.
 
 Retention of observations follows the effective retention policy.
 
@@ -424,6 +430,7 @@ These rules are universal. Company configuration chooses among platform-supporte
 6. Off duty stops GPS transmission.
 7. Precise driver location is not generally visible to every driver.
 8. A driver traffic report stays distinct from routing-provider traffic data.
+9. The latest location observation is the position used for a sortie's approach drive. A move of at least ten miles from the position of the previous successful computation recomputes the cached window while that window's end is still in the future.
 
 ## 5.4 Facilities and schedule facts that must not collapse
 
@@ -432,6 +439,7 @@ These rules are universal. Company configuration chooses among platform-supporte
 3. Availability and duty are different facts.
 4. The driver remains the authority on whether to adhere to a schedule warning. A hard commitment is a strong constraint. An override is recorded.
 5. Travel or arrival margin is not automatically usable schedule margin. Early arrival may be waiting time. It does not by itself move later commitments earlier.
+6. A sortie's authored schedule fact is arrival at the origin. Scheduled start and scheduled end are a cached computation from drive time. The calendar uses that cached window.
 
 ## 5.5 History and retention
 

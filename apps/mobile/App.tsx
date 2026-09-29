@@ -8,6 +8,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
 import { CalendarScreen } from "./src/CalendarScreen";
+import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
 import { NavigationScreen } from "./src/NavigationScreen";
 import {
@@ -298,6 +299,9 @@ export default function App() {
           <SignIn message={phase.message} disabled={submitting} onSignIn={() => void onSignIn()} />
         ) : null}
         {phase.status === "offline" ? <Offline message={phase.message} onRetry={() => void onRetry()} /> : null}
+        {phase.status === "signed-in" ? (
+          <LocationReporter token={phase.token} onUnauthorized={() => void onSessionRejected()} />
+        ) : null}
         {phase.status === "signed-in" && Platform.OS === "web" && !showCalendar ? (
           <SignedIn
             user={phase.user}

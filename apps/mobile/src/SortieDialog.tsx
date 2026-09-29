@@ -13,14 +13,13 @@ export type StopDraft = {
 export type DialogDraft = {
   sortieId: string | null;
   label: string;
-  start: Date;
-  end: Date;
+  arrival: Date;
   passengerName: string;
   phone: string;
   stops: StopDraft[];
 };
 
-type PickerTarget = "start-date" | "start-time" | "end-date" | "end-time";
+type PickerTarget = "arrival-date" | "arrival-time";
 
 export function SortieDialog({
   draft,
@@ -36,22 +35,17 @@ export function SortieDialog({
   onUnauthorized: () => void;
 }) {
   const [label, setLabel] = useState(draft.label);
-  const [start, setStart] = useState(draft.start);
-  const [end, setEnd] = useState(draft.end);
+  const [arrival, setArrival] = useState(draft.arrival);
   const [passengerName, setPassengerName] = useState(draft.passengerName);
   const [phone, setPhone] = useState(draft.phone);
   const [stops, setStops] = useState(draft.stops);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
 
   function applyPicked(target: PickerTarget, picked: Date): void {
-    if (target === "start-date") {
-      setStart((current) => withPickedDate(current, picked));
-    } else if (target === "start-time") {
-      setStart((current) => withPickedTime(current, picked));
-    } else if (target === "end-date") {
-      setEnd((current) => withPickedDate(current, picked));
+    if (target === "arrival-date") {
+      setArrival((current) => withPickedDate(current, picked));
     } else {
-      setEnd((current) => withPickedTime(current, picked));
+      setArrival((current) => withPickedTime(current, picked));
     }
     if (Platform.OS !== "ios") {
       setPicker(null);
@@ -100,16 +94,14 @@ export function SortieDialog({
     const digits = phoneDigits(phone);
     onSave({
       label,
-      scheduledStart: start.toISOString(),
-      scheduledEnd: end.toISOString(),
+      arrivalAt: arrival.toISOString(),
       passengerName: passengerName.trim().length === 0 ? null : passengerName.trim(),
       passengerPhone: digits.length === 0 ? null : digits,
       stops: chosen,
     });
   }
 
-  const pickerMode = picker?.endsWith("date") ? "date" : "time";
-  const pickerValue = picker?.startsWith("start") ? start : end;
+  const pickerMode = picker === "arrival-date" ? "date" : "time";
 
   return (
     <View style={styles.backdrop}>
@@ -117,28 +109,32 @@ export function SortieDialog({
         <Text style={styles.title}>{draft.sortieId ? "Revise sortie" : "Author sortie"}</Text>
         <Text style={styles.fieldLabel}>Label</Text>
         <TextInput value={label} onChangeText={setLabel} style={styles.input} />
-        <PickerButton label="Start date" value={start.toLocaleDateString()} onPress={() => setPicker("start-date")} />
-        <PickerButton
-          label="Start time"
-          value={start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-          onPress={() => setPicker("start-time")}
-        />
-        <PickerButton label="End date" value={end.toLocaleDateString()} onPress={() => setPicker("end-date")} />
-        <PickerButton
-          label="End time"
-          value={end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-          onPress={() => setPicker("end-time")}
-        />
+        <View style={styles.arrivalRow}>
+          <View style={styles.arrivalHalf}>
+            <PickerButton
+              label="Arrival date"
+              value={arrival.toLocaleDateString()}
+              onPress={() => setPicker("arrival-date")}
+            />
+          </View>
+          <View style={styles.arrivalHalf}>
+            <PickerButton
+              label="Arrival time"
+              value={arrival.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+              onPress={() => setPicker("arrival-time")}
+            />
+          </View>
+        </View>
         {picker ? (
           Platform.OS === "web" ? (
             <WebPicker
               mode={pickerMode}
-              value={pickerValue}
+              value={arrival}
               onPicked={(picked) => applyPicked(picker, picked)}
             />
           ) : (
             <DateTimePicker
-              value={pickerValue}
+              value={arrival}
               mode={pickerMode}
               display={Platform.OS === "ios" ? "spinner" : "default"}
               onValueChange={(_event, date) => applyPicked(picker, date)}
@@ -300,6 +296,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
   },
+  arrivalRow: {
+    flexDirection: "row",
+  },
+  arrivalHalf: {
+    width: "50%",
+  },
   fieldLabel: {
     fontSize: 14,
     marginTop: 4,
@@ -318,6 +320,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
+    width: "100%",
   },
   pickerValue: {
     fontSize: 16,

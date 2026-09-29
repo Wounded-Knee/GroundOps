@@ -1,4 +1,11 @@
-import type { CalendarResponse, Driver, Sortie, SortieStop, SortieWriteRequest } from "@groundops/contracts";
+import type {
+  CalendarResponse,
+  Driver,
+  LocationObservationRequest,
+  Sortie,
+  SortieStop,
+  SortieWriteRequest,
+} from "@groundops/contracts";
 import { taskSortieType } from "@groundops/contracts";
 
 export async function ensureCurrentDriver(
@@ -56,7 +63,7 @@ export async function authorSortie(
   apiUrl: string,
   token: string,
   body: SortieWriteRequest,
-): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
   return writeSortie(apiUrl, token, "POST", "/sorties", body);
 }
 
@@ -65,7 +72,7 @@ export async function reviseSortie(
   token: string,
   sortieId: string,
   body: SortieWriteRequest,
-): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
   return writeSortie(apiUrl, token, "PATCH", `/sorties/${sortieId}`, body);
 }
 
@@ -75,7 +82,7 @@ async function writeSortie(
   method: "POST" | "PATCH",
   path: string,
   body: SortieWriteRequest,
-): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
   try {
     const response = await fetch(`${apiUrl}${path}`, {
       method,
@@ -88,7 +95,10 @@ async function writeSortie(
     if (response.status === 401) {
       return "unauthorized";
     }
-    if (response.status === 400 || response.status === 404 || response.status === 409) {
+    if (response.status === 409 && (await readError(response)) === "no location") {
+      return "no-location";
+    }
+    if (response.status === 400 || response.status === 404 || response.status === 409 || response.status === 503) {
       return "rejected";
     }
     if (!response.ok) {
@@ -127,6 +137,7 @@ function isSortie(value: unknown): value is Sortie {
     record.id.length > 0 &&
     record.type === taskSortieType &&
     typeof record.label === "string" &&
+    typeof record.arrivalAt === "string" &&
     typeof record.scheduledStart === "string" &&
     typeof record.scheduledEnd === "string" &&
     (record.passengerName === null || typeof record.passengerName === "string") &&
@@ -134,6 +145,44 @@ function isSortie(value: unknown): value is Sortie {
     Array.isArray(record.stops) &&
     record.stops.every(isStop)
   );
+}
+
+export async function reportLocationObservation(
+  apiUrl: string,
+  token: string,
+  body: LocationObservationRequest,
+): Promise<"ok" | "unauthorized" | "rejected"> {
+  try {
+    const response = await fetch(`${apiUrl}/location-observations`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 204) {
+      return "ok";
+    }
+    return "rejected";
+  } catch {
+    return "rejected";
+  }
+}
+
+async function readError(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null || !("error" in body)) {
+      return null;
+    }
+    return typeof body.error === "string" ? body.error : null;
+  } catch {
+    return null;
+  }
 }
 
 function isStop(value: unknown): value is SortieStop {

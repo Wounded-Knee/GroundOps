@@ -2,7 +2,17 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { findActiveSession } from "../identity/sessions.js";
 import { readBearer } from "../identity/tokens.js";
-import { authorSortie, ensureDriver, readCalendar, reviseSortie, type SortieInput } from "./calendar.js";
+import {
+  authorSortie,
+  defaultScheduleDeps,
+  ensureDriver,
+  readCalendar,
+  recordObservation,
+  reviseSortie,
+  type ObservationInput,
+  type ScheduleDeps,
+  type SortieInput,
+} from "./calendar.js";
 
 const stopBody = z.object({
   label: z.string(),
@@ -12,11 +22,17 @@ const stopBody = z.object({
 
 const writeBody = z.object({
   label: z.string(),
-  scheduledStart: z.string(),
-  scheduledEnd: z.string(),
+  arrivalAt: z.string(),
   passengerName: z.string().nullable(),
   passengerPhone: z.string().nullable(),
   stops: z.array(stopBody),
+});
+
+const observationBody = z.object({
+  observedAt: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  accuracyMeters: z.number().nullable(),
 });
 
 const rangeQuery = z.object({
@@ -28,7 +44,7 @@ const sortieParams = z.object({
   id: z.uuid(),
 });
 
-export function registerCalendarRoutes(app: FastifyInstance): void {
+export function registerCalendarRoutes(app: FastifyInstance, deps: ScheduleDeps = defaultScheduleDeps): void {
   app.post("/drivers/current", async (request, reply) => {
     const active = await findPresentedSession(request.headers.authorization);
     if (!active) {
@@ -70,12 +86,18 @@ export function registerCalendarRoutes(app: FastifyInstance): void {
     if (!input) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await authorSortie(active.user, input);
+    const result = await authorSortie(active.user, input, deps);
     if (result === "invalid") {
       return reply.code(400).send({ error: "invalid request" });
     }
     if (result === "no-driver") {
       return reply.code(409).send({ error: "no driver" });
+    }
+    if (result === "no-location") {
+      return reply.code(409).send({ error: "no location" });
+    }
+    if (result === "unavailable") {
+      return reply.code(503).send({ error: "schedule unavailable" });
     }
     return reply.code(201).send(result);
   });
@@ -91,14 +113,40 @@ export function registerCalendarRoutes(app: FastifyInstance): void {
     if (!params.success || !input) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await reviseSortie(active.user, params.data.id, input);
+    const result = await reviseSortie(active.user, params.data.id, input, deps);
     if (result === "invalid") {
       return reply.code(400).send({ error: "invalid request" });
     }
     if (result === "not-found") {
       return reply.code(404).send({ error: "not found" });
     }
+    if (result === "no-location") {
+      return reply.code(409).send({ error: "no location" });
+    }
+    if (result === "unavailable") {
+      return reply.code(503).send({ error: "schedule unavailable" });
+    }
     return reply.send(result);
+  });
+
+  app.post("/location-observations", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+
+    const input = readObservation(request.body);
+    if (!input) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const result = await recordObservation(active.user, input, deps);
+    if (result === "invalid") {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    if (result === "no-driver") {
+      return reply.code(409).send({ error: "no driver" });
+    }
+    return reply.code(204).send();
   });
 }
 
@@ -107,18 +155,33 @@ function readWrite(body: unknown): SortieInput | null {
   if (!parsed.success) {
     return null;
   }
-  const scheduledStart = new Date(parsed.data.scheduledStart);
-  const scheduledEnd = new Date(parsed.data.scheduledEnd);
-  if (Number.isNaN(scheduledStart.getTime()) || Number.isNaN(scheduledEnd.getTime())) {
+  const arrivalAt = new Date(parsed.data.arrivalAt);
+  if (Number.isNaN(arrivalAt.getTime())) {
     return null;
   }
   return {
     label: parsed.data.label,
-    scheduledStart,
-    scheduledEnd,
+    arrivalAt,
     passengerName: parsed.data.passengerName,
     passengerPhone: parsed.data.passengerPhone,
     stops: parsed.data.stops,
+  };
+}
+
+function readObservation(body: unknown): ObservationInput | null {
+  const parsed = observationBody.safeParse(body);
+  if (!parsed.success) {
+    return null;
+  }
+  const observedAt = new Date(parsed.data.observedAt);
+  if (Number.isNaN(observedAt.getTime())) {
+    return null;
+  }
+  return {
+    observedAt,
+    latitude: parsed.data.latitude,
+    longitude: parsed.data.longitude,
+    accuracyMeters: parsed.data.accuracyMeters,
   };
 }
 

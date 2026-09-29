@@ -1,6 +1,6 @@
 import type { Sortie, SortieWriteRequest } from "@groundops/contracts";
 import { useEffect, useRef, useState } from "react";
-import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppState, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { readCalendarCache, writeCalendarCache } from "./calendarCache";
 import { authorSortie, ensureCurrentDriver, requestCalendar, reviseSortie } from "./calendarClient";
@@ -9,31 +9,26 @@ import {
   calendarDayDelta,
   dayDeltaFromPixels,
   defaultInterval,
-  endsOnDay,
   formatUsPhone,
   hourHeight,
   hourLabel,
   hourSlot,
   minuteDeltaFromPixels,
   monthGridDays,
-  moveInterval,
   periodLabel,
-  resizeEnd,
-  resizeStart,
   sameLocalDay,
   shiftAnchor,
-  shiftIntervalDays,
-  startsOnDay,
+  shiftArrival,
   visibleRange,
   weekDays,
   type CalendarScope,
-  type Interval,
 } from "./calendarTime";
 import { SortieDialog, emptyStops, stopsFromSortie, type DialogDraft } from "./SortieDialog";
 
 const couldNotLoad = "The calendar could not be loaded.";
 const couldNotRefresh = "The calendar could not be refreshed.";
 const notSaved = "The sortie was not saved.";
+const locationRequired = "Location is required to schedule the sortie.";
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hours = Array.from({ length: 24 }, (_, hour) => hour);
 
@@ -47,6 +42,7 @@ type Ready = {
   live: boolean;
   message: string | null;
   dialog: DialogDraft | null;
+  summary: Sortie | null;
 };
 
 function emptyCalendar(anchor: Date): Ready {
@@ -58,6 +54,7 @@ function emptyCalendar(anchor: Date): Ready {
     live: false,
     message: null,
     dialog: null,
+    summary: null,
   };
 }
 
@@ -88,9 +85,23 @@ export function CalendarScreen({
   const columnWidth = useRef(0);
   const hourScroll = useRef<ScrollView>(null);
 
+  const shown = useRef({ scope: screen.scope, anchor: screen.anchor, live: screen.live });
+  shown.current = { scope: screen.scope, anchor: screen.anchor, live: screen.live };
+
   useEffect(() => {
     const current = ++generation.current;
     void load("month", new Date(), current);
+  }, [token, userId]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active" || !shown.current.live) {
+        return;
+      }
+      const current = ++generation.current;
+      void load(shown.current.scope, shown.current.anchor, current);
+    });
+    return () => sub.remove();
   }, [token, userId]);
 
   async function load(scope: CalendarScope, anchor: Date, current: number): Promise<void> {
@@ -144,6 +155,9 @@ export function CalendarScreen({
       sorties: calendar.sorties,
       live: true,
       message: null,
+      summary: prev.summary
+        ? (calendar.sorties.find((item) => item.id === prev.summary?.id) ?? null)
+        : null,
     }));
   }
 
@@ -160,6 +174,7 @@ export function CalendarScreen({
       live: false,
       message: cached ? couldNotRefresh : couldNotLoad,
       dialog: null,
+      summary: null,
     }));
   }
 
@@ -170,6 +185,7 @@ export function CalendarScreen({
       scope,
       anchor,
       dialog: null,
+      summary: null,
       message: currentScreen.live ? null : currentScreen.message,
     }));
     void load(scope, anchor, current);
@@ -190,6 +206,10 @@ export function CalendarScreen({
     }
     if (saved === "unauthorized") {
       onUnauthorized();
+      return;
+    }
+    if (saved === "no-location") {
+      setScreen({ ...ready, message: locationRequired });
       return;
     }
     if (typeof saved === "string") {
@@ -229,7 +249,14 @@ export function CalendarScreen({
     if (!ready.live) {
       return;
     }
-    setScreen({ ...ready, dialog, message: null });
+    setScreen({ ...ready, dialog, summary: null, message: null });
+  }
+
+  function openSummary(ready: Ready, sortie: Sortie): void {
+    if (!ready.live) {
+      return;
+    }
+    setScreen({ ...ready, summary: sortie, dialog: null, message: null });
   }
 
   const ready = screen;
@@ -324,22 +351,22 @@ export function CalendarScreen({
                         <MonthChip
                           key={sortie.id}
                           label={sortie.label}
-                          enabled={ready.live && !ready.dialog}
-                          onOpen={() => openDialog(ready, dialogFor(sortie))}
+                          enabled={ready.live && !ready.dialog && !ready.summary}
+                          onOpen={() => openSummary(ready, sortie)}
                           onMove={(pageX, pageY) => {
                             const target = dayAtPoint(gridBox.current, pageX, pageY);
                             if (!target) {
                               return;
                             }
-                            const interval = shiftIntervalDays(
-                              new Date(sortie.scheduledStart),
-                              new Date(sortie.scheduledEnd),
+                            const arrival = shiftArrival(
+                              new Date(sortie.arrivalAt),
                               calendarDayDelta(new Date(sortie.scheduledStart), target),
+                              0,
                             );
-                            if (!interval) {
+                            if (!arrival) {
                               return;
                             }
-                            void commit(ready, sortie.id, writeFrom(sortie, interval));
+                            void commit(ready, sortie.id, writeFrom(sortie, arrival));
                           }}
                         />
                       ))}
@@ -389,10 +416,9 @@ export function CalendarScreen({
                       {hours.map((hour) => (
                         <Pressable
                           key={hour}
-                          disabled={!ready.live || ready.dialog !== null}
+                          disabled={!ready.live || ready.dialog !== null || ready.summary !== null}
                           onPress={() => {
-                            const slot = hourSlot(day, hour);
-                            openDialog(ready, dialogForCreate(slot.start, slot.end));
+                            openDialog(ready, dialogForCreate(hourSlot(day, hour).start));
                           }}
                           style={styles.hourSlot}
                         />
@@ -410,28 +436,15 @@ export function CalendarScreen({
                             label={sortie.label}
                             top={block.top}
                             height={block.height}
-                            enabled={ready.live && !ready.dialog}
+                            enabled={ready.live && !ready.dialog && !ready.summary}
                             allowDayShift={ready.scope === "week"}
-                            canResizeStart={startsOnDay(start, day)}
-                            canResizeEnd={endsOnDay(end, day)}
                             columnWidth={() => columnWidth.current}
-                            onOpen={() => openDialog(ready, dialogFor(sortie))}
+                            onOpen={() => openSummary(ready, sortie)}
                             onMove={(dayDelta, minuteDelta) => {
-                              const interval = moveInterval(start, end, dayDelta, minuteDelta);
-                              if (interval) {
-                                void commit(ready, sortie.id, writeFrom(sortie, interval));
+                              const arrival = shiftArrival(new Date(sortie.arrivalAt), dayDelta, minuteDelta);
+                              if (arrival) {
+                                void commit(ready, sortie.id, writeFrom(sortie, arrival));
                               }
-                            }}
-                            onResize={(edge, minuteDelta) => {
-                              const interval =
-                                edge === "start" ? resizeStart(start, end, minuteDelta) : resizeEnd(start, end, minuteDelta);
-                              if (!interval) {
-                                if (minuteDelta !== 0) {
-                                  setScreen({ ...ready, message: notSaved });
-                                }
-                                return;
-                              }
-                              void commit(ready, sortie.id, writeFrom(sortie, interval));
                             }}
                           />
                         );
@@ -442,12 +455,11 @@ export function CalendarScreen({
               </ScrollView>
             </View>
           )}
-          {ready.live && !ready.dialog ? (
+          {ready.live && !ready.dialog && !ready.summary ? (
             <Pressable
               style={styles.primary}
               onPress={() => {
-                const slot = defaultInterval(ready.scope, ready.anchor);
-                openDialog(ready, dialogForCreate(slot.start, slot.end));
+                openDialog(ready, dialogForCreate(defaultInterval(ready.scope, ready.anchor).start));
               }}
             >
               <Text style={styles.primaryText}>Author sortie</Text>
@@ -457,7 +469,7 @@ export function CalendarScreen({
             <SortieDialog
               draft={ready.dialog}
               token={token}
-              onCancel={() => setScreen({ ...ready, dialog: null })}
+              onCancel={() => setScreen({ ...ready, dialog: null, summary: null })}
               onUnauthorized={onUnauthorized}
               onSave={(body) => {
                 if (body === "invalid") {
@@ -465,6 +477,18 @@ export function CalendarScreen({
                   return;
                 }
                 void commit(ready, ready.dialog?.sortieId ?? null, body);
+              }}
+            />
+          ) : null}
+          {ready.summary ? (
+            <SortieSummary
+              sortie={ready.summary}
+              onClose={() => setScreen({ ...ready, summary: null })}
+              onRevise={() => {
+                const summary = ready.summary;
+                if (summary) {
+                  openDialog(ready, dialogFor(summary));
+                }
               }}
             />
           ) : null}
@@ -481,35 +505,37 @@ function dialogFor(sortie: Sortie): DialogDraft {
   return {
     sortieId: sortie.id,
     label: sortie.label,
-    start: new Date(sortie.scheduledStart),
-    end: new Date(sortie.scheduledEnd),
+    arrival: new Date(sortie.arrivalAt),
     passengerName: sortie.passengerName ?? "",
     phone: formatUsPhone(sortie.passengerPhone ?? ""),
     stops: stopsFromSortie(sortie.stops),
   };
 }
 
-function dialogForCreate(start: Date, end: Date): DialogDraft {
+function dialogForCreate(arrival: Date): DialogDraft {
   return {
     sortieId: null,
     label: "",
-    start,
-    end,
+    arrival,
     passengerName: "",
     phone: "",
     stops: emptyStops(),
   };
 }
 
-function writeFrom(sortie: Sortie, interval: Interval): SortieWriteRequest {
+function writeFrom(sortie: Sortie, arrival: Date): SortieWriteRequest {
   return {
     label: sortie.label,
-    scheduledStart: interval.start.toISOString(),
-    scheduledEnd: interval.end.toISOString(),
+    arrivalAt: arrival.toISOString(),
     passengerName: sortie.passengerName,
     passengerPhone: sortie.passengerPhone,
     stops: sortie.stops,
   };
+}
+
+function when(value: string): string {
+  const date = new Date(value);
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
 function dayAtPoint(box: GridBox | null, pageX: number, pageY: number): Date | null {
@@ -576,36 +602,80 @@ function MonthChip({
   );
 }
 
+function SortieSummary({
+  sortie,
+  onClose,
+  onRevise,
+}: {
+  sortie: Sortie;
+  onClose: () => void;
+  onRevise: () => void;
+}) {
+  return (
+    <View style={styles.backdrop}>
+      <ScrollView contentContainerStyle={styles.summaryCard}>
+        <Text style={styles.summaryTitle}>{sortie.label}</Text>
+        <SummaryRow label="Arrival" value={when(sortie.arrivalAt)} />
+        <SummaryRow label="Start" value={when(sortie.scheduledStart)} />
+        <SummaryRow label="End" value={when(sortie.scheduledEnd)} />
+        <SummaryRow label="Passenger" value={sortie.passengerName ?? "—"} />
+        <SummaryRow label="Phone" value={sortie.passengerPhone ? formatUsPhone(sortie.passengerPhone) : "—"} />
+        {sortie.stops.map((stop, index) => (
+          <SummaryRow key={`${stop.label}-${index}`} label={stopRole(index, sortie.stops.length)} value={stop.label} />
+        ))}
+        <Pressable onPress={onRevise} style={styles.primary}>
+          <Text style={styles.primaryText}>Revise</Text>
+        </Pressable>
+        <Pressable onPress={onClose} style={styles.summaryClose}>
+          <Text style={styles.secondaryText}>Close</Text>
+        </Pressable>
+      </ScrollView>
+    </View>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.summaryRow}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text style={styles.summaryValue}>{value}</Text>
+    </View>
+  );
+}
+
+function stopRole(index: number, count: number): string {
+  if (index === 0) {
+    return "Origin";
+  }
+  if (index === count - 1) {
+    return "Destination";
+  }
+  return "Waypoint";
+}
+
 function HourBlock({
   label,
   top,
   height,
   enabled,
   allowDayShift,
-  canResizeStart,
-  canResizeEnd,
   columnWidth,
   onOpen,
   onMove,
-  onResize,
 }: {
   label: string;
   top: number;
   height: number;
   enabled: boolean;
   allowDayShift: boolean;
-  canResizeStart: boolean;
-  canResizeEnd: boolean;
   columnWidth: () => number;
   onOpen: () => void;
   onMove: (dayDelta: number, minuteDelta: number) => void;
-  onResize: (edge: "start" | "end", minuteDelta: number) => void;
 }) {
   const [shift, setShift] = useState({ x: 0, y: 0 });
-  const [edgeShift, setEdgeShift] = useState<{ edge: "start" | "end"; minutes: number } | null>(null);
   const grant = useRef({ x: 0, y: 0 });
-  const latest = useRef({ enabled, allowDayShift, columnWidth, onOpen, onMove, onResize });
-  latest.current = { enabled, allowDayShift, columnWidth, onOpen, onMove, onResize };
+  const latest = useRef({ enabled, allowDayShift, columnWidth, onOpen, onMove });
+  latest.current = { enabled, allowDayShift, columnWidth, onOpen, onMove };
 
   const moveResponder = useRef(
     PanResponder.create({
@@ -639,63 +709,20 @@ function HourBlock({
     }),
   ).current;
 
-  function edgeResponder(edge: "start" | "end") {
-    return PanResponder.create({
-      onStartShouldSetPanResponder: () => latest.current.enabled,
-      onMoveShouldSetPanResponder: () => latest.current.enabled,
-      onPanResponderGrant: (event) => {
-        grant.current = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY };
-      },
-      onPanResponderMove: (event) => {
-        setEdgeShift({ edge, minutes: minuteDeltaFromPixels(event.nativeEvent.pageY - grant.current.y) });
-      },
-      onPanResponderRelease: (event) => {
-        const minutes = minuteDeltaFromPixels(event.nativeEvent.pageY - grant.current.y);
-        setEdgeShift(null);
-        latest.current.onResize(edge, minutes);
-      },
-      onPanResponderTerminate: () => setEdgeShift(null),
-    });
-  }
-
-  const startEdge = useRef(edgeResponder("start")).current;
-  const endEdge = useRef(edgeResponder("end")).current;
-  const resized = edgeShift ? resizedFrame(top, height, edgeShift.edge, edgeShift.minutes) : { top, height };
-
   return (
     <View
       style={[
         styles.block,
-        { top: resized.top, height: resized.height, transform: [{ translateX: shift.x }, { translateY: shift.y }] },
+        { top, height, transform: [{ translateX: shift.x }, { translateY: shift.y }] },
       ]}
     >
-      {canResizeStart ? <View {...startEdge.panHandlers} style={styles.edge} /> : null}
       <View {...moveResponder.panHandlers} style={styles.blockBody}>
         <Text numberOfLines={2} style={styles.blockText}>
           {label}
         </Text>
       </View>
-      {canResizeEnd ? <View {...endEdge.panHandlers} style={styles.edge} /> : null}
     </View>
   );
-}
-
-function resizedFrame(
-  top: number,
-  height: number,
-  edge: "start" | "end",
-  minutes: number,
-): { top: number; height: number } {
-  const delta = (minutes / 60) * hourHeight;
-  if (edge === "start") {
-    const nextTop = top + delta;
-    const nextHeight = height - delta;
-    if (nextHeight < 32) {
-      return { top, height };
-    }
-    return { top: nextTop, height: nextHeight };
-  }
-  return { top, height: Math.max(32, height + delta) };
 }
 
 const styles = StyleSheet.create({
@@ -838,9 +865,40 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 11,
   },
-  edge: {
-    height: 8,
-    backgroundColor: "#333",
+  backdrop: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    padding: 16,
+  },
+  summaryCard: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+  },
+  summaryTitle: {
+    fontSize: 20,
+  },
+  summaryRow: {
+    gap: 2,
+  },
+  summaryLabel: {
+    fontSize: 13,
+    color: "#555",
+  },
+  summaryValue: {
+    fontSize: 16,
+  },
+  summaryClose: {
+    backgroundColor: "#eee",
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: "center",
+    marginTop: 8,
   },
   message: {
     marginTop: 12,

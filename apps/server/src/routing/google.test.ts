@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { computeDrivingRoute, mapGoogleRoute, mapManeuver, suggestPlaces } from "./google.js";
+import { computeDriveDuration, computeDrivingRoute, mapGoogleRoute, mapManeuver, suggestPlaces } from "./google.js";
 
 const encoded = "_p~iF~ps|U_ulLnnqC_mqNvxq`@";
 
@@ -194,5 +194,45 @@ describe("computeDrivingRoute", () => {
       },
     );
     assert.equal(result, "failed");
+  });
+});
+
+describe("computeDriveDuration", () => {
+  it("asks for traffic at the departure time and returns that duration", async () => {
+    let sent: { body: Record<string, unknown>; fieldMask: string } | null = null;
+    const duration = await computeDriveDuration(
+      { latitude: 1, longitude: 2 },
+      { latitude: 3, longitude: 4 },
+      [{ latitude: 5, longitude: 6 }],
+      new Date("2026-09-02T14:30:00.000Z"),
+      {
+        apiKey: "test-key",
+        fetch: async (_url, init) => {
+          const headers = init.headers;
+          const fieldMask =
+            headers instanceof Headers
+              ? headers.get("X-Goog-FieldMask")
+              : typeof headers === "object" && headers !== null && "X-Goog-FieldMask" in headers
+                ? String(headers["X-Goog-FieldMask"])
+                : "";
+          sent = {
+            body: JSON.parse(String(init.body)) as Record<string, unknown>,
+            fieldMask: fieldMask ?? "",
+          };
+          return Response.json({ routes: [{ duration: "120s" }] });
+        },
+      },
+    );
+    assert.equal(duration, 120);
+    assert.ok(sent);
+    if (!sent) {
+      return;
+    }
+    const request: { body: Record<string, unknown>; fieldMask: string } = sent;
+    assert.equal(request.fieldMask, "routes.duration");
+    assert.equal(request.body.routingPreference, "TRAFFIC_AWARE");
+    assert.equal(request.body.departureTime, "2026-09-02T14:30:00.000Z");
+    assert.equal(request.body.travelMode, "DRIVE");
+    assert.equal(Array.isArray(request.body.intermediates) ? request.body.intermediates.length : 0, 1);
   });
 });

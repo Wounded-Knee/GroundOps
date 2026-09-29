@@ -18,8 +18,8 @@ After this slice, a person who is signed in, as slice 001 defines, can:
 
 1. Open a calendar and switch among month, week, and day.
 2. Become a driver by opening that calendar, when they do not already have one.
-3. Author a sortie from a dialog: a label, a start and end, an optional passenger name, an optional phone number, an origin, a destination, and any waypoints between those two.
-4. Revise that sortie from the same dialog, or by dragging it so the scheduled start and end change.
+3. Author a sortie from a dialog: a label, an arrival date and an arrival time, an optional passenger name, an optional phone number, an origin, a destination, and any waypoints between those two. The arrival is when the driver is to arrive at the origin. The server computes the scheduled start and end from traffic-aware drive time and caches them.
+4. See a summary of a sortie by tapping it, and revise that sortie from the summary, or by dragging it so the arrival changes. The server recomputes the cached start and end.
 5. See those sorties again after the app restarts, and on another session for the same user.
 6. See the last fetched calendar range when the server cannot be reached.
 7. Sign out, so that session can no longer be used, as slice 001 defines. Sign-out clears the local calendar cache.
@@ -47,9 +47,9 @@ This slice is demonstrable on the existing local stack:
 
 The API uses host PostgreSQL. The client JavaScript is the Expo development server the app already uses.
 
-The calendar runs on web, iOS, and Android. Web is the Expo development server. iOS and Android use the local development build from slice 002, because the map that opens the calendar still uses `expo-maps`. Start and end use `@react-native-community/datetimepicker` on each platform. That picker is a native module, so the development build includes it. This slice adds no EAS build, no store build, and no deployed environment.
+The calendar runs on web, iOS, and Android. Web is the Expo development server. iOS and Android use the local development build from slice 002, because the map that opens the calendar still uses `expo-maps`. Arrival date and time use `@react-native-community/datetimepicker` on each platform. That picker is a native module, so the development build includes it. This slice adds no EAS build, no store build, and no deployed environment.
 
-The local calendar cache uses `expo-sqlite` on each of those platforms. Place suggestions use the server endpoint from slice 002. No new secret is required. `.env.example` is unchanged.
+The local calendar cache uses `expo-sqlite` on each of those platforms. Place suggestions use the server endpoint from slice 002. The signed-in app reports foreground GPS fixes to the server. Drive time for a sortie window uses the Google routing key slice 002 already requires. `.env.example` is unchanged.
 
 ---
 
@@ -61,7 +61,13 @@ Opening the calendar sends an idempotent request. The server finds the driver fo
 
 A later slice can add another company relationship for the same driver. This slice writes one.
 
-An authored sortie uses that company as its company of record and records the authoring driver. Its type is the platform type `task`. The schema of `task` is a label, a scheduled interval, an optional passenger name, an optional passenger phone, and an ordered series of stops. The label is non-empty after trimming. The start is before the end. Both timestamps are UTC. A phone, when present, is ten digits. The caller does not send a company id or a type. There is no type registry and no second type.
+An authored sortie uses that company as its company of record and records the authoring driver. Its type is the platform type `task`. The schema of `task` is a label, an arrival at the origin, a cached scheduled start, a cached scheduled end, an optional passenger name, an optional passenger phone, and an ordered series of stops. The label is non-empty after trimming. The arrival is the only time the caller sends. The server computes the start and the end and stores them. All three timestamps are UTC. A phone, when present, is ten digits. The caller does not send a company id or a type. There is no type registry and no second type.
+
+The start is the arrival minus the traffic-aware drive from the driver's latest location observation to the origin. The end is the arrival plus the traffic-aware drive from the origin through each waypoint to the destination, departing at the arrival. Both durations include projected traffic. The server asks for the approach drive at the arrival, then again at arrival minus that duration, and keeps the second duration. A departure the routing provider will not accept in the past is asked as the current time. The stored start may still fall before the current time. The result is cached on the sortie, together with the coordinate used for that computation. A calendar read does not call the routing provider.
+
+Author and revise use the latest stored observation. If the driver has none, the write is rejected and the screen says location is required. If the routing call fails, the write is rejected and the previous sortie is left unchanged. A later observation recomputes every still-open sortie whose computation coordinate is missing or at least ten miles from the new fix. A sortie whose cached end is already past is left unchanged. A failed recompute leaves the cached window and the coordinate unchanged and is not retried for five minutes. That recompute appends `sortie.schedule_computed`. It is not a revise.
+
+While the person is signed in and the app is in the foreground, the client reports location observations. It sends a fix when the device has moved at least 100 meters from the last accepted report, or five minutes have passed, and it drops a fix whose accuracy is worse than 100 meters. Off-duty suppression is not applied, because this slice has no duty. Background location stays out. An observation is not broadcast, and no other driver can read it.
 
 A sortie has at least two stops. Position 0 is the origin. The last position is the destination. Positions between them are waypoints. Each stop is a place suggestion the person chose: a label and a coordinate. Suggestions come from `POST /place-suggestions`, as slice 002 defines. The client does not call Google. A stop has no place id. Text that was typed and not chosen is not a stop.
 
@@ -69,20 +75,20 @@ Creating a sortie does not make the driver responsible. This slice records no ac
 
 The visible scope is one of three:
 
-- **Month.** A month grid. Each sortie is a chip on its start day, showing the label. Today is marked.
-- **Week.** Seven day columns and an hour grid. Each sortie is a block from its start to its end.
+- **Month.** A month grid. Each sortie is a chip on the day of its cached start, showing the label. Today is marked.
+- **Week.** Seven day columns and an hour grid. Each sortie is a block from its cached start to its cached end.
 - **Day.** The same hour grid for one date.
 
-Previous, next, and today move the visible period. A scope control switches month, week, and day. Tapping a day in the month grid, or a day heading in the week, opens that day. Tapping a sortie opens the revise dialog. One create action is available in every scope. In week and day, tapping an empty hour opens create with that hour as the start and one hour later as the end.
+Previous, next, and today move the visible period. A scope control switches month, week, and day. Tapping a day in the month grid, or a day heading in the week, opens that day. Tapping a sortie opens a summary of that sortie. One create action is available in every scope. In week and day, tapping an empty hour opens create with that hour as the arrival.
 
-The author may revise the label, the interval, the passenger fields, and the stops. The sortie remains. This slice has no delete.
+The author may revise the label, the arrival, the passenger fields, and the stops. The sortie remains. This slice has no delete. The summary shows the label, the arrival, the cached start, the cached end, the passenger name, the phone, and the stops in order. Revise on the summary opens the dialog. Close dismisses the summary.
 
-Dragging a sortie revises that same sortie's scheduled start and end. It does not create a second record. On drop, the client sends the new interval together with the sortie's existing label, passenger fields, and stops. The server writes those timestamps and appends `sortie.revised` in the same transaction. The client then reads the calendar again.
+Dragging a sortie revises that same sortie's arrival. It does not create a second record, and it does not set the duration. On drop, the client sends the new arrival together with the sortie's existing label, passenger fields, and stops. The server recomputes the cached start and end and appends `sortie.revised` in the same transaction. The client then reads the calendar again. There is no resize handle.
 
-- On week and day, dragging the block moves it. Start and end shift by the same amount, so the duration stays. Dragging the start edge changes the start. Dragging the end edge changes the end. Times snap to 15 minutes.
-- On month, dragging a chip to another day shifts both timestamps by whole days and keeps the clock times. Changing the duration stays on the week and day grids.
+- On week and day, dragging the block moves the arrival by the same day and minute delta. Times snap to 15 minutes.
+- On month, dragging a chip to another day shifts the arrival by whole days and keeps the clock time. The day delta is measured from the cached start day.
 
-A failed revise, including an end that is not after the start, leaves the sortie and the cache unchanged. The block returns to the times from the last successful read. The screen says the sortie was not saved. When the server cannot be reached, drag is refused.
+A failed revise leaves the sortie and the cache unchanged. The block returns to the times from the last successful read. The screen says the sortie was not saved, or that location is required when the driver has no stored fix. When the server cannot be reached, drag is refused. When the app returns to the foreground, the open calendar reads again, so a window recomputed from a later fix can appear.
 
 In the same transaction as the sortie write, the server appends one operational event. Authoring appends `sortie.created`. Revising, including a drag, appends `sortie.revised`. The event stores the sortie id, the label, the interval, the passenger name, the phone, and the ordered stops after the write. Current state stays on the sortie row and its stop rows. A rejected author or revise writes no sortie change and no event. The client does not rebuild the calendar from events.
 
@@ -116,7 +122,7 @@ A **driver–company relationship** is the operational link between that driver 
 
 ## 5.4 Sortie
 
-A **sortie** is the operational task from the domain model. This slice stores its id, company of record, authoring driver, type `task`, label, scheduled start, scheduled end, passenger name, and passenger phone.
+A **sortie** is the operational task from the domain model. This slice stores its id, company of record, authoring driver, type `task`, label, arrival, cached scheduled start, cached scheduled end, the coordinate of the last successful schedule computation, passenger name, and passenger phone.
 
 The passenger name and phone are fields of this sortie type. They are not a passenger entity.
 
@@ -150,31 +156,34 @@ A stop is not a driving route and not a place id.
 | No driver | Driver | The first successful calendar open creates the driver, the company, and the relationship. A later open reuses them. |
 | Month, week, or day | Another scope or period | The client reads the sorties for the range now on screen. |
 | No sortie | Sortie authored | The server accepts the dialog, writes the sortie, its stops, and a `sortie.created` event, and the client reads the calendar again. |
-| Sortie authored | Sortie revised | The server updates the sortie and replaces its stops, appends `sortie.revised`, and the client reads the calendar again. A drag sends the new interval and the existing label, passenger fields, and stops. |
+| Sortie authored | Sortie revised | The server updates the sortie and replaces its stops, recomputes the cached window, appends `sortie.revised`, and the client reads the calendar again. A drag sends the new arrival and the existing label, passenger fields, and stops. |
+| Sortie with a cached window | Window recomputed | A new location observation is at least ten miles from the computation coordinate, and the cached end is still in the future. The server replaces the cached start and end and appends `sortie.schedule_computed`. |
 | Calendar reachable | Cached calendar | The server cannot be reached. The person can still change scope and period. The screen shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are refused. |
 | Signed in | Signed out | The server revokes the session presented by the client, as slice 001 defines. The client deletes the calendar cache. |
 
 No duty, availability, responsibility, or guidance state changes.
 
-A rejected session creates no driver and no sortie. An empty label, an end that is not after the start, fewer than two chosen stops, a stop with no coordinate, or a phone number that is not ten digits creates no sortie and no event. A revise for a missing sortie, or for a sortie another driver authored, changes nothing. A failed drag returns the block to the times from the last successful read.
+A rejected session creates no driver and no sortie. An empty label, fewer than two chosen stops, a stop with no coordinate, a phone number that is not ten digits, a missing location observation, or a failed routing call creates no sortie and no event. A revise for a missing sortie, or for a sortie another driver authored, changes nothing. A failed drag returns the block to the times from the last successful read.
 
 ---
 
 # 7. Interfaces
 
-**Month.** A month grid. A chip on the start day shows the label. Today is marked. Previous, next, and today move the month. Tapping a day opens that day. Dragging a chip onto another day shifts the sortie by whole days and keeps the clock times.
+**Month.** A month grid. A chip on the cached start day shows the label. Today is marked. Previous, next, and today move the month. Tapping a day opens that day. Dragging a chip onto another day shifts the arrival by whole days and keeps the clock time.
 
-**Week.** Seven day columns and an hour grid. A block runs from the sortie's start to its end. Previous, next, and today move the week. Tapping a day heading opens that day.
+**Week.** Seven day columns and an hour grid. A block runs from the sortie's cached start to its cached end. Previous, next, and today move the week. Tapping a day heading opens that day.
 
 **Day.** One date and the same hour grid. Previous, next, and today move the day.
 
 **Scope.** Month, week, and day. Switching scope reads the range that scope shows.
 
-**Create.** One action in every scope opens the dialog. In week and day, tapping an empty hour opens the dialog with that hour as the start and one hour later as the end.
+**Create.** One action in every scope opens the dialog. In week and day, tapping an empty hour opens the dialog with that hour as the arrival. The author action uses 9:00 on the anchor day, or on the first day of the month when the scope is month.
 
-**Dialog.** Used to author and to revise. Revise opens it filled from the sortie. The fields are a label, a start date, a start time, an end date, an end time, a passenger name, a passenger phone, and the stops. Start and end use `@react-native-community/datetimepicker`. The phone field uses a numeric keyboard: `phone-pad` on iOS and Android, and `tel` on web. As the person types, the field shows US format `(555) 123-4567`. The dialog starts with two stop rows, origin and destination. The person can insert waypoints between them and can remove a waypoint. Origin and destination stay. Each stop row requests place suggestions as the query changes. Choosing a suggestion sets that stop's label and coordinate. One action: save.
+**Summary.** Tapping a sortie opens it. The summary shows the label, the arrival, the cached start, the cached end, the passenger name, the phone, and each stop in order. Revise opens the dialog. Close dismisses the summary.
 
-**Move and resize.** On week and day, dragging the block moves the sortie and keeps the duration. Dragging the start edge changes the start. Dragging the end edge changes the end. Dropped times snap to 15 minutes. On month, dragging a chip to another day changes the dates and keeps the clock times.
+**Dialog.** Used to author and to revise. Revise opens it filled from the sortie. The fields are a label, an arrival date, an arrival time, a passenger name, a passenger phone, and the stops. Arrival date and arrival time share one row, and each takes half of that row. They use `@react-native-community/datetimepicker`. The phone field uses a numeric keyboard: `phone-pad` on iOS and Android, and `tel` on web. As the person types, the field shows US format `(555) 123-4567`. The dialog starts with two stop rows, origin and destination. The person can insert waypoints between them and can remove a waypoint. Origin and destination stay. Each stop row requests place suggestions as the query changes. Choosing a suggestion sets that stop's label and coordinate. One action: save.
+
+**Move.** On week and day, dragging the block shifts the arrival. Dropped times snap to 15 minutes. The duration is not edited. On month, dragging a chip to another day shifts the arrival by whole days and keeps the clock time.
 
 When the server cannot be reached and a range is cached, month, week, day, previous, next, and today stay available. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are unavailable. A period that was never fetched is empty.
 
@@ -202,13 +211,14 @@ Commands and queries are HTTP JSON. Zod validates input at the boundary. Domain 
 | Operation | Request | Result |
 | --- | --- | --- |
 | Ensure driver | `POST /drivers/current` with the session token | The driver for that user. Creates the driver, the company, and the relationship when the user has no driver |
-| Read calendar | `GET /calendar` with the session token, `from`, and `to` | The sorties that driver authored whose interval overlaps the range, ordered by scheduled start and then by id. Each sortie includes the passenger fields and its stops in position order. The user must already have a driver |
-| Author sortie | `POST /sorties` with the session token, a label, a start, an end, an optional passenger name, an optional phone, and at least two stops | The sortie, together with a `sortie.created` event. Rejection when the user has no driver, the label is empty, the end is not after the start, fewer than two stops are present, a stop has no coordinate, or the phone is present and is not ten digits |
-| Revise sortie | `PATCH /sorties/:id` with the session token and the same fields | The sortie, together with a `sortie.revised` event. Rejection when the sortie is missing, another driver authored it, or the body fails the same checks as author |
+| Read calendar | `GET /calendar` with the session token, `from`, and `to` | The sorties that driver authored whose cached interval overlaps the range, ordered by scheduled start and then by id. Each sortie includes the arrival, the cached start and end, the passenger fields, and its stops in position order. The user must already have a driver |
+| Author sortie | `POST /sorties` with the session token, a label, an arrival, an optional passenger name, an optional phone, and at least two stops | The sortie, with its cached start and end, together with a `sortie.created` event. Rejection when the user has no driver, the label is empty, fewer than two stops are present, a stop has no coordinate, the phone is present and is not ten digits, the driver has no location observation, or the routing call fails |
+| Revise sortie | `PATCH /sorties/:id` with the session token and the same fields | The sortie, together with a `sortie.revised` event. Rejection when the sortie is missing, another driver authored it, or the body fails the same checks as author. A routing failure leaves the previous window |
+| Report location | `POST /location-observations` with the session token, an observed time, a latitude, a longitude, and an accuracy | Stores the fix for that driver and recomputes any still-open sortie at least ten miles from its last computation coordinate. Rejection when the user has no driver or the body is not a fix |
 
 A stop in the request is a label, a latitude, and a longitude. The client sends a stop only after the person chooses a place suggestion. Place suggestions remain `POST /place-suggestions` from slice 002.
 
-An interval overlaps the range when its start is before `to` and its end is after `from`. `from` must be before `to`. Otherwise the read is rejected and no cache update follows from that response.
+A cached interval overlaps the range when its start is before `to` and its end is after `from`. `from` must be before `to`. Otherwise the read is rejected and no cache update follows from that response.
 
 The authorization rules in this slice: a session may ensure its own driver, read that driver's calendar, author a sortie for that driver, and revise a sortie that driver authored. A missing, unknown, or revoked token is rejected. The caller does not choose the company of record. There is no second credential and no policy engine.
 
@@ -216,7 +226,7 @@ The authorization rules in this slice: a session may ensure its own driver, read
 
 # 9. Persistence
 
-Drizzle owns the schema and the migration. Six tables:
+Drizzle owns the schema and the migration. Seven tables:
 
 **driver** — id, user id, created time. Unique on user id.
 
@@ -224,17 +234,19 @@ Drizzle owns the schema and the migration. Six tables:
 
 **driver company** — id, driver id, company id. Unique on driver id plus company id.
 
-**sortie** — id, company id, author driver id, type, label, scheduled start, scheduled end, passenger name, passenger phone, created time. Rows written here use type `task`. The phone column stores ten digits, or is empty when the person left the phone blank. There is no responsible-driver column.
+**sortie** — id, company id, author driver id, type, label, arrival, scheduled start, scheduled end, schedule origin latitude, schedule origin longitude, schedule failed time, passenger name, passenger phone, created time. Rows written here use type `task`. Arrival is the authored time. Scheduled start and scheduled end are the cached window. The schedule origin is the coordinate of the last successful computation, and is empty until that computation succeeds. The phone column stores ten digits, or is empty when the person left the phone blank. There is no responsible-driver column.
 
 **sortie stop** — id, sortie id, position, label, latitude, longitude. Unique on sortie id plus position. Position 0 is the origin. The greatest position is the destination. A revise deletes that sortie's stop rows and inserts the new order in the same transaction.
 
-**operational event** — id, type, recorded time, sortie id, label, scheduled start, scheduled end, passenger name, passenger phone, and the ordered stops as each stop's label and coordinate. Append-only. Rows written here use type `sortie.created` or `sortie.revised`. The row commits in the same transaction as the sortie write.
+**operational event** — id, type, recorded time, sortie id, label, arrival, scheduled start, scheduled end, passenger name, passenger phone, and the ordered stops as each stop's label and coordinate. Append-only. Rows written here use type `sortie.created`, `sortie.revised`, or `sortie.schedule_computed`. The row commits in the same transaction as the sortie write.
+
+**location observation** — id, driver id, observed time, latitude, longitude, accuracy in meters. Indexed by driver and observed time. A track is not stored. There is no read API for another driver.
 
 Primary keys are server-generated UUIDs. Timestamps are `timestamptz` in UTC.
 
 The device cache is not in PostgreSQL. `expo-sqlite` stores the signed-in user id, the range of the last successful read, and the sorties returned for that range, including passenger fields and stops. A later successful read deletes that cached range and writes the new one. Sign-out deletes the cache.
 
-No duty, availability, offer, assignment, or location-observation table. Driver creation is not an operational event. Stops are not a driving route.
+No duty, availability, offer, or assignment table. Location observations are the GPS table above. Driver creation is not an operational event. Stops are not a stored driving route. The cached window is a duration, not a path.
 
 ---
 
@@ -242,7 +254,7 @@ No duty, availability, offer, assignment, or location-observation table. Driver 
 
 The client still opens the authenticated socket from slice 001 after sign-in, and closes it on sign-out. This slice publishes no domain events on the bus, so an authenticated socket still receives no operational traffic.
 
-Author, revise, drag, and calendar reads are HTTP. A second open session for the same user sees a change when it reads the calendar.
+Author, revise, drag, location reports, and calendar reads are HTTP. Precise location is not published on the bus. A second open session for the same user sees a change when it reads the calendar.
 
 ---
 
@@ -254,11 +266,11 @@ The slice works when all of the following are true on the local stack:
 2. A second Google account produces a second driver and a second company. Each driver sees only the sorties they authored.
 3. Authoring a sortie shows it on the calendar. Month, week, and day each show that sortie when it falls in the visible range. Switching scope or period reads that range from the server.
 4. Reloading the app, and opening the calendar on a second session for the same user, shows that sortie from the server.
-5. Revising from the dialog changes what the calendar shows. Each author adds one `sortie.created` event. Each revise, including a drag, adds one `sortie.revised` event. Restarting the server keeps the sortie.
-6. The start and end pickers set the stored interval. A phone displays as `(555) 123-4567` and is stored as ten digits.
+5. Revising from the dialog changes what the calendar shows. Each author adds one `sortie.created` event. Each revise, including a drag, adds one `sortie.revised` event. A recompute after a ten-mile move adds one `sortie.schedule_computed` event and does not add `sortie.revised`. Restarting the server keeps the sortie and the cached window.
+6. Arrival date and arrival time share one row, and each takes half of that row. They are the only times the dialog sends. The calendar block uses the cached start and end. A phone displays as `(555) 123-4567` and is stored as ten digits.
 7. Origin and destination are required chosen places. A waypoint added between them is stored and returned in that order. A query that is not chosen does not become a stop.
-8. An empty label, an end that is not after the start, fewer than two chosen stops, or a phone number that is not ten digits creates no sortie and no event.
-9. Dragging a sortie on the week or day grid moves or resizes it, and the stored start and end match the drop, snapped to 15 minutes. Dragging a chip to another day on the month grid changes the dates and keeps the clock times. A failed drop leaves the previous times.
+8. An empty label, fewer than two chosen stops, a phone number that is not ten digits, or a missing location observation creates no sortie and no event. A failed routing call creates no sortie.
+9. Dragging a sortie on the week or day grid shifts the arrival, snapped to 15 minutes, and the server recomputes the cached start and end. The block cannot be resized. Dragging a chip to another day on the month grid shifts the arrival by whole days and keeps the clock time. A failed drop leaves the previous times.
 10. A missing, unknown, or revoked session is rejected on every endpoint in section 8. A session cannot revise another driver's sortie.
 11. After a successful read, when the server cannot be reached, the person can switch month, week, and day, move previous, next, and today, and open a day from the month grid or a week day heading. Cached sorties that fall on the visible days stay visible. The device does not apply an author, revise, or drag.
 12. When the server cannot be reached and no range is cached, the grid is shown and the screen says the calendar could not be loaded.
@@ -266,6 +278,8 @@ The slice works when all of the following are true on the local stack:
 14. On iOS and Android the calendar opens from the map and is unavailable during guidance and arrival. Guidance from slice 002 is unchanged. On web the calendar opens from the signed-in screen, which still shows identity, live-connection state, and sign out.
 15. The persisted sortie has its own id, type `task`, a company of record, an authoring driver, and its own stop rows. The database has no appointment table.
 16. The flow runs with `pnpm dev:server` and `pnpm dev:mobile` on web, and with the local development build on iOS and Android. No EAS build and no store build are required.
+17. Tapping a sortie opens a summary of the label, the arrival, the cached start, the cached end, the passenger fields, and the stops. Revise on that summary opens the dialog.
+18. A fix within ten miles of the last computation leaves the cached window. A fix at least ten miles away recomputes a sortie whose cached end is still in the future. An ended sortie is left unchanged.
 
 ---
 
@@ -276,7 +290,8 @@ The slice works when all of the following are true on the local stack:
 - Cancellation
 - Duty, availability, dispatch shifts, duty shifts, and vehicle assignment
 - Sortie types other than `task`, and a type registry
-- A driving route computed from these stops, and opening guidance for a sortie or a stop
+- Driving-route geometry from these stops, and opening guidance for a sortie or a stop
+- Background location, and stopping GPS reports while off duty
 - All-day sorties, recurrence, reminders, more than one calendar, colors, guests, and search
 - Conflict detection, feasibility, and schedule margins
 - Another company's occupied time on this calendar

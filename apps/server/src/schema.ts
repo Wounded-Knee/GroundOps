@@ -1,4 +1,4 @@
-import { doublePrecision, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 type StoredStop = {
   label: string;
@@ -82,8 +82,12 @@ export const sortie = pgTable("sortie", {
     .references(() => driver.id),
   type: text("type").notNull(),
   label: text("label").notNull(),
+  arrivalAt: timestamp("arrival_at", { withTimezone: true, mode: "date" }).notNull(),
   scheduledStart: timestamp("scheduled_start", { withTimezone: true, mode: "date" }).notNull(),
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true, mode: "date" }).notNull(),
+  scheduleOriginLatitude: doublePrecision("schedule_origin_latitude"),
+  scheduleOriginLongitude: doublePrecision("schedule_origin_longitude"),
+  scheduleFailedAt: timestamp("schedule_failed_at", { withTimezone: true, mode: "date" }),
   passengerName: text("passenger_name"),
   passengerPhone: text("passenger_phone"),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
@@ -114,12 +118,29 @@ export const operationalEvent = pgTable("operational_event", {
     .notNull()
     .references(() => sortie.id),
   label: text("label").notNull(),
+  arrivalAt: timestamp("arrival_at", { withTimezone: true, mode: "date" }).notNull(),
   scheduledStart: timestamp("scheduled_start", { withTimezone: true, mode: "date" }).notNull(),
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true, mode: "date" }).notNull(),
   passengerName: text("passenger_name"),
   passengerPhone: text("passenger_phone"),
   stops: jsonb("stops").$type<StoredStop[]>().notNull().default([]),
 });
+
+/** Timestamped GPS fix from a driver's device. A track is not stored. */
+export const locationObservation = pgTable(
+  "location_observation",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    driverId: uuid("driver_id")
+      .notNull()
+      .references(() => driver.id),
+    observedAt: timestamp("observed_at", { withTimezone: true, mode: "date" }).notNull(),
+    latitude: doublePrecision("latitude").notNull(),
+    longitude: doublePrecision("longitude").notNull(),
+    accuracyMeters: doublePrecision("accuracy_meters"),
+  },
+  (table) => [index("location_observation_driver_id_observed_at_idx").on(table.driverId, table.observedAt)],
+);
 
 export const schema = {
   user,
@@ -131,4 +152,5 @@ export const schema = {
   sortie,
   sortieStop,
   operationalEvent,
+  locationObservation,
 };

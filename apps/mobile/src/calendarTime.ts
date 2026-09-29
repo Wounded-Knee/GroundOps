@@ -147,6 +147,13 @@ export function resizeEnd(start: Date, end: Date, minuteDelta: number): Interval
   return { start, end: next };
 }
 
+export function shiftArrival(arrival: Date, dayDelta: number, minuteDelta: number): Date | null {
+  if (dayDelta === 0 && minuteDelta === 0) {
+    return null;
+  }
+  return addMinutes(addDays(arrival, dayDelta), minuteDelta);
+}
+
 export function shiftIntervalDays(start: Date, end: Date, dayDelta: number): Interval | null {
   if (dayDelta === 0) {
     return null;

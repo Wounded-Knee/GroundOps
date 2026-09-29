@@ -6,6 +6,8 @@ const routesUrl = "https://routes.googleapis.com/directions/v2:computeRoutes";
 const suggestionLimit = 5;
 const biasRadiusMeters = 50_000;
 
+const durationFieldMask = "routes.duration";
+
 const routeFieldMask = [
   "routes.duration",
   "routes.distanceMeters",
@@ -93,6 +95,53 @@ export async function computeDrivingRoute(
   } catch {
     return "failed";
   }
+}
+
+/** Traffic-aware drive time for a departure, including intermediate stops. Geometry is not requested. */
+export async function computeDriveDuration(
+  origin: GeoCoordinate,
+  destination: GeoCoordinate,
+  intermediates: GeoCoordinate[],
+  departureTime: Date,
+  client: Partial<GoogleClient> = {},
+): Promise<number | "no-route" | "failed"> {
+  const resolved = resolveClient(client);
+  if (resolved === "failed") {
+    return "failed";
+  }
+
+  try {
+    const response = await resolved.fetch(routesUrl, {
+      method: "POST",
+      headers: {
+        ...googleHeaders(resolved.apiKey),
+        "X-Goog-FieldMask": durationFieldMask,
+      },
+      body: JSON.stringify({
+        origin: latLngLocation(origin),
+        destination: latLngLocation(destination),
+        intermediates: intermediates.map((stop) => latLngLocation(stop)),
+        travelMode: "DRIVE",
+        routingPreference: "TRAFFIC_AWARE",
+        departureTime: departureTime.toISOString(),
+        computeAlternativeRoutes: false,
+      }),
+    });
+    if (!response.ok) {
+      return "failed";
+    }
+    return readRouteDuration(await response.json());
+  } catch {
+    return "failed";
+  }
+}
+
+export function readRouteDuration(body: unknown): number | "no-route" {
+  const route = firstRoute(body);
+  if (!route || (typeof route.duration !== "string" && typeof route.duration !== "number")) {
+    return "no-route";
+  }
+  return parseDurationSeconds(route.duration);
 }
 
 export function mapGoogleRoute(body: unknown): DrivingRoute | "no-route" {

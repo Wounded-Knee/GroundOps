@@ -102,6 +102,7 @@ export type Sortie = {
   id: string;
   type: typeof taskSortieType;
   label: string;
+  arrivalAt: string;
   scheduledStart: string;
   scheduledEnd: string;
   passengerName: string | null;
@@ -111,11 +112,17 @@ export type Sortie = {
 
 export type SortieWriteRequest = {
   label: string;
-  scheduledStart: string;
-  scheduledEnd: string;
+  arrivalAt: string;
   passengerName: string | null;
   passengerPhone: string | null;
   stops: SortieStop[];
+};
+
+export type LocationObservationRequest = {
+  observedAt: string;
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number | null;
 };
 
 export type CalendarResponse = {

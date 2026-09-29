@@ -8,7 +8,7 @@
 
 **Purpose:** A signed-in person can search for a place on the phone and follow full-screen driving guidance to it.
 
-This document is the implementation boundary. Sorties, persisted location observations, and a second routing provider stay outside this slice. Technical Architecture section 8 leaves the on-device map toolkit to the navigation slice. This slice chooses `expo-maps`.
+This document is the implementation boundary. Sorties and a second routing provider stay outside this slice. Persisted location observations are written by the calendar slice, not by guidance. Technical Architecture section 8 leaves the on-device map toolkit to the navigation slice. This slice chooses `expo-maps`.
 
 A later slice that navigates a sortie reuses this screen and this route result. It does not introduce a second navigation model.
 
@@ -110,7 +110,7 @@ The maneuver is one of:
 
 The client reads the device location to place the person on the map, to choose the route origin, to advance the current step, and to notice that the person has left the route.
 
-A fix used for that purpose is not a **location observation**. This slice does not write location observations. Off-duty and on-duty GPS rules do not apply, because this slice has no duty state.
+A fix used for the map and for guidance is not, by that use, a **location observation**. This slice does not write location observations. The calendar slice does, from the signed-in app. Off-duty and on-duty GPS rules do not apply here, because this slice has no duty state.
 
 ---
 
@@ -230,8 +230,8 @@ The slice works when all of the following are true on the local stack:
 # 12. Remains unimplemented
 
 - Sorties, commencement, and completion
-- Persisted location observations, and background location
-- Alternative routes, multi-stop routes, and avoid-tolls or avoid-highways
+- Background location. Persisted location observations, and the multi-stop traffic-aware duration used for a sortie window, are slice 003. Guidance here remains a single origin and destination
+- Alternative routes, and avoid-tolls or avoid-highways
 - Lane guidance, speed limits, and offline maps
 - Walking, transit, and Street View
 - Traffic reports, and any traffic duration other than the single duration on the route response
