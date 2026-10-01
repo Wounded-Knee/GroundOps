@@ -1,13 +1,28 @@
 import type { Sortie, SortieWriteRequest } from "@groundops/contracts";
+import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { useEffect, useRef, useState } from "react";
-import { AppState, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Alert,
+  AppState,
+  PanResponder,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type GestureResponderEvent,
+  type NativeSyntheticEvent,
+  type NativeScrollEvent,
+} from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { readCalendarCache, writeCalendarCache } from "./calendarCache";
 import { authorSortie, ensureCurrentDriver, requestCalendar, requestTariff, reviseSortie } from "./calendarClient";
 import {
   blockOnDay,
   calendarDayDelta,
+  clampHourHeight,
   dayDeltaFromPixels,
   formatUsPhone,
   hourHeight,
@@ -87,20 +102,105 @@ export function CalendarScreen({
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const [screen, setScreen] = useState<Ready>(() => emptyCalendar(new Date()));
+  const [hourPx, setHourPx] = useState(hourHeight);
+  const [now, setNow] = useState(() => new Date());
   const generation = useRef(0);
   const saving = useRef(false);
   const gridRef = useRef<View>(null);
   const gridBox = useRef<GridBox | null>(null);
   const columnWidth = useRef(0);
   const hourScroll = useRef<ScrollView>(null);
+  const hourFrameRef = useRef<View>(null);
+  const hourPxRef = useRef(hourHeight);
+  const scrollYRef = useRef(0);
+  const hourFrameBox = useRef({ y: 0, height: 0 });
+  const pinch = useRef({
+    active: false,
+    startDist: 0,
+    startHourPx: hourHeight,
+    startScrollY: 0,
+    focalInView: 0,
+  });
+
+  hourPxRef.current = hourPx;
 
   const shown = useRef({ scope: screen.scope, anchor: screen.anchor, live: screen.live });
   shown.current = { scope: screen.scope, anchor: screen.anchor, live: screen.live };
+
+  function applyHourZoom(nextHourPx: number, startHourPx: number, startScrollY: number, focalInView: number): void {
+    const clamped = clampHourHeight(nextHourPx);
+    if (clamped === hourPxRef.current) {
+      return;
+    }
+    const nextScroll = Math.max(0, (startScrollY + focalInView) * (clamped / startHourPx) - focalInView);
+    setHourPx(clamped);
+    hourPxRef.current = clamped;
+    scrollYRef.current = nextScroll;
+    hourScroll.current?.scrollTo({ y: nextScroll, animated: false });
+  }
+
+  const pinchResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (event) => (event.nativeEvent.touches?.length ?? 0) >= 2,
+      onMoveShouldSetPanResponderCapture: (event) => (event.nativeEvent.touches?.length ?? 0) >= 2,
+      onPanResponderGrant: (event) => beginPinch(event),
+      onPanResponderMove: (event) => {
+        const touches = event.nativeEvent.touches;
+        if ((touches?.length ?? 0) >= 2 && !pinch.current.active) {
+          beginPinch(event);
+        }
+        if (!pinch.current.active || pinch.current.startDist <= 0) {
+          return;
+        }
+        const dist = touchDistance(touches);
+        if (dist <= 0) {
+          return;
+        }
+        applyHourZoom(
+          pinch.current.startHourPx * (dist / pinch.current.startDist),
+          pinch.current.startHourPx,
+          pinch.current.startScrollY,
+          pinch.current.focalInView,
+        );
+      },
+      onPanResponderRelease: () => {
+        pinch.current.active = false;
+      },
+      onPanResponderTerminate: () => {
+        pinch.current.active = false;
+      },
+    }),
+  ).current;
+
+  function beginPinch(event: GestureResponderEvent): void {
+    const touches = event.nativeEvent.touches;
+    if ((touches?.length ?? 0) < 2) {
+      return;
+    }
+    const dist = touchDistance(touches);
+    if (dist <= 0) {
+      return;
+    }
+    const midY = (touches[0]!.pageY + touches[1]!.pageY) / 2;
+    pinch.current = {
+      active: true,
+      startDist: dist,
+      startHourPx: hourPxRef.current,
+      startScrollY: scrollYRef.current,
+      focalInView: Math.max(0, midY - hourFrameBox.current.y),
+    };
+  }
 
   useEffect(() => {
     const current = ++generation.current;
     void load("month", new Date(), current);
   }, [token, userId]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (reloadToken === 0) {
@@ -343,40 +443,65 @@ export function CalendarScreen({
     if (!ready || ready.scope === "month") {
       return;
     }
-    hourScroll.current?.scrollTo({ y: 7 * hourHeight, animated: false });
+    const y = 7 * hourPxRef.current;
+    scrollYRef.current = y;
+    hourScroll.current?.scrollTo({ y, animated: false });
   }, [ready?.scope, ready?.anchor]);
+
+  function confirmArrivalChange(readyState: Ready, sortie: Sortie, arrival: Date): void {
+    const whenLabel = arrival.toLocaleString([], {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    const message = `Move “${sortieTitle(sortie)}” to ${whenLabel}?`;
+    confirmChange(message, () => {
+      void commit(readyState, sortie.id, writeFrom(sortie, arrival));
+    });
+  }
 
   return (
     <View style={styles.screen}>
       <View style={styles.body}>
           <Text style={styles.period}>{periodLabel(ready.scope, ready.anchor)}</Text>
-          <View style={styles.row}>
-            {(["month", "week", "day"] as const).map((scope) => (
+          <View style={styles.toolbar}>
+            <View style={styles.toolbarGroup}>
+              {(["month", "week", "day"] as const).map((scope) => (
+                <Pressable
+                  key={scope}
+                  accessibilityLabel={scopeLabel(scope)}
+                  onPress={() => showPeriod(scope, ready.anchor)}
+                  style={[styles.iconButton, ready.scope === scope ? styles.selected : null]}
+                >
+                  <Ionicons name={scopeIcon(scope)} size={20} color={colors.text} />
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.toolbarGroup}>
               <Pressable
-                key={scope}
-                onPress={() => showPeriod(scope, ready.anchor)}
-                style={[styles.secondary, ready.scope === scope ? styles.selected : null]}
+                accessibilityLabel="Previous"
+                onPress={() => showPeriod(ready.scope, shiftAnchor(ready.scope, ready.anchor, -1))}
+                style={styles.iconButton}
               >
-                <Text style={styles.secondaryText}>{scopeLabel(scope)}</Text>
+                <Ionicons name="chevron-back" size={20} color={colors.text} />
               </Pressable>
-            ))}
-          </View>
-          <View style={styles.row}>
-            <Pressable
-              onPress={() => showPeriod(ready.scope, shiftAnchor(ready.scope, ready.anchor, -1))}
-              style={styles.secondary}
-            >
-              <Text style={styles.secondaryText}>Previous</Text>
-            </Pressable>
-            <Pressable onPress={() => showPeriod(ready.scope, new Date())} style={styles.secondary}>
-              <Text style={styles.secondaryText}>Today</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => showPeriod(ready.scope, shiftAnchor(ready.scope, ready.anchor, 1))}
-              style={styles.secondary}
-            >
-              <Text style={styles.secondaryText}>Next</Text>
-            </Pressable>
+              <Pressable
+                accessibilityLabel="Today"
+                onPress={() => showPeriod(ready.scope, new Date())}
+                style={styles.iconButton}
+              >
+                <Ionicons name="today-outline" size={20} color={colors.text} />
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Next"
+                onPress={() => showPeriod(ready.scope, shiftAnchor(ready.scope, ready.anchor, 1))}
+                style={styles.iconButton}
+              >
+                <Ionicons name="chevron-forward" size={20} color={colors.text} />
+              </Pressable>
+            </View>
           </View>
           {ready.message ? <Text style={styles.message}>{ready.message}</Text> : null}
           {ready.scope === "month" ? (
@@ -425,7 +550,7 @@ export function CalendarScreen({
                             if (!arrival) {
                               return;
                             }
-                            void commit(ready, sortie.id, writeFrom(sortie, arrival));
+                            confirmArrivalChange(ready, sortie, arrival);
                           }}
                         />
                       ))}
@@ -435,7 +560,21 @@ export function CalendarScreen({
               </View>
             </ScrollView>
           ) : (
-            <View style={styles.hourFrame}>
+            <View
+              ref={hourFrameRef}
+              style={styles.hourFrame}
+              onLayout={() => {
+                hourFrameRef.current?.measureInWindow((_x, y, _width, height) => {
+                  hourFrameBox.current = { y, height };
+                });
+              }}
+              {...pinchResponder.panHandlers}
+              {...webPinchWheelProps((deltaY) => {
+                const startHourPx = hourPxRef.current;
+                const factor = deltaY < 0 ? 1.08 : 1 / 1.08;
+                applyHourZoom(startHourPx * factor, startHourPx, scrollYRef.current, hourFrameBox.current.height / 2);
+              })}
+            >
               <View style={styles.dayHeader}>
                 <View style={styles.hourGutter} />
                 {days.map((day) =>
@@ -455,11 +594,18 @@ export function CalendarScreen({
                   ),
                 )}
               </View>
-              <ScrollView ref={hourScroll} style={styles.gridScroll}>
-                <View style={styles.hourRow}>
+              <ScrollView
+                ref={hourScroll}
+                style={styles.gridScroll}
+                onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => {
+                  scrollYRef.current = event.nativeEvent.contentOffset.y;
+                }}
+                scrollEventThrottle={16}
+              >
+                <View style={[styles.hourRow, { height: 24 * hourPx }]}>
                   <View style={styles.hourGutter}>
                     {hours.map((hour) => (
-                      <Text key={hour} style={styles.hourLabel}>
+                      <Text key={hour} style={[styles.hourLabel, { height: hourPx }]}>
                         {hourLabel(hour)}
                       </Text>
                     ))}
@@ -467,7 +613,7 @@ export function CalendarScreen({
                   {days.map((day) => (
                     <View
                       key={day.toDateString()}
-                      style={styles.dayColumn}
+                      style={[styles.dayColumn, { height: 24 * hourPx }]}
                       onLayout={(event) => {
                         columnWidth.current = event.nativeEvent.layout.width;
                       }}
@@ -479,13 +625,13 @@ export function CalendarScreen({
                           onPress={() => {
                             openDialog(ready, dialogForCreate(hourSlot(day, hour).start));
                           }}
-                          style={styles.hourSlot}
+                          style={[styles.hourSlot, { height: hourPx }]}
                         />
                       ))}
                       {ready.sorties.map((sortie) => {
                         const start = new Date(sortie.scheduledStart);
                         const end = new Date(sortie.scheduledEnd);
-                        const block = blockOnDay(start, end, day);
+                        const block = blockOnDay(start, end, day, hourPx);
                         if (!block) {
                           return null;
                         }
@@ -495,6 +641,7 @@ export function CalendarScreen({
                             label={sortieTitle(sortie)}
                             top={block.top}
                             height={block.height}
+                            hourPx={hourPx}
                             enabled={ready.live && !ready.dialog && !ready.summary}
                             allowDayShift={ready.scope === "week"}
                             columnWidth={() => columnWidth.current}
@@ -502,7 +649,7 @@ export function CalendarScreen({
                             onMove={(dayDelta, minuteDelta) => {
                               const arrival = shiftArrival(new Date(sortie.arrivalAt), dayDelta, minuteDelta);
                               if (arrival) {
-                                void commit(ready, sortie.id, writeFrom(sortie, arrival));
+                                confirmArrivalChange(ready, sortie, arrival);
                               }
                             }}
                           />
@@ -510,20 +657,16 @@ export function CalendarScreen({
                       })}
                     </View>
                   ))}
+                  {days.some((day) => sameLocalDay(day, now)) ? (
+                    <View pointerEvents="none" style={[styles.nowLine, { top: nowLineTop(now, hourPx) }]}>
+                      <View style={styles.nowDot} />
+                      <View style={styles.nowStroke} />
+                    </View>
+                  ) : null}
                 </View>
               </ScrollView>
             </View>
           )}
-          {ready.live && !ready.dialog && !ready.summary ? (
-            <Pressable
-              style={styles.primary}
-              onPress={() => {
-                openDialog(ready, dialogForCreate(null));
-              }}
-            >
-              <Text style={styles.primaryText}>Author sortie</Text>
-            </Pressable>
-          ) : null}
           {ready.dialog ? (
             <SortieDialog
               draft={ready.dialog}
@@ -626,6 +769,57 @@ function scopeLabel(scope: CalendarScope): string {
     return "Week";
   }
   return "Day";
+}
+
+function nowLineTop(now: Date, pixelsPerHour: number): number {
+  return ((now.getHours() * 60 + now.getMinutes()) / 60) * pixelsPerHour;
+}
+
+function scopeIcon(scope: CalendarScope): keyof typeof Ionicons.glyphMap {
+  if (scope === "month") {
+    return "calendar";
+  }
+  if (scope === "week") {
+    return "calendar-outline";
+  }
+  return "square-outline";
+}
+
+function touchDistance(touches: GestureResponderEvent["nativeEvent"]["touches"]): number {
+  if (!touches || touches.length < 2) {
+    return 0;
+  }
+  const a = touches[0]!;
+  const b = touches[1]!;
+  return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
+}
+
+function confirmChange(message: string, onConfirm: () => void): void {
+  if (Platform.OS === "web") {
+    if (typeof globalThis.confirm === "function" && globalThis.confirm(message)) {
+      onConfirm();
+    }
+    return;
+  }
+  Alert.alert("Confirm change", message, [
+    { text: "Cancel", style: "cancel" },
+    { text: "Confirm", onPress: onConfirm },
+  ]);
+}
+
+function webPinchWheelProps(onZoom: (deltaY: number) => void): Record<string, unknown> {
+  if (Platform.OS !== "web") {
+    return {};
+  }
+  return {
+    onWheel: (event: { ctrlKey?: boolean; metaKey?: boolean; deltaY: number; preventDefault?: () => void }) => {
+      if (!event.ctrlKey && !event.metaKey) {
+        return;
+      }
+      event.preventDefault?.();
+      onZoom(event.deltaY);
+    },
+  };
 }
 
 function MonthChip({
@@ -743,6 +937,7 @@ function HourBlock({
   label,
   top,
   height,
+  hourPx,
   enabled,
   allowDayShift,
   columnWidth,
@@ -752,6 +947,7 @@ function HourBlock({
   label: string;
   top: number;
   height: number;
+  hourPx: number;
   enabled: boolean;
   allowDayShift: boolean;
   columnWidth: () => number;
@@ -762,8 +958,8 @@ function HourBlock({
   const styles = createStyles(colors);
   const [shift, setShift] = useState({ x: 0, y: 0 });
   const grant = useRef({ x: 0, y: 0 });
-  const latest = useRef({ enabled, allowDayShift, columnWidth, onOpen, onMove });
-  latest.current = { enabled, allowDayShift, columnWidth, onOpen, onMove };
+  const latest = useRef({ enabled, allowDayShift, columnWidth, onOpen, onMove, hourPx });
+  latest.current = { enabled, allowDayShift, columnWidth, onOpen, onMove, hourPx };
 
   const moveResponder = useRef(
     PanResponder.create({
@@ -776,10 +972,10 @@ function HourBlock({
         const dx = event.nativeEvent.pageX - grant.current.x;
         const dy = event.nativeEvent.pageY - grant.current.y;
         const dayDelta = latest.current.allowDayShift ? dayDeltaFromPixels(dx, latest.current.columnWidth()) : 0;
-        const minuteDelta = minuteDeltaFromPixels(dy);
+        const minuteDelta = minuteDeltaFromPixels(dy, latest.current.hourPx);
         setShift({
           x: dayDelta * latest.current.columnWidth(),
-          y: (minuteDelta / 60) * hourHeight,
+          y: (minuteDelta / 60) * latest.current.hourPx,
         });
       },
       onPanResponderRelease: (event) => {
@@ -791,7 +987,7 @@ function HourBlock({
           return;
         }
         const dayDelta = latest.current.allowDayShift ? dayDeltaFromPixels(dx, latest.current.columnWidth()) : 0;
-        latest.current.onMove(dayDelta, minuteDeltaFromPixels(dy));
+        latest.current.onMove(dayDelta, minuteDeltaFromPixels(dy, latest.current.hourPx));
       },
       onPanResponderTerminate: () => setShift({ x: 0, y: 0 }),
     }),
@@ -828,10 +1024,24 @@ function createStyles(colors: ThemeColors) {
       marginTop: 4,
       color: colors.text,
     },
-    row: {
+    toolbar: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginTop: 12,
+    },
+    toolbarGroup: {
       flexDirection: "row",
       gap: 8,
-      marginTop: 12,
+    },
+    iconButton: {
+      backgroundColor: colors.surfaceMuted,
+      borderRadius: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: 40,
     },
     gridScroll: {
       flex: 1,
@@ -913,23 +1123,41 @@ function createStyles(colors: ThemeColors) {
     },
     hourRow: {
       flexDirection: "row",
+      position: "relative",
+    },
+    nowLine: {
+      position: "absolute",
+      left: 44,
+      right: 0,
+      flexDirection: "row",
+      alignItems: "center",
+      zIndex: 2,
+    },
+    nowDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: "#E53935",
+      marginLeft: -4,
+    },
+    nowStroke: {
+      flex: 1,
+      height: 2,
+      backgroundColor: "#E53935",
     },
     hourGutter: {
       width: 52,
     },
     hourLabel: {
-      height: hourHeight,
       fontSize: 11,
       color: colors.textSecondary,
     },
     dayColumn: {
       flex: 1,
-      height: 24 * hourHeight,
       borderLeftWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
     },
     hourSlot: {
-      height: hourHeight,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
     },

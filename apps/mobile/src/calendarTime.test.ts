@@ -3,7 +3,10 @@ import { describe, it } from "node:test";
 import {
   blockOnDay,
   calendarDayDelta,
+  clampHourHeight,
   formatUsPhone,
+  hourHeightMax,
+  hourHeightMin,
   minuteDeltaFromPixels,
   moveInterval,
   phoneDigits,
@@ -67,6 +70,15 @@ describe("calendar time", () => {
     assert.equal(block?.top, 9 * 64);
     assert.equal(block?.height, 64);
     assert.equal(blockOnDay(new Date(2026, 8, 27, 9, 0), new Date(2026, 8, 27, 10, 0), new Date(2026, 8, 28)), null);
+    const zoomed = blockOnDay(new Date(2026, 8, 28, 9, 0), new Date(2026, 8, 28, 10, 0), new Date(2026, 8, 28, 12), 128);
+    assert.equal(zoomed?.top, 9 * 128);
+    assert.equal(zoomed?.height, 128);
+  });
+
+  it("clamps the hour scale used for pinch zoom", () => {
+    assert.equal(clampHourHeight(hourHeightMin - 10), hourHeightMin);
+    assert.equal(clampHourHeight(hourHeightMax + 10), hourHeightMax);
+    assert.equal(clampHourHeight(80), 80);
   });
 
   it("formats a US phone and keeps ten digits", () => {

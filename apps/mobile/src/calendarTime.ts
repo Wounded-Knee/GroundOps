@@ -1,7 +1,13 @@
 export type CalendarScope = "month" | "week" | "day";
 
 export const hourHeight = 64;
+export const hourHeightMin = 32;
+export const hourHeightMax = 160;
 export const snapMinutes = 15;
+
+export function clampHourHeight(value: number): number {
+  return Math.min(hourHeightMax, Math.max(hourHeightMin, value));
+}
 
 export function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -100,8 +106,8 @@ export function calendarDayDelta(from: Date, to: Date): number {
   return Math.round((end - start) / 86_400_000);
 }
 
-export function minuteDeltaFromPixels(dy: number): number {
-  return Math.round(((dy / hourHeight) * 60) / snapMinutes) * snapMinutes;
+export function minuteDeltaFromPixels(dy: number, pixelsPerHour = hourHeight): number {
+  return Math.round(((dy / pixelsPerHour) * 60) / snapMinutes) * snapMinutes;
 }
 
 export function dayDeltaFromPixels(dx: number, columnWidth: number): number {
@@ -179,7 +185,12 @@ export function hourSlot(day: Date, hour: number): Interval {
   return { start, end: new Date(start.getTime() + 60 * 60 * 1000) };
 }
 
-export function blockOnDay(start: Date, end: Date, day: Date): { top: number; height: number } | null {
+export function blockOnDay(
+  start: Date,
+  end: Date,
+  day: Date,
+  pixelsPerHour = hourHeight,
+): { top: number; height: number } | null {
   const dayStart = startOfDay(day);
   const dayEnd = addDays(dayStart, 1);
   if (end.getTime() <= dayStart.getTime() || start.getTime() >= dayEnd.getTime()) {
@@ -189,8 +200,8 @@ export function blockOnDay(start: Date, end: Date, day: Date): { top: number; he
   const visibleEnd = end.getTime() > dayEnd.getTime() ? dayEnd : end;
   const startMinutes = visibleStart.getTime() === dayStart.getTime() ? 0 : visibleStart.getHours() * 60 + visibleStart.getMinutes();
   const endMinutes = visibleEnd.getTime() === dayEnd.getTime() ? 24 * 60 : visibleEnd.getHours() * 60 + visibleEnd.getMinutes();
-  const top = (startMinutes / 60) * hourHeight;
-  const height = Math.max(((endMinutes - startMinutes) / 60) * hourHeight, 32);
+  const top = (startMinutes / 60) * pixelsPerHour;
+  const height = Math.max(((endMinutes - startMinutes) / 60) * pixelsPerHour, 32);
   return { top, height };
 }
 
