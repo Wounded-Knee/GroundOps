@@ -1,10 +1,11 @@
-import type { Tariff } from "@groundops/contracts";
+import type { GeoCoordinate, Tariff } from "@groundops/contracts";
 import Slider from "@react-native-community/slider";
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import type { AppearancePreference } from "./appearancePrefs";
 import { ensureCurrentDriver, requestTariff, saveTariff } from "./calendarClient";
+import { GeofenceEditor } from "./GeofenceEditor";
 import {
   defaultGuidanceCameraPrefs,
   ensureGuidanceCameraPrefsLoaded,
@@ -19,6 +20,10 @@ import type { ThemeColors } from "./theme";
 const apiUrl = resolveApiUrl();
 const couldNotLoad = "The tariff could not be loaded.";
 const notSaved = "The tariff was not saved.";
+
+/** Temporary preview starts empty so the editor centers on GPS. */
+const sampleGeofenceRing: GeoCoordinate[] = [];
+
 
 const appearanceOptions: { value: AppearancePreference; label: string }[] = [
   { value: "dark", label: "Dark Mode" },
@@ -48,6 +53,8 @@ export function SettingsScreen({
   const [editable, setEditable] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingCamera, setSavingCamera] = useState(false);
+  const [heldGeofence, setHeldGeofence] = useState<GeoCoordinate[]>(sampleGeofenceRing);
+  const [geofenceOpen, setGeofenceOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +139,26 @@ export function SettingsScreen({
     setTilt(saved.tilt);
   }
 
+  if (geofenceOpen && Platform.OS !== "web") {
+    return (
+      <View style={styles.geofenceCover}>
+        <GeofenceEditor
+          ring={heldGeofence}
+          onCancel={() => setGeofenceOpen(false)}
+          onSave={(next) => {
+            if (next === "invalid") {
+              setMessage("A geofence needs at least three vertices.");
+              return;
+            }
+            setHeldGeofence(next);
+            setGeofenceOpen(false);
+            setMessage(`Geofence preview saved (${next.length} vertices). Not persisted.`);
+          }}
+        />
+      </View>
+    );
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Settings</Text>
@@ -195,6 +222,17 @@ export function SettingsScreen({
       >
         <Text style={styles.saveButtonText}>Save tariff</Text>
       </Pressable>
+      {Platform.OS !== "web" ? (
+        <>
+          <Text style={styles.section}>Geofence (temporary preview)</Text>
+          <Text style={styles.previewHint}>
+            Opens empty on your GPS. Tap to add points, drag dots to move them. Save returns coordinates only.
+          </Text>
+          <Pressable style={[styles.button, styles.save]} onPress={() => setGeofenceOpen(true)}>
+            <Text style={styles.saveButtonText}>Edit geofence</Text>
+          </Pressable>
+        </>
+      ) : null}
       {message ? <Text style={styles.message}>{message}</Text> : null}
       {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
       <Pressable style={styles.button} onPress={onSignOut}>
@@ -320,6 +358,15 @@ function createStyles(colors: ThemeColors) {
       justifyContent: "center",
       alignItems: "stretch",
       gap: 12,
+    },
+    geofenceCover: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    previewHint: {
+      fontSize: 13,
+      color: colors.textMuted,
+      marginBottom: 4,
     },
     title: {
       fontSize: 24,
