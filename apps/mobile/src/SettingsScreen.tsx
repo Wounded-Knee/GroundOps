@@ -3,6 +3,7 @@ import Slider from "@react-native-community/slider";
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
+import type { AppearancePreference } from "./appearancePrefs";
 import { ensureCurrentDriver, requestTariff, saveTariff } from "./calendarClient";
 import {
   defaultGuidanceCameraPrefs,
@@ -12,10 +13,18 @@ import {
   normalizeGuidanceCameraPrefs,
   saveGuidanceCameraPrefs,
 } from "./guidanceCameraPrefs";
+import { useTheme } from "./ThemeProvider";
+import type { ThemeColors } from "./theme";
 
 const apiUrl = resolveApiUrl();
 const couldNotLoad = "The tariff could not be loaded.";
 const notSaved = "The tariff was not saved.";
+
+const appearanceOptions: { value: AppearancePreference; label: string }[] = [
+  { value: "dark", label: "Dark Mode" },
+  { value: "light", label: "Light Mode" },
+  { value: "system", label: "OS Default" },
+];
 
 export function SettingsScreen({
   token,
@@ -28,6 +37,8 @@ export function SettingsScreen({
   onSignOut: () => void;
   onUnauthorized: () => void;
 }) {
+  const { colors, preference, setPreference } = useTheme();
+  const styles = createStyles(colors);
   const [flagText, setFlagText] = useState("");
   const [mileText, setMileText] = useState("");
   const [waitText, setWaitText] = useState("");
@@ -124,6 +135,25 @@ export function SettingsScreen({
   return (
     <ScrollView contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Settings</Text>
+      <Text style={styles.section}>Appearance</Text>
+      <View style={styles.appearanceRow}>
+        {appearanceOptions.map((option) => {
+          const selected = preference === option.value;
+          return (
+            <Pressable
+              key={option.value}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              onPress={() => setPreference(option.value)}
+              style={[styles.appearanceOption, selected ? styles.appearanceOptionSelected : null]}
+            >
+              <Text style={[styles.appearanceOptionText, selected ? styles.appearanceOptionTextSelected : null]}>
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
       <Text style={styles.section}>Guidance camera</Text>
       <View style={styles.row}>
         <SliderField
@@ -150,7 +180,7 @@ export function SettingsScreen({
         disabled={savingCamera}
         onPress={() => void onSaveCamera()}
       >
-        <Text style={styles.buttonText}>Save camera</Text>
+        <Text style={styles.saveButtonText}>Save camera</Text>
       </Pressable>
       <Text style={styles.section}>Meter tariff</Text>
       <View style={styles.row}>
@@ -163,7 +193,7 @@ export function SettingsScreen({
         disabled={!editable || saving}
         onPress={() => void onSave()}
       >
-        <Text style={styles.buttonText}>Save tariff</Text>
+        <Text style={styles.saveButtonText}>Save tariff</Text>
       </Pressable>
       {message ? <Text style={styles.message}>{message}</Text> : null}
       {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
@@ -191,6 +221,8 @@ function SliderField({
   formatValue: (value: number) => string;
   onChange: (value: number) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <View style={styles.field}>
       <Text style={styles.label}>
@@ -205,9 +237,9 @@ function SliderField({
         minimumValue={minimumValue}
         maximumValue={maximumValue}
         step={step}
-        minimumTrackTintColor="#1A73E8"
-        maximumTrackTintColor="#ccc"
-        thumbTintColor="#1A73E8"
+        minimumTrackTintColor={colors.accent}
+        maximumTrackTintColor={colors.border}
+        thumbTintColor={colors.accent}
         onValueChange={onChange}
       />
     </View>
@@ -225,6 +257,8 @@ function Field({
   editable: boolean;
   onChange: (value: string) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
@@ -233,6 +267,7 @@ function Field({
         value={value}
         editable={editable}
         keyboardType="decimal-pad"
+        placeholderTextColor={colors.textMuted}
         onChangeText={onChange}
       />
     </View>
@@ -276,82 +311,118 @@ function formatTilt(value: number): string {
   return `${Math.round(value)}°`;
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    flexGrow: 1,
-    backgroundColor: "#fff",
-    padding: 24,
-    justifyContent: "center",
-    alignItems: "stretch",
-    gap: 12,
-  },
-  title: {
-    fontSize: 24,
-    marginBottom: 8,
-    textAlign: "center",
-  },
-  section: {
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 4,
-    marginTop: 8,
-  },
-  row: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 10,
-  },
-  field: {
-    flex: 1,
-    gap: 4,
-    minWidth: 0,
-  },
-  label: {
-    fontSize: 13,
-    color: "#444",
-  },
-  rangeHint: {
-    fontSize: 12,
-    color: "#888",
-  },
-  slider: {
-    width: "100%",
-    height: 40,
-  },
-  input: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 16,
-    backgroundColor: "#fff",
-  },
-  inputDisabled: {
-    backgroundColor: "#f5f5f5",
-    color: "#888",
-  },
-  message: {
-    textAlign: "center",
-    fontSize: 16,
-    color: "#444",
-  },
-  button: {
-    backgroundColor: "#111",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  save: {
-    backgroundColor: "#1A73E8",
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    screen: {
+      flexGrow: 1,
+      backgroundColor: colors.background,
+      padding: 24,
+      justifyContent: "center",
+      alignItems: "stretch",
+      gap: 12,
+    },
+    title: {
+      fontSize: 24,
+      marginBottom: 8,
+      textAlign: "center",
+      color: colors.text,
+    },
+    section: {
+      fontSize: 16,
+      fontWeight: "600",
+      marginBottom: 4,
+      marginTop: 8,
+      color: colors.text,
+    },
+    appearanceRow: {
+      flexDirection: "row",
+      gap: 8,
+    },
+    appearanceOption: {
+      flex: 1,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingVertical: 12,
+      paddingHorizontal: 6,
+      alignItems: "center",
+      backgroundColor: colors.surface,
+    },
+    appearanceOptionSelected: {
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
+    },
+    appearanceOptionText: {
+      fontSize: 13,
+      textAlign: "center",
+      color: colors.text,
+    },
+    appearanceOptionTextSelected: {
+      color: "#fff",
+      fontWeight: "600",
+    },
+    row: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+    },
+    field: {
+      flex: 1,
+      gap: 4,
+      minWidth: 0,
+    },
+    label: {
+      fontSize: 13,
+      color: colors.textSecondary,
+    },
+    rangeHint: {
+      fontSize: 12,
+      color: colors.textMuted,
+    },
+    slider: {
+      width: "100%",
+      height: 40,
+    },
+    input: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 10,
+      fontSize: 16,
+      backgroundColor: colors.surface,
+      color: colors.text,
+    },
+    inputDisabled: {
+      backgroundColor: colors.inputDisabled,
+      color: colors.textMuted,
+    },
+    message: {
+      textAlign: "center",
+      fontSize: 16,
+      color: colors.textSecondary,
+    },
+    button: {
+      backgroundColor: colors.primary,
+      paddingHorizontal: 20,
+      paddingVertical: 14,
+      borderRadius: 8,
+      alignItems: "center",
+      marginTop: 8,
+    },
+    save: {
+      backgroundColor: colors.accent,
+    },
+    disabled: {
+      opacity: 0.5,
+    },
+    buttonText: {
+      color: colors.primaryText,
+      fontSize: 16,
+    },
+    saveButtonText: {
+      color: "#fff",
+      fontSize: 16,
+    },
+  });
+}

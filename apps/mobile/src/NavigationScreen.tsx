@@ -5,6 +5,8 @@ import * as Speech from "expo-speech";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
+import { useTheme } from "./ThemeProvider";
+import type { ThemeColors } from "./theme";
 import { resolveApiUrl } from "./apiUrl";
 import { authorSortie, ensureCurrentDriver, reportLocationObservation, requestTariff } from "./calendarClient";
 import {
@@ -94,6 +96,8 @@ export function NavigationScreen({
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const mapRef = useRef<MapHandle>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
   const [query, setQuery] = useState("");
@@ -884,90 +888,98 @@ function arrivalLabel(nowMs: number, remainingSeconds: number): string {
   });
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: "#fff",
-  },
-  searchCard: {
-    margin: 12,
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#767676",
-    borderRadius: 12,
-    overflow: "hidden",
-  },
-  maneuverCard: {
-    marginHorizontal: 12,
-    marginTop: 8,
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-  },
-  maneuver: {
-    fontSize: 16,
-    color: "#333",
-  },
-  maneuverDistance: {
-    fontSize: 36,
-    fontWeight: "700",
-    marginTop: 4,
-  },
-  instruction: {
-    fontSize: 18,
-    marginTop: 4,
-  },
-  spacer: {
-    flex: 1,
-  },
-  sheet: {
-    margin: 12,
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 16,
-  },
-  destination: {
-    fontSize: 18,
-  },
-  summary: {
-    fontSize: 20,
-    marginTop: 6,
-  },
-  row: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 16,
-  },
-  primary: {
-    flex: 1,
-    backgroundColor: "#1A73E8",
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  primaryText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  secondary: {
-    flex: 1,
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: "center",
-    backgroundColor: "#eee",
-  },
-  secondaryText: {
-    fontSize: 18,
-  },
-  footer: {
-    alignItems: "center",
-    paddingBottom: 12,
-    gap: 8,
-  },
-  message: {
-    textAlign: "center",
-    fontSize: 16,
-    marginTop: 8,
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    screen: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    searchCard: {
+      margin: 12,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.borderStrong,
+      borderRadius: 12,
+      overflow: "hidden",
+    },
+    maneuverCard: {
+      marginHorizontal: 12,
+      marginTop: 8,
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 16,
+    },
+    maneuver: {
+      fontSize: 16,
+      color: colors.textSecondary,
+    },
+    maneuverDistance: {
+      fontSize: 36,
+      fontWeight: "700",
+      marginTop: 4,
+      color: colors.text,
+    },
+    instruction: {
+      fontSize: 18,
+      marginTop: 4,
+      color: colors.text,
+    },
+    spacer: {
+      flex: 1,
+    },
+    sheet: {
+      margin: 12,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      padding: 16,
+    },
+    destination: {
+      fontSize: 18,
+      color: colors.text,
+    },
+    summary: {
+      fontSize: 20,
+      marginTop: 6,
+      color: colors.text,
+    },
+    row: {
+      flexDirection: "row",
+      gap: 12,
+      marginTop: 16,
+    },
+    primary: {
+      flex: 1,
+      backgroundColor: colors.accent,
+      borderRadius: 10,
+      paddingVertical: 14,
+      alignItems: "center",
+    },
+    primaryText: {
+      color: "#fff",
+      fontSize: 18,
+      fontWeight: "600",
+    },
+    secondary: {
+      flex: 1,
+      borderRadius: 10,
+      paddingVertical: 14,
+      alignItems: "center",
+      backgroundColor: colors.surfaceMuted,
+    },
+    secondaryText: {
+      fontSize: 18,
+      color: colors.text,
+    },
+    footer: {
+      alignItems: "center",
+      paddingBottom: 12,
+      gap: 8,
+    },
+    message: {
+      textAlign: "center",
+      fontSize: 16,
+      marginTop: 8,
+      color: colors.text,
+    },
+  });
+}

@@ -1,6 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useTheme } from "./ThemeProvider";
+import type { ThemeColors } from "./theme";
 
 export type SignedInDestination = "navigation" | "calendar" | "settings";
 
@@ -15,6 +17,8 @@ export function BottomNav({
   onNavigate: (destination: SignedInDestination) => void;
   onCompose: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <View style={styles.bar}>
       <Tab
@@ -75,7 +79,9 @@ function Tab({
   onPress: () => void;
   icon: (color: string) => ReactNode;
 }) {
-  const color = active ? "#111" : "#666";
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
+  const color = active ? colors.text : colors.textMuted;
   return (
     <Pressable accessibilityLabel={label} onPress={onPress} style={styles.tab}>
       {icon(color)}
@@ -84,46 +90,48 @@ function Tab({
   );
 }
 
-const styles = StyleSheet.create({
-  bar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-around",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#ccc",
-    backgroundColor: "#fff",
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  tab: {
-    flex: 1,
-    alignItems: "center",
-    gap: 2,
-    paddingVertical: 4,
-  },
-  tabLabel: {
-    fontSize: 11,
-  },
-  plusHit: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: "#111",
-    alignItems: "center",
-    justifyContent: "center",
-    marginHorizontal: 8,
-  },
-  plusActive: {
-    backgroundColor: "#1A73E8",
-  },
-  plusText: {
-    color: "#fff",
-    fontSize: 32,
-    lineHeight: 34,
-    fontWeight: "400",
-    marginTop: -2,
-  },
-  plusTextActive: {
-    color: "#fff",
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    bar: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-around",
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+      backgroundColor: colors.surface,
+      paddingTop: 8,
+      paddingBottom: 4,
+    },
+    tab: {
+      flex: 1,
+      alignItems: "center",
+      gap: 2,
+      paddingVertical: 4,
+    },
+    tabLabel: {
+      fontSize: 11,
+    },
+    plusHit: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      backgroundColor: colors.primary,
+      alignItems: "center",
+      justifyContent: "center",
+      marginHorizontal: 8,
+    },
+    plusActive: {
+      backgroundColor: colors.accent,
+    },
+    plusText: {
+      color: colors.primaryText,
+      fontSize: 32,
+      lineHeight: 34,
+      fontWeight: "400",
+      marginTop: -2,
+    },
+    plusTextActive: {
+      color: "#fff",
+    },
+  });
+}

@@ -26,6 +26,8 @@ import {
 import type { SortieGuideCommand } from "./sortieGuide";
 import { requestSortieDrivingRoute } from "./routingClient";
 import { SortieDialog, emptyPlaces, placesFromSortie, sortieTitle, type DialogDraft } from "./SortieDialog";
+import { useTheme } from "./ThemeProvider";
+import type { ThemeColors } from "./theme";
 
 const couldNotLoad = "The calendar could not be loaded.";
 const couldNotRefresh = "The calendar could not be refreshed.";
@@ -82,6 +84,8 @@ export function CalendarScreen({
   onUnauthorized: () => void;
   onGuide?: (command: SortieGuideCommand) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const [screen, setScreen] = useState<Ready>(() => emptyCalendar(new Date()));
   const generation = useRef(0);
   const saving = useRef(false);
@@ -635,6 +639,8 @@ function MonthChip({
   onOpen: () => void;
   onMove: (pageX: number, pageY: number) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const grant = useRef({ x: 0, y: 0 });
   const latest = useRef({ enabled, onOpen, onMove });
   latest.current = { enabled, onOpen, onMove };
@@ -678,6 +684,8 @@ function SortieSummary({
   onRevise: () => void;
   onGuide: (() => void) | null;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <View style={styles.backdrop}>
       <ScrollView contentContainerStyle={styles.summaryCard}>
@@ -711,6 +719,8 @@ function SortieSummary({
 }
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <View style={styles.summaryRow}>
       <Text style={styles.summaryLabel}>{label}</Text>
@@ -748,6 +758,8 @@ function HourBlock({
   onOpen: () => void;
   onMove: (dayDelta: number, minuteDelta: number) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const [shift, setShift] = useState({ x: 0, y: 0 });
   const grant = useRef({ x: 0, y: 0 });
   const latest = useRef({ enabled, allowDayShift, columnWidth, onOpen, onMove });
@@ -801,209 +813,218 @@ function HourBlock({
   );
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: "#fff",
-    padding: 16,
-  },
-  body: {
-    flex: 1,
-  },
-  period: {
-    fontSize: 24,
-    marginTop: 4,
-  },
-  row: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 12,
-  },
-  gridScroll: {
-    flex: 1,
-    marginTop: 12,
-  },
-  weekdays: {
-    flexDirection: "row",
-  },
-  weekday: {
-    flex: 1,
-    textAlign: "center",
-    fontSize: 12,
-    color: "#555",
-  },
-  monthGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-  },
-  dayCell: {
-    width: "14.285%",
-    minHeight: 88,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderColor: "#ddd",
-    padding: 2,
-    gap: 2,
-  },
-  dayHit: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    padding: 2,
-  },
-  today: {
-    backgroundColor: "#f3f6ff",
-  },
-  dayNumber: {
-    fontSize: 12,
-    zIndex: 1,
-  },
-  todayText: {
-    fontWeight: "700",
-  },
-  outside: {
-    color: "#999",
-  },
-  chip: {
-    backgroundColor: "#111",
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    zIndex: 1,
-  },
-  chipPassthrough: {
-    pointerEvents: "none",
-  },
-  chipText: {
-    color: "#fff",
-    fontSize: 11,
-  },
-  hourFrame: {
-    flex: 1,
-    marginTop: 12,
-  },
-  dayHeader: {
-    flexDirection: "row",
-  },
-  dayHeading: {
-    flex: 1,
-    alignItems: "center",
-  },
-  dayHeadingText: {
-    textAlign: "center",
-    fontSize: 12,
-  },
-  hourRow: {
-    flexDirection: "row",
-  },
-  hourGutter: {
-    width: 52,
-  },
-  hourLabel: {
-    height: hourHeight,
-    fontSize: 11,
-    color: "#555",
-  },
-  dayColumn: {
-    flex: 1,
-    height: 24 * hourHeight,
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderColor: "#ddd",
-  },
-  hourSlot: {
-    height: hourHeight,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: "#eee",
-  },
-  block: {
-    position: "absolute",
-    left: 2,
-    right: 2,
-    backgroundColor: "#111",
-    borderRadius: 4,
-    overflow: "hidden",
-  },
-  blockBody: {
-    flex: 1,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-  },
-  blockText: {
-    color: "#fff",
-    fontSize: 11,
-  },
-  backdrop: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    padding: 16,
-  },
-  summaryCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    gap: 8,
-  },
-  summaryTitle: {
-    fontSize: 20,
-  },
-  summaryRow: {
-    gap: 2,
-  },
-  summaryLabel: {
-    fontSize: 13,
-    color: "#555",
-  },
-  summaryValue: {
-    fontSize: 16,
-  },
-  summaryClose: {
-    backgroundColor: "#eee",
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  summaryActions: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 12,
-  },
-  summaryAction: {
-    flex: 1,
-    marginTop: 0,
-  },
-  message: {
-    marginTop: 12,
-    fontSize: 16,
-  },
-  primary: {
-    backgroundColor: "#111",
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: "center",
-    marginTop: 12,
-  },
-  primaryText: {
-    color: "#fff",
-    fontSize: 16,
-  },
-  secondary: {
-    backgroundColor: "#eee",
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    alignItems: "center",
-  },
-  selected: {
-    backgroundColor: "#ddd",
-  },
-  secondaryText: {
-    fontSize: 16,
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    screen: {
+      flex: 1,
+      backgroundColor: colors.background,
+      padding: 16,
+    },
+    body: {
+      flex: 1,
+    },
+    period: {
+      fontSize: 24,
+      marginTop: 4,
+      color: colors.text,
+    },
+    row: {
+      flexDirection: "row",
+      gap: 8,
+      marginTop: 12,
+    },
+    gridScroll: {
+      flex: 1,
+      marginTop: 12,
+    },
+    weekdays: {
+      flexDirection: "row",
+    },
+    weekday: {
+      flex: 1,
+      textAlign: "center",
+      fontSize: 12,
+      color: colors.textSecondary,
+    },
+    monthGrid: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+    },
+    dayCell: {
+      width: "14.285%",
+      minHeight: 88,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderRightWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      padding: 2,
+      gap: 2,
+    },
+    dayHit: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      padding: 2,
+    },
+    today: {
+      backgroundColor: colors.accentSoft,
+    },
+    dayNumber: {
+      fontSize: 12,
+      zIndex: 1,
+      color: colors.text,
+    },
+    todayText: {
+      fontWeight: "700",
+    },
+    outside: {
+      color: colors.textMuted,
+    },
+    chip: {
+      backgroundColor: colors.primary,
+      borderRadius: 4,
+      paddingHorizontal: 4,
+      paddingVertical: 2,
+      zIndex: 1,
+    },
+    chipPassthrough: {
+      pointerEvents: "none",
+    },
+    chipText: {
+      color: colors.primaryText,
+      fontSize: 11,
+    },
+    hourFrame: {
+      flex: 1,
+      marginTop: 12,
+    },
+    dayHeader: {
+      flexDirection: "row",
+    },
+    dayHeading: {
+      flex: 1,
+      alignItems: "center",
+    },
+    dayHeadingText: {
+      textAlign: "center",
+      fontSize: 12,
+      color: colors.text,
+    },
+    hourRow: {
+      flexDirection: "row",
+    },
+    hourGutter: {
+      width: 52,
+    },
+    hourLabel: {
+      height: hourHeight,
+      fontSize: 11,
+      color: colors.textSecondary,
+    },
+    dayColumn: {
+      flex: 1,
+      height: 24 * hourHeight,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    hourSlot: {
+      height: hourHeight,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    block: {
+      position: "absolute",
+      left: 2,
+      right: 2,
+      backgroundColor: colors.primary,
+      borderRadius: 4,
+      overflow: "hidden",
+    },
+    blockBody: {
+      flex: 1,
+      paddingHorizontal: 4,
+      paddingVertical: 2,
+    },
+    blockText: {
+      color: colors.primaryText,
+      fontSize: 11,
+    },
+    backdrop: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      backgroundColor: colors.overlay,
+      padding: 16,
+    },
+    summaryCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 16,
+      gap: 8,
+    },
+    summaryTitle: {
+      fontSize: 20,
+      color: colors.text,
+    },
+    summaryRow: {
+      gap: 2,
+    },
+    summaryLabel: {
+      fontSize: 13,
+      color: colors.textSecondary,
+    },
+    summaryValue: {
+      fontSize: 16,
+      color: colors.text,
+    },
+    summaryClose: {
+      backgroundColor: colors.surfaceMuted,
+      borderRadius: 8,
+      paddingVertical: 10,
+      alignItems: "center",
+      marginTop: 8,
+    },
+    summaryActions: {
+      flexDirection: "row",
+      gap: 12,
+      marginTop: 12,
+    },
+    summaryAction: {
+      flex: 1,
+      marginTop: 0,
+    },
+    message: {
+      marginTop: 12,
+      fontSize: 16,
+      color: colors.text,
+    },
+    primary: {
+      backgroundColor: colors.primary,
+      borderRadius: 8,
+      paddingVertical: 14,
+      alignItems: "center",
+      marginTop: 12,
+    },
+    primaryText: {
+      color: colors.primaryText,
+      fontSize: 16,
+    },
+    secondary: {
+      backgroundColor: colors.surfaceMuted,
+      borderRadius: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      alignItems: "center",
+    },
+    selected: {
+      backgroundColor: colors.border,
+    },
+    secondaryText: {
+      fontSize: 16,
+      color: colors.text,
+    },
+  });
+}

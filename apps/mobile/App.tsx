@@ -25,6 +25,8 @@ import {
 } from "./src/sessionClient";
 import { deleteStoredSession, readStoredSession, writeStoredSession } from "./src/sessionStore";
 import { stopLocationObservationUpdates } from "./src/locationObservationReporting";
+import { ThemeProvider, useTheme } from "./src/ThemeProvider";
+import type { ThemeColors } from "./src/theme";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -59,6 +61,16 @@ type Phase =
     };
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
+  );
+}
+
+function AppContent() {
+  const { colors, scheme } = useTheme();
+  const styles = createStyles(colors);
   const [phase, setPhase] = useState<Phase>({ status: "loading" });
   const [nonce, setNonce] = useState(() => Crypto.randomUUID());
   const [submitting, setSubmitting] = useState(false);
@@ -378,7 +390,7 @@ export default function App() {
   return (
     <AppFrame>
       <View style={signedIn ? styles.signedIn : styles.container}>
-        {phase.status === "loading" ? <Text>Checking session…</Text> : null}
+        {phase.status === "loading" ? <Text style={styles.message}>Checking session…</Text> : null}
         {phase.status === "signed-out" ? (
           <SignIn message={phase.message} disabled={submitting} onSignIn={() => void onSignIn()} />
         ) : null}
@@ -457,7 +469,7 @@ export default function App() {
             />
           </>
         ) : null}
-        <StatusBar style="auto" />
+        <StatusBar style={scheme === "dark" ? "light" : "dark"} />
       </View>
     </AppFrame>
   );
@@ -472,6 +484,8 @@ function SignIn({
   disabled: boolean;
   onSignIn: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <>
       <Pressable style={styles.button} disabled={disabled} onPress={onSignIn}>
@@ -489,6 +503,8 @@ function SignedInIdentity({
   user: User;
   live: "authenticated" | "closed";
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <>
       <Text style={styles.identity}>{identityLabel(user)}</Text>
@@ -510,6 +526,8 @@ async function forgetCalendarCache(): Promise<void> {
 }
 
 function Offline({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <>
       <Text style={styles.message}>{message}</Text>
@@ -589,52 +607,56 @@ function googleClientForPlatform(): { id: string; envName: string } {
   };
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#fff",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-  },
-  signedIn: {
-    flex: 1,
-    backgroundColor: "#fff",
-  },
-  content: {
-    flex: 1,
-  },
-  webIdentity: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-  },
-  cover: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: "#fff",
-  },
-  identity: {
-    fontSize: 20,
-    marginBottom: 12,
-    textAlign: "center",
-  },
-  message: {
-    marginTop: 16,
-    textAlign: "center",
-  },
-  button: {
-    backgroundColor: "#111",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 8,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 24,
+    },
+    signedIn: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      flex: 1,
+    },
+    webIdentity: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 24,
+    },
+    cover: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      backgroundColor: colors.background,
+    },
+    identity: {
+      fontSize: 20,
+      marginBottom: 12,
+      textAlign: "center",
+      color: colors.text,
+    },
+    message: {
+      marginTop: 16,
+      textAlign: "center",
+      color: colors.text,
+    },
+    button: {
+      backgroundColor: colors.primary,
+      paddingHorizontal: 20,
+      paddingVertical: 14,
+      borderRadius: 8,
+    },
+    buttonText: {
+      color: colors.primaryText,
+      fontSize: 16,
+    },
+  });
+}

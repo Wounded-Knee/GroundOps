@@ -8,6 +8,8 @@ import {
   meterCharges,
   progressFraction,
 } from "./meter";
+import { useTheme } from "./ThemeProvider";
+import type { ThemeColors } from "./theme";
 
 export type MeterDisplay = {
   milesTraveled: number;
@@ -24,6 +26,8 @@ export function MeterStrip({
   reading: MeterDisplay;
   onPress: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const charges = meterCharges(
     reading.tariff,
     reading.milesTraveled,
@@ -49,6 +53,8 @@ export function MeterOverlay({
   reading: MeterDisplay;
   onClose: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const charges = meterCharges(
     reading.tariff,
     reading.milesTraveled,
@@ -90,6 +96,8 @@ export function MeterOverlay({
 }
 
 function Row({ label, value }: { label: string; value: string }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
@@ -98,74 +106,77 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-const styles = StyleSheet.create({
-  track: {
-    height: 20,
-    backgroundColor: "#E8F0FE",
-    justifyContent: "center",
-    overflow: "hidden",
-    zIndex: 5,
-  },
-  fill: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: "#1A73E8",
-    width: "0%",
-  },
-  text: {
-    position: "absolute",
-    left: 8,
-    right: 8,
-    fontSize: 13,
-    lineHeight: 20,
-    color: "#111",
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    justifyContent: "center",
-    padding: 24,
-    zIndex: 20,
-  },
-  card: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 20,
-    gap: 8,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: "600",
-    marginBottom: 8,
-  },
-  row: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  rowLabel: {
-    color: "#666",
-    fontSize: 15,
-  },
-  rowValue: {
-    color: "#111",
-    fontSize: 15,
-    fontWeight: "500",
-  },
-  unavailable: {
-    color: "#444",
-    fontSize: 15,
-    marginVertical: 8,
-  },
-  close: {
-    marginTop: 12,
-    alignItems: "center",
-    paddingVertical: 12,
-  },
-  closeText: {
-    fontSize: 16,
-    color: "#1A73E8",
-    fontWeight: "600",
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    track: {
+      height: 20,
+      backgroundColor: colors.accentSoft,
+      justifyContent: "center",
+      overflow: "hidden",
+      zIndex: 5,
+    },
+    fill: {
+      ...StyleSheet.absoluteFill,
+      backgroundColor: colors.accent,
+      width: "0%",
+    },
+    text: {
+      position: "absolute",
+      left: 8,
+      right: 8,
+      fontSize: 13,
+      lineHeight: 20,
+      color: colors.text,
+      fontWeight: "600",
+      textAlign: "center",
+    },
+    backdrop: {
+      ...StyleSheet.absoluteFill,
+      backgroundColor: colors.overlay,
+      justifyContent: "center",
+      padding: 24,
+      zIndex: 20,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 20,
+      gap: 8,
+    },
+    title: {
+      fontSize: 20,
+      fontWeight: "600",
+      marginBottom: 8,
+      color: colors.text,
+    },
+    row: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      gap: 12,
+    },
+    rowLabel: {
+      color: colors.textMuted,
+      fontSize: 15,
+    },
+    rowValue: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: "500",
+    },
+    unavailable: {
+      color: colors.textSecondary,
+      fontSize: 15,
+      marginVertical: 8,
+    },
+    close: {
+      marginTop: 12,
+      alignItems: "center",
+      paddingVertical: 12,
+    },
+    closeText: {
+      fontSize: 16,
+      color: colors.accent,
+      fontWeight: "600",
+    },
+  });
+}

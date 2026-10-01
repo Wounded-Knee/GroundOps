@@ -4,6 +4,8 @@ import { createElement, useState } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { formatUsPhone, phoneDigits, withPickedDate, withPickedTime } from "./calendarTime";
+import { useTheme } from "./ThemeProvider";
+import type { ThemeColors } from "./theme";
 
 export type StopDraft = {
   query: string;
@@ -38,6 +40,8 @@ export function SortieDialog({
   onCancel: () => void;
   onUnauthorized: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const [label, setLabel] = useState(draft.label);
   const [arrival, setArrival] = useState(draft.arrival);
   const [passengerName, setPassengerName] = useState(draft.passengerName);
@@ -91,7 +95,12 @@ export function SortieDialog({
       <ScrollView contentContainerStyle={styles.card} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>{draft.sortieId ? "Revise sortie" : "Author sortie"}</Text>
         <Text style={styles.fieldLabel}>Label</Text>
-        <TextInput value={label} onChangeText={setLabel} style={styles.input} />
+        <TextInput
+          value={label}
+          onChangeText={setLabel}
+          placeholderTextColor={colors.textMuted}
+          style={styles.input}
+        />
         <View style={styles.arrivalRow}>
           {arrival ? (
             <>
@@ -141,13 +150,19 @@ export function SortieDialog({
           </Pressable>
         ) : null}
         <Text style={styles.fieldLabel}>Passenger name</Text>
-        <TextInput value={passengerName} onChangeText={setPassengerName} style={styles.input} />
+        <TextInput
+          value={passengerName}
+          onChangeText={setPassengerName}
+          placeholderTextColor={colors.textMuted}
+          style={styles.input}
+        />
         <Text style={styles.fieldLabel}>Passenger phone</Text>
         <TextInput
           value={phone}
           onChangeText={(value) => setPhone(formatUsPhone(value))}
           keyboardType={Platform.OS === "web" ? "default" : "phone-pad"}
           inputMode={Platform.OS === "web" ? "tel" : undefined}
+          placeholderTextColor={colors.textMuted}
           style={styles.input}
         />
         <PlaceField
@@ -217,6 +232,8 @@ function PlaceField({
   onClear: () => void;
   onUnauthorized: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <View>
       <AddressPicker
@@ -241,6 +258,8 @@ function PlaceField({
 }
 
 function PickerButton({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   return (
     <Pressable onPress={onPress} style={styles.pickerButton}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -360,78 +379,88 @@ export function sortieTitle(sortie: { label: string; stops: SortieStop[] }): str
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    padding: 16,
-  },
-  card: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    gap: 8,
-  },
-  title: {
-    fontSize: 20,
-  },
-  arrivalRow: {
-    flexDirection: "row",
-  },
-  arrivalHalf: {
-    width: "50%",
-  },
-  fieldLabel: {
-    fontSize: 14,
-    marginTop: 4,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    fontSize: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  pickerButton: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    width: "100%",
-  },
-  pickerValue: {
-    fontSize: 16,
-  },
-  primary: {
-    backgroundColor: "#111",
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  primaryText: {
-    color: "#fff",
-    fontSize: 16,
-  },
-  secondary: {
-    backgroundColor: "#eee",
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  secondaryText: {
-    fontSize: 16,
-  },
-  message: {
-    marginTop: 8,
-    fontSize: 16,
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    backdrop: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      backgroundColor: colors.overlay,
+      padding: 16,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 16,
+      gap: 8,
+    },
+    title: {
+      fontSize: 20,
+      color: colors.text,
+    },
+    arrivalRow: {
+      flexDirection: "row",
+    },
+    arrivalHalf: {
+      width: "50%",
+    },
+    fieldLabel: {
+      fontSize: 14,
+      marginTop: 4,
+      color: colors.text,
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      fontSize: 16,
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+      color: colors.text,
+      backgroundColor: colors.surface,
+    },
+    pickerButton: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      width: "100%",
+      backgroundColor: colors.surface,
+    },
+    pickerValue: {
+      fontSize: 16,
+      color: colors.text,
+    },
+    primary: {
+      backgroundColor: colors.primary,
+      borderRadius: 8,
+      paddingVertical: 14,
+      alignItems: "center",
+      marginTop: 8,
+    },
+    primaryText: {
+      color: colors.primaryText,
+      fontSize: 16,
+    },
+    secondary: {
+      backgroundColor: colors.surfaceMuted,
+      borderRadius: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      alignItems: "center",
+      marginTop: 8,
+    },
+    secondaryText: {
+      fontSize: 16,
+      color: colors.text,
+    },
+    message: {
+      marginTop: 8,
+      fontSize: 16,
+      color: colors.text,
+    },
+  });
+}

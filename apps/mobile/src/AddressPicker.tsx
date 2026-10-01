@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { requestPlaceSuggestions } from "./routingClient";
+import { useTheme } from "./ThemeProvider";
+import type { ThemeColors } from "./theme";
 
 const apiUrl = resolveApiUrl();
 
@@ -29,6 +31,8 @@ export function AddressPicker({
   onUnauthorized: () => void;
   onSearchFailed?: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const inputRef = useRef<TextInput>(null);
   const generation = useRef(0);
   const settledLabel = useRef<string | null>(query.trim().length > 0 ? query : null);
@@ -105,7 +109,7 @@ export function AddressPicker({
           value={query}
           onChangeText={onQueryChange}
           placeholder={placeholder}
-          placeholderTextColor={hint}
+          placeholderTextColor={colors.textMuted}
           autoCorrect={false}
           underlineColorAndroid="transparent"
           style={appearance === "field" ? styles.fieldInput : styles.searchInput}
@@ -128,75 +132,72 @@ export function AddressPicker({
   );
 }
 
-const ink = "#111111";
-const hint = "#595959";
-const line = "#767676";
-const surface = "#FFFFFF";
-
-const styles = StyleSheet.create({
-  label: {
-    color: ink,
-    fontSize: 14,
-    marginTop: 4,
-  },
-  fieldRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: surface,
-    borderWidth: 1,
-    borderColor: line,
-    borderRadius: 8,
-  },
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: surface,
-  },
-  fieldInput: {
-    flex: 1,
-    color: ink,
-    backgroundColor: surface,
-    fontSize: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  searchInput: {
-    flex: 1,
-    color: ink,
-    backgroundColor: surface,
-    fontSize: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  clear: {
-    backgroundColor: surface,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  clearText: {
-    fontSize: 18,
-    color: ink,
-  },
-  fieldSuggestion: {
-    backgroundColor: surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: line,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-  },
-  searchSuggestion: {
-    backgroundColor: surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: line,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  suggestionText: {
-    color: ink,
-    fontSize: 16,
-  },
-  suggestionDetail: {
-    color: hint,
-    fontSize: 14,
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    label: {
+      color: colors.text,
+      fontSize: 14,
+      marginTop: 4,
+    },
+    fieldRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.borderStrong,
+      borderRadius: 8,
+    },
+    searchRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.surface,
+    },
+    fieldInput: {
+      flex: 1,
+      color: colors.text,
+      backgroundColor: colors.surface,
+      fontSize: 16,
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+    },
+    searchInput: {
+      flex: 1,
+      color: colors.text,
+      backgroundColor: colors.surface,
+      fontSize: 18,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+    },
+    clear: {
+      backgroundColor: colors.surface,
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+    },
+    clearText: {
+      fontSize: 18,
+      color: colors.text,
+    },
+    fieldSuggestion: {
+      backgroundColor: colors.surface,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.borderStrong,
+      paddingVertical: 8,
+      paddingHorizontal: 4,
+    },
+    searchSuggestion: {
+      backgroundColor: colors.surface,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.borderStrong,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    suggestionText: {
+      color: colors.text,
+      fontSize: 16,
+    },
+    suggestionDetail: {
+      color: colors.textMuted,
+      fontSize: 14,
+    },
+  });
+}
