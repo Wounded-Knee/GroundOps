@@ -27,6 +27,13 @@ import { deleteStoredSession, readStoredSession, writeStoredSession } from "./sr
 import { stopLocationObservationUpdates } from "./src/locationObservationReporting";
 import { ThemeProvider, useTheme } from "./src/ThemeProvider";
 import type { ThemeColors } from "./src/theme";
+import { VisualAlert } from "./src/VisualAlert";
+import {
+  ensureVisualAlertPrefsLoaded,
+  getVisualAlertPrefs,
+  subscribeVisualAlertPrefs,
+  type VisualAlertPrefs,
+} from "./src/visualAlertPrefs";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -80,9 +87,17 @@ function AppContent() {
   const [calendarReload, setCalendarReload] = useState(0);
   const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
+  const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
   const endGuidanceRef = useRef<(() => void) | null>(null);
   const generation = useRef(0);
   const composeSaving = useRef(false);
+
+  useEffect(() => {
+    void ensureVisualAlertPrefsLoaded();
+    return subscribeVisualAlertPrefs(() => {
+      setVisualAlert(getVisualAlertPrefs());
+    });
+  }, []);
 
   const [request, , promptAsync] = AuthSession.useAuthRequest(
     {
@@ -385,9 +400,17 @@ function AppContent() {
   }
 
   const signedIn = phase.status === "signed-in";
+  const overlay = (
+    <VisualAlert
+      color={visualAlert.color}
+      intensity={visualAlert.intensity}
+      brightness={visualAlert.brightness}
+      enabled={visualAlert.enabled}
+    />
+  );
 
   return (
-    <AppFrame>
+    <AppFrame overlay={overlay}>
       <View style={signedIn ? styles.signedIn : styles.container}>
         {phase.status === "loading" ? <Text style={styles.message}>Checking session…</Text> : null}
         {phase.status === "signed-out" ? (

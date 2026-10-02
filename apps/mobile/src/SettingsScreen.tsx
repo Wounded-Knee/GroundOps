@@ -16,6 +16,17 @@ import {
 } from "./guidanceCameraPrefs";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
+import { throb } from "./VisualAlert";
+import {
+  defaultVisualAlertPrefs,
+  ensureVisualAlertPrefsLoaded,
+  getVisualAlertPrefs,
+  normalizeHexColor,
+  saveVisualAlertPrefs,
+  subscribeVisualAlertPrefs,
+  visualAlertPresets,
+  type VisualAlertPrefs,
+} from "./visualAlertPrefs";
 
 const apiUrl = resolveApiUrl();
 const couldNotLoad = "The tariff could not be loaded.";
@@ -55,6 +66,17 @@ export function SettingsScreen({
   const [savingCamera, setSavingCamera] = useState(false);
   const [heldGeofence, setHeldGeofence] = useState<GeoCoordinate[]>(sampleGeofenceRing);
   const [geofenceOpen, setGeofenceOpen] = useState(false);
+  const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
+  const [hexText, setHexText] = useState(defaultVisualAlertPrefs.color);
+
+  useEffect(() => {
+    void ensureVisualAlertPrefsLoaded();
+    return subscribeVisualAlertPrefs(() => {
+      const next = getVisualAlertPrefs();
+      setVisualAlert(next);
+      setHexText(next.color);
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,6 +161,33 @@ export function SettingsScreen({
     setTilt(saved.tilt);
   }
 
+  function updateVisualAlert(patch: Partial<VisualAlertPrefs>): void {
+    const next = { ...getVisualAlertPrefs(), ...patch };
+    setVisualAlert(next);
+    if (patch.color !== undefined) {
+      setHexText(patch.color);
+    }
+    void saveVisualAlertPrefs(next);
+  }
+
+  function onHexChange(text: string): void {
+    setHexText(text);
+    const trimmed = text.trim();
+    // Commit only full #RRGGBB while typing so #RGB does not expand mid-entry.
+    if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
+      updateVisualAlert({ color: trimmed.toUpperCase() });
+    }
+  }
+
+  function onHexEndEditing(): void {
+    const normalized = normalizeHexColor(hexText);
+    if (normalized) {
+      updateVisualAlert({ color: normalized });
+      return;
+    }
+    setHexText(visualAlert.color);
+  }
+
   if (geofenceOpen && Platform.OS !== "web") {
     return (
       <View style={styles.geofenceCover}>
@@ -181,6 +230,84 @@ export function SettingsScreen({
           );
         })}
       </View>
+      <Text style={styles.section}>Visual alert</Text>
+      <View style={styles.appearanceRow}>
+        {(
+          [
+            { value: true, label: "On" },
+            { value: false, label: "Off" },
+          ] as const
+        ).map((option) => {
+          const selected = visualAlert.enabled === option.value;
+          return (
+            <Pressable
+              key={option.label}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              onPress={() => updateVisualAlert({ enabled: option.value })}
+              style={[styles.appearanceOption, selected ? styles.appearanceOptionSelected : null]}
+            >
+              <Text style={[styles.appearanceOptionText, selected ? styles.appearanceOptionTextSelected : null]}>
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={styles.label}>Color</Text>
+      <View style={styles.swatchRow}>
+        {visualAlertPresets.map((swatch) => {
+          const selected = visualAlert.color === swatch;
+          return (
+            <Pressable
+              key={swatch}
+              accessibilityRole="button"
+              accessibilityLabel={`Color ${swatch}`}
+              accessibilityState={{ selected }}
+              onPress={() => updateVisualAlert({ color: swatch })}
+              style={[
+                styles.swatch,
+                { backgroundColor: swatch },
+                swatch === "#FFFFFF" ? styles.swatchBordered : null,
+                selected ? styles.swatchSelected : null,
+              ]}
+            />
+          );
+        })}
+      </View>
+      <TextInput
+        style={styles.input}
+        value={hexText}
+        autoCapitalize="characters"
+        autoCorrect={false}
+        placeholder="#RRGGBB"
+        placeholderTextColor={colors.textMuted}
+        onChangeText={onHexChange}
+        onEndEditing={onHexEndEditing}
+      />
+      <View style={styles.row}>
+        <SliderField
+          label="Intensity"
+          value={visualAlert.intensity}
+          minimumValue={0}
+          maximumValue={1}
+          step={0.01}
+          formatValue={formatPercent}
+          onChange={(intensity) => updateVisualAlert({ intensity })}
+        />
+        <SliderField
+          label="Brightness"
+          value={visualAlert.brightness}
+          minimumValue={0}
+          maximumValue={1}
+          step={0.01}
+          formatValue={formatPercent}
+          onChange={(brightness) => updateVisualAlert({ brightness })}
+        />
+      </View>
+      <Pressable style={[styles.button, styles.save]} onPress={() => throb(3)}>
+        <Text style={styles.saveButtonText}>Throb 3×</Text>
+      </Pressable>
       <Text style={styles.section}>Guidance camera</Text>
       <View style={styles.row}>
         <SliderField
@@ -349,6 +476,10 @@ function formatTilt(value: number): string {
   return `${Math.round(value)}°`;
 }
 
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     screen: {
@@ -384,6 +515,24 @@ function createStyles(colors: ThemeColors) {
     appearanceRow: {
       flexDirection: "row",
       gap: 8,
+    },
+    swatchRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 10,
+    },
+    swatch: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+    },
+    swatchBordered: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderStrong,
+    },
+    swatchSelected: {
+      borderWidth: 3,
+      borderColor: colors.accent,
     },
     appearanceOption: {
       flex: 1,
