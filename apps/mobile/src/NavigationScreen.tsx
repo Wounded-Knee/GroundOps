@@ -1,4 +1,5 @@
 import type { DrivingRoute, GeoCoordinate, PlaceSuggestion, SortieStop, Tariff } from "@groundops/contracts";
+import { Ionicons } from "@expo/vector-icons";
 import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
@@ -718,6 +719,18 @@ export function NavigationScreen({
     onMeterEnded?.();
   }
 
+  function onToggleMute(): void {
+    if (nav.mode !== "guiding" && nav.mode !== "arrived") {
+      return;
+    }
+    const muted = !nav.muted;
+    if (muted) {
+      speechGeneration.current += 1;
+      void Speech.stop();
+    }
+    setNav({ ...nav, muted });
+  }
+
   if (endGuidanceRef) {
     endGuidanceRef.current = onDismiss;
   }
@@ -788,6 +801,24 @@ export function NavigationScreen({
         ) : null}
 
         <View style={styles.spacer} pointerEvents="none" />
+
+        {guiding || arrived ? (
+          <View style={styles.muteRail} pointerEvents="box-none">
+            <Pressable
+              accessibilityLabel={(guiding ?? arrived)!.muted ? "Unmute" : "Mute"}
+              accessibilityRole="button"
+              onPress={onToggleMute}
+              style={styles.muteButton}
+              pointerEvents="auto"
+            >
+              <Ionicons
+                name={(guiding ?? arrived)!.muted ? "volume-mute" : "volume-high"}
+                size={24}
+                color={colors.text}
+              />
+            </Pressable>
+          </View>
+        ) : null}
 
         {preview ? (
           <View style={styles.sheet} pointerEvents="auto">
@@ -891,6 +922,23 @@ function createStyles(colors: ThemeColors) {
     },
     spacer: {
       flex: 1,
+    },
+    muteRail: {
+      position: "absolute",
+      right: 12,
+      top: 0,
+      bottom: 0,
+      justifyContent: "center",
+    },
+    muteButton: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: withAlpha(colors.surface, 0.85),
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
     },
     sheet: {
       margin: 12,
