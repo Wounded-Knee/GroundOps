@@ -1,3 +1,4 @@
+import type { MutableRefObject } from "react";
 import type { MeterDisplay } from "./MeterStrip";
 import type { SortieGuideCommand } from "./sortieGuide";
 
@@ -10,6 +11,7 @@ export function NavigationScreen(_props: {
   onSortieGuideConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
+  endGuidanceRef?: MutableRefObject<(() => void) | null>;
 }): null {
   return null;
 }

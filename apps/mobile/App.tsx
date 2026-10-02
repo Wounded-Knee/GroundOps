@@ -12,7 +12,7 @@ import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
 import { authorSortie, ensureCurrentDriver } from "./src/calendarClient";
-import { MeterOverlay, MeterStrip, type MeterDisplay } from "./src/MeterStrip";
+import { MeterStrip, type MeterDisplay } from "./src/MeterStrip";
 import { NavigationScreen } from "./src/NavigationScreen";
 import type { SortieGuideCommand } from "./src/sortieGuide";
 import { SettingsScreen } from "./src/SettingsScreen";
@@ -80,7 +80,7 @@ function AppContent() {
   const [calendarReload, setCalendarReload] = useState(0);
   const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
-  const [meterOverlayOpen, setMeterOverlayOpen] = useState(false);
+  const endGuidanceRef = useRef<(() => void) | null>(null);
   const generation = useRef(0);
   const composeSaving = useRef(false);
 
@@ -192,7 +192,6 @@ function AppContent() {
     setComposeMessage(null);
     setSortieGuide(null);
     setMeterReading(null);
-    setMeterOverlayOpen(false);
   }
 
   async function classifyClosedSocket(token: string, currentGeneration: number): Promise<void> {
@@ -408,8 +407,8 @@ function AppContent() {
                   onMeterReading={setMeterReading}
                   onMeterEnded={() => {
                     setMeterReading(null);
-                    setMeterOverlayOpen(false);
                   }}
+                  endGuidanceRef={endGuidanceRef}
                 />
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (
@@ -454,12 +453,14 @@ function AppContent() {
                   onSave={(body) => void saveCompose(phase.token, body)}
                 />
               ) : null}
-              {meterOverlayOpen && meterReading ? (
-                <MeterOverlay reading={meterReading} onClose={() => setMeterOverlayOpen(false)} />
-              ) : null}
             </View>
             {meterReading ? (
-              <MeterStrip reading={meterReading} onPress={() => setMeterOverlayOpen(true)} />
+              <MeterStrip
+                reading={meterReading}
+                onEndSortie={() => {
+                  endGuidanceRef.current?.();
+                }}
+              />
             ) : null}
             <BottomNav
               destination={destination}

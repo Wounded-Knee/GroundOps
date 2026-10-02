@@ -54,3 +54,19 @@ export const darkColors: ThemeColors = {
 export function colorsForScheme(scheme: ThemeScheme): ThemeColors {
   return scheme === "dark" ? darkColors : lightColors;
 }
+
+/** Hex color with alpha; leaves children at full opacity when used as backgroundColor. */
+export function withAlpha(hex: string, alpha: number): string {
+  const raw = hex.startsWith("#") ? hex.slice(1) : hex;
+  const full =
+    raw.length === 3
+      ? raw
+          .split("")
+          .map((ch) => `${ch}${ch}`)
+          .join("")
+      : raw;
+  const r = Number.parseInt(full.slice(0, 2), 16);
+  const g = Number.parseInt(full.slice(2, 4), 16);
+  const b = Number.parseInt(full.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}

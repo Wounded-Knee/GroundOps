@@ -17,12 +17,12 @@ This document is the implementation boundary. The platform object is a **cost es
 After this slice, a person who is signed in, as slice 001 defines, and who has a driver and authored sorties, as slice 003 defines, can:
 
 1. On iOS or Android, open a sortie they authored and start guidance for its stops. The map and guidance chrome from slice 002 present that route.
-2. While that guidance is in use, see a strip about 1em high directly above the bottom bar on every signed-in screen. The strip shows miles traveled, wait minutes, and the cumulative fare, and fills as a progress bar of proximity to the destination (remaining versus the baseline when the current route was set).
-3. Tap that strip to open an overlay of the detailed meter reading, including a fare estimate for the entire trip.
+2. While that guidance is in use, see a meter panel about one quarter of the screen height directly above the bottom bar on every signed-in screen. The panel shows Estimated (full trip miles, trip duration, and trip fare estimate) on the left, the running fare large in the center, and Actual (miles traveled, wait minutes, and fare so far) on the right with right-aligned text. Below that, a thin bar fills with proximity to the next turn, and a 1em bar fills with proximity to the destination (remaining versus the baseline when the current route was set). Neither bar carries text.
+3. Tap that panel to swap its contents for an End Sortie action. Tap the panel again to restore the meter reading. End Sortie ends guidance and clears the meter.
 4. On every platform, open Settings, see the driver's tariff — flag drop, dollars per mile, and dollars per wait minute — and save new rates. Those rates program the meter.
 5. Sign out, so that session can no longer be used, as slice 001 defines.
 
-Search that authors a destination sortie and starts guidance uses the same meter. A route that is not a sortie does not show the meter. Web still has no driving guidance, so it has no Guide action and no strip. The tariff fields are editable on web.
+Search that authors a destination sortie and starts guidance uses the same meter. Before Start, the map route preview shows the same trip estimate from the tariff snapshot and the route distance. A route that is not a sortie does not show the meter. Web still has no driving guidance, so it has no Guide action and no meter panel. The tariff fields are editable on web.
 
 Starting guidance is not commencement. This slice does not record responsibility, acceptance, commencement, or completion.
 
@@ -45,7 +45,7 @@ This slice is demonstrable on the existing local stack:
 
 The API uses host PostgreSQL. The client JavaScript is the Expo development server the app already uses.
 
-Guide and the meter strip run on iOS and Android in the local development build from slice 002. Tariff editing on Settings runs on web, iOS, and Android. This slice adds no EAS build, no store build, and no deployed environment. Place suggestions, driving routes, and schedule drive times continue to use the Google keys slice 002 already requires. `.env.example` is unchanged.
+Guide and the meter panel run on iOS and Android in the local development build from slice 002. Tariff editing on Settings runs on web, iOS, and Android. This slice adds no EAS build, no store build, and no deployed environment. Place suggestions, driving routes, and schedule drive times continue to use the Google keys slice 002 already requires. `.env.example` is unchanged.
 
 ---
 
@@ -94,7 +94,7 @@ A **sortie driving route** is one driving route, as slice 002 defines, from the 
 | Sortie summary | Guiding a sortie | The person taps Guide with a location fix. The server returns a driving route through the remaining stops. Navigation opens in guidance. The meter starts with a tariff snapshot. |
 | Guiding a sortie | Guiding a sortie | A stop short of the destination is reached and drops out, the current step advances, or a reroute replaces the route with the same first stop still ahead. The meter keeps its snapshot and its miles and wait. |
 | Guiding a sortie | Arrived | The device is within 40 meters of the final stop. The meter keeps running until the person ends guidance. |
-| Guiding or arrived | Map | The person ends guidance. The route leaves the map. The meter strip disappears. |
+| Guiding or arrived | Map | The person ends guidance. The route leaves the map. The meter panel disappears. |
 | No tariff saved | Tariff saved | The person saves valid rates on Settings. The server replaces that driver's tariff. |
 | Signed in | Signed out | The server revokes the session, as slice 001 defines. Guidance and the meter end. |
 
@@ -108,11 +108,9 @@ A missing location fix, a rejected route, or a route the provider will not compu
 
 **Summary.** On iOS and Android, the calendar summary of a sortie the person authored shows Guide beside Revise. Guide starts guidance as section 4 says. On web, Guide is not shown.
 
-**Guiding a sortie.** The guidance chrome from slice 002 is unchanged: maneuver card, remaining time and distance, mute, and end guidance. The meter strip appears above the bottom bar.
+**Guiding a sortie.** The maneuver card from slice 002 remains. End guidance is on the meter panel (End Sortie). The bottom guidance bar with remaining time, distance, arrival, End, and Mute is not shown while the meter is in use. The meter panel appears above the bottom bar.
 
-**Meter strip.** While sortie guidance is in use, a strip about 1em high sits directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie. Fill is proximity along the active route: empty when remaining equals the baseline snapshotted when that route was set (start or successful reroute), full when remaining is 0. If remaining grows above the baseline before a reroute, fill stays empty. Text stays dark and reads, in order, miles traveled to one decimal, wait as whole minutes, and the cumulative total. Tapping the strip opens the overlay.
-
-**Meter overlay.** A card over the current screen. It shows wait as minutes and seconds, the flag, both charges, both rates from the snapshot, miles remaining, the cumulative total, and the trip estimate. Close dismisses it and leaves the meter running.
+**Meter panel.** While sortie guidance is in use, a panel about one quarter of the screen height sits directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie. The content band has three columns: Estimated (heading, then Miles, Time, and Fare as smaller rows — full trip miles as traveled plus remaining, the active route's trip duration, and the trip fare estimate), a centered bold running fare sized to the content height, and Actual (heading, then Miles, Time, and Fare — miles traveled to one decimal, wait as whole minutes, and the cumulative total), with Actual text right-aligned. Below the content band, a bar about 0.5em high fills with proximity to the end of the current guidance step (remaining distance to that step's end versus the step's distance). Under that, a bar about 1em high fills with proximity along the active route: empty when remaining equals the baseline snapshotted when that route was set (start or successful reroute), full when remaining is 0. If remaining grows above the baseline before a reroute, fill stays empty. Neither progress bar shows text. Tapping the panel swaps all of its contents for End Sortie; tapping again restores the meter reading. End Sortie ends guidance.
 
 **Settings.** On every platform, Settings shows the three tariff fields — flag drop, dollars per mile, and dollars per wait minute — above Sign out. Opening Settings ensures a driver, then reads that driver's tariff. The fields are editable money amounts. One action: save. Sign out stays below the tariff.
 
@@ -120,7 +118,7 @@ The person sees a failure in these cases:
 
 - Guide is tapped without a location fix. The summary stays open and the screen says that location is required. Guidance does not start.
 - The sortie route request fails, or the network is unreachable. The summary stays open and the screen says that the route failed. Guidance does not start.
-- The tariff cannot be read when guidance starts. Guidance still runs. The strip still shows miles and wait. The fare reads that it could not be calculated.
+- The tariff cannot be read when guidance starts. Guidance still runs. The panel still shows miles and wait. The fare reads that it could not be calculated.
 - Settings cannot ensure a driver or read the tariff. The screen says the tariff could not be loaded. The fields are not editable until a later successful read.
 - An empty or invalid tariff field is saved. The screen says the tariff was not saved. The previous tariff stays.
 - A tariff save fails because the network or server is unreachable. The screen says the tariff was not saved. The previous tariff stays.
@@ -171,17 +169,17 @@ The slice works when all of the following are true on the local stack:
 
 1. On iOS or Android, a signed-in driver can open a sortie they authored and tap Guide. With a location fix, Navigation opens in guidance for a route from that fix through the sortie's stops.
 2. Reaching a stop short of the destination continues guidance toward the remaining stops. Within 40 meters of the final stop, the screen shows arrival.
-3. While sortie guidance is in use, a strip about 1em high appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie, showing miles traveled, wait minutes, and the cumulative total, with fill for proximity to the destination from remaining versus the route baseline.
-4. Tapping the strip opens an overlay with wait as minutes and seconds, the flag, both charges, both rates, miles remaining, the cumulative total, and the trip estimate. Close dismisses the overlay and leaves the meter running.
-5. Ending guidance clears the route and removes the strip. Sign-out does the same.
+3. While sortie guidance is in use, a meter panel about one quarter of the screen height appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie, showing Estimated (full trip miles, trip duration, trip fare estimate), a large centered running fare, and Actual (miles traveled, wait minutes, fare so far, right-aligned), with a thin next-turn progress bar and a 1em destination progress bar (remaining versus the route baseline) and no text on either bar.
+4. Tapping the panel swaps its contents for End Sortie; tapping again restores the meter. End Sortie ends guidance and removes the panel.
+5. Ending guidance clears the route and removes the panel. Sign-out does the same.
 6. Starting guidance for a destination authored from search shows the meter. A route that is not a sortie does not.
 7. On every platform, Settings shows flag drop, dollars per mile, and dollars per wait minute. Saving valid rates persists them. Reloading Settings, and opening Settings on a second session for the same user, shows the saved rates. Defaults are $3.00, $2.50, and $0.40 when none were saved.
 8. An empty or invalid tariff field does not save. Zero is allowed. Amounts are non-negative and at most two decimal places.
 9. A meter started under one tariff keeps that snapshot when Settings later saves different rates. The next Guide uses the new rates.
 10. Miles traveled and miles remaining are road distance along the active route polyline (GPS projected onto the path). Miles increase only with forward progress along that path; off-route displacement does not add miles until a reroute. Wait accumulates while the GPS position is stationary (displacement at or below 5 meters, or below 2 m/s from successive fixes). The one-second wait ticker keeps wait advancing at least once per second while stopped — including when GPS is silent before a second fix, or after enough silence following movement that the vehicle must have stopped — and does not bill ordinary driving GPS gaps as wait. Device-reported speed is not used. A fix worse than 50 meters accuracy does not change the reading. Miles traveled do not reset on reroute. After a successful reroute or next-stop route, remaining and the progress baseline come from the replacement route so the progress bar is proximity: 1 − remaining / baseline.
-11. Guide without a location fix, or with a failed route, does not start guidance and does not show the strip.
+11. Guide without a location fix, or with a failed route, does not start guidance and does not show the panel.
 12. A missing, unknown, or revoked session is rejected on every endpoint in section 8. A session cannot request a route for another driver's sortie, and cannot read or replace another driver's tariff.
-13. On web, Settings still edits the tariff. Guide is not shown. The meter strip does not appear.
+13. On web, Settings still edits the tariff. Guide is not shown. The meter panel does not appear.
 14. Nothing about the live meter reading is in PostgreSQL after guidance ends. The driver tariff row remains.
 15. The flow runs with `pnpm dev:server` and `pnpm dev:mobile` on web, and with the local development build on iOS and Android. No EAS build and no store build are required.
 

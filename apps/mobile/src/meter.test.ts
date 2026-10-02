@@ -6,6 +6,7 @@ import {
   advanceMeterAlongRoute,
   emptyMeter,
   formatMoney,
+  formatTripEstimate,
   gpsSilenceStationarySeconds,
   isStationary,
   meterCharges,
@@ -29,6 +30,11 @@ describe("meter", () => {
     assert.equal(charges.estimateCents, 860 + 250);
     assert.equal(formatMoney(charges.totalCents), "$8.60");
     assert.equal(meterCharges(null, 1, 0, 0), null);
+  });
+
+  it("formats a pre-trip estimate from tariff and route distance", () => {
+    assert.equal(formatTripEstimate(defaultTariff, 1609.344), "$5.50");
+    assert.equal(formatTripEstimate(null, 1609.344), "—");
   });
 
   it("decides stationary from GPS displacement, not device speed", () => {

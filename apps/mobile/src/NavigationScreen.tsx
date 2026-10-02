@@ -2,11 +2,11 @@ import type { DrivingRoute, GeoCoordinate, PlaceSuggestion, SortieStop, Tariff }
 import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { useTheme } from "./ThemeProvider";
-import type { ThemeColors } from "./theme";
+import { withAlpha, type ThemeColors } from "./theme";
 import { resolveApiUrl } from "./apiUrl";
 import { authorSortie, ensureCurrentDriver, reportLocationObservation, requestTariff } from "./calendarClient";
 import {
@@ -23,7 +23,6 @@ import {
   pathLengthMeters,
   projectOntoPath,
   remainingDistanceMeters,
-  remainingDurationSeconds,
   smoothBearing,
   travelBearing,
 } from "./guidance";
@@ -35,6 +34,7 @@ import {
 import {
   advanceMeterAlongRoute,
   emptyMeter,
+  formatTripEstimate,
   resetMeterRouteProgress,
   tickMeterWait,
   type MeterState,
@@ -54,6 +54,7 @@ type NavState =
       route: DrivingRoute;
       sortieId: string;
       stops: SortieStop[];
+      tariff: Tariff | null;
     }
   | {
       mode: "guiding";
@@ -88,6 +89,7 @@ export function NavigationScreen({
   onSortieGuideConsumed,
   onMeterReading,
   onMeterEnded,
+  endGuidanceRef,
 }: {
   token: string;
   onUnauthorized: () => void;
@@ -95,6 +97,7 @@ export function NavigationScreen({
   onSortieGuideConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
+  endGuidanceRef?: MutableRefObject<(() => void) | null>;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -107,7 +110,6 @@ export function NavigationScreen({
   const [course, setCourse] = useState<number | null>(null);
   const [compass, setCompass] = useState<number | null>(null);
   const [routeEpoch, setRouteEpoch] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
   const [meter, setMeter] = useState<MeterState>(emptyMeter());
   const cameraPrefs = useSyncExternalStore(
     subscribeGuidanceCameraPrefs,
@@ -193,11 +195,23 @@ export function NavigationScreen({
       current.mode === "arrived"
         ? 0
         : remainingDistanceMeters(at ?? current.destination, current.route, current.stepIndex);
+    const step =
+      current.mode === "guiding" ? current.route.steps[current.stepIndex] : undefined;
+    const turnRemainingMeters =
+      step === undefined
+        ? 0
+        : at
+          ? distanceToStepEnd(at, step)
+          : step.distanceMeters;
+    const turnBaselineMeters = step?.distanceMeters ?? 0;
     onMeterReading?.({
       milesTraveled: nextMeter.milesTraveled,
       waitSeconds: nextMeter.waitSeconds,
       remainingMeters: remaining,
       baselineRemainingMeters: baselineRemainingRef.current,
+      estimatedDurationSeconds: current.route.durationSeconds,
+      turnRemainingMeters,
+      turnBaselineMeters,
       tariff: current.tariff,
     });
   }
@@ -343,14 +357,6 @@ export function NavigationScreen({
     }, 1_000);
     return () => clearInterval(timer);
   }, [meterActive]);
-
-  useEffect(() => {
-    if (nav.mode !== "guiding" && nav.mode !== "arrived") {
-      return;
-    }
-    const timer = setInterval(() => setNow(Date.now()), 15_000);
-    return () => clearInterval(timer);
-  }, [nav.mode]);
 
   // Prefer GPS course for the camera; only follow compass when course is absent so
   // high-rate heading ticks do not restart Android camera animations.
@@ -630,12 +636,15 @@ export function NavigationScreen({
       return;
     }
 
-    const result = await requestDrivingRoute(apiUrl, token, origin, suggestion);
+    const [result, tariffResult] = await Promise.all([
+      requestDrivingRoute(apiUrl, token, origin, suggestion),
+      requestTariff(apiUrl, token),
+    ]);
     if (requestId !== routeRequest.current) {
       return;
     }
     setFinding(false);
-    if (result === "unauthorized") {
+    if (result === "unauthorized" || tariffResult === "unauthorized") {
       onUnauthorized();
       return;
     }
@@ -643,12 +652,14 @@ export function NavigationScreen({
       setNav({ mode: "browse", destination: suggestion, message: "The route failed." });
       return;
     }
+    const tariff = typeof tariffResult === "string" ? null : tariffResult;
     setNav({
       mode: "preview",
       destination: suggestion,
       route: result,
       sortieId: authored.id,
       stops: authored.stops,
+      tariff,
     });
     const camera = overviewCamera(result.path);
     if (camera) {
@@ -656,7 +667,7 @@ export function NavigationScreen({
     }
   }
 
-  async function onStart(): Promise<void> {
+  function onStart(): void {
     if (nav.mode !== "preview") {
       return;
     }
@@ -668,12 +679,6 @@ export function NavigationScreen({
     if (origin) {
       sendGuidanceCamera(guidanceCameraFrom(origin));
     }
-    const tariffResult = await requestTariff(apiUrl, token);
-    if (tariffResult === "unauthorized") {
-      onUnauthorized();
-      return;
-    }
-    const tariff = typeof tariffResult === "string" ? null : tariffResult;
     const started = emptyMeter();
     setMeter(started);
     meterRef.current = started;
@@ -690,7 +695,7 @@ export function NavigationScreen({
       sortieId: nav.sortieId,
       stops: nav.stops,
       firstStopPosition: 0,
-      tariff,
+      tariff: nav.tariff,
     };
     setNav(next);
     setRouteEpoch((epoch) => epoch + 1);
@@ -713,17 +718,8 @@ export function NavigationScreen({
     onMeterEnded?.();
   }
 
-  function onMute(): void {
-    setNav((current) => {
-      if (current.mode !== "guiding" && current.mode !== "arrived") {
-        return current;
-      }
-      const muted = !current.muted;
-      if (muted) {
-        void Speech.stop();
-      }
-      return { ...current, muted };
-    });
+  if (endGuidanceRef) {
+    endGuidanceRef.current = onDismiss;
   }
 
   const guiding = nav.mode === "guiding" ? nav : null;
@@ -798,9 +794,11 @@ export function NavigationScreen({
             <Text style={styles.destination}>{preview.destination.label}</Text>
             <Text style={styles.summary}>
               {formatSeconds(preview.route.durationSeconds)} · {formatMeters(preview.route.distanceMeters)}
+              {" · "}
+              {formatTripEstimate(preview.tariff, preview.route.distanceMeters)}
             </Text>
             <View style={styles.row}>
-              <Pressable style={styles.primary} onPress={() => void onStart()}>
+              <Pressable style={styles.primary} onPress={onStart}>
                 <Text style={styles.primaryText}>Start</Text>
               </Pressable>
               <Pressable style={styles.secondary} onPress={onDismiss}>
@@ -810,35 +808,9 @@ export function NavigationScreen({
           </View>
         ) : null}
 
-        {guiding && step ? (
-          <View style={styles.sheet} pointerEvents="auto">
-            <Text style={styles.summary}>
-              {formatSeconds(remainingDurationSeconds(fix ?? step.path[0] ?? guiding.destination, guiding.route, guiding.stepIndex))}
-              {" · "}
-              {formatMeters(remainingDistanceMeters(fix ?? step.path[0] ?? guiding.destination, guiding.route, guiding.stepIndex))}
-              {" · "}
-              {arrivalLabel(
-                now,
-                remainingDurationSeconds(fix ?? step.path[0] ?? guiding.destination, guiding.route, guiding.stepIndex),
-              )}
-            </Text>
-            {guiding.rerouteMessage ? <Text style={styles.message}>{guiding.rerouteMessage}</Text> : null}
-            <View style={styles.row}>
-              <Pressable style={styles.primary} onPress={onDismiss}>
-                <Text style={styles.primaryText}>End</Text>
-              </Pressable>
-              <Pressable style={styles.secondary} onPress={onMute}>
-                <Text style={styles.secondaryText}>{guiding.muted ? "Unmute" : "Mute"}</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : null}
-
-        {arrived ? (
-          <View style={styles.sheet} pointerEvents="auto">
-            <Pressable style={styles.primary} onPress={onDismiss}>
-              <Text style={styles.primaryText}>End</Text>
-            </Pressable>
+        {guiding?.rerouteMessage ? (
+          <View style={styles.sheet} pointerEvents="none">
+            <Text style={styles.message}>{guiding.rerouteMessage}</Text>
           </View>
         ) : null}
 
@@ -881,13 +853,6 @@ async function speak(
   Speech.speak(text);
 }
 
-function arrivalLabel(nowMs: number, remainingSeconds: number): string {
-  return new Date(nowMs + remainingSeconds * 1000).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     screen: {
@@ -905,7 +870,7 @@ function createStyles(colors: ThemeColors) {
     maneuverCard: {
       marginHorizontal: 12,
       marginTop: 8,
-      backgroundColor: colors.surface,
+      backgroundColor: withAlpha(colors.surface, 0.3),
       borderRadius: 12,
       padding: 16,
     },

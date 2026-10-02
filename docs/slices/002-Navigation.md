@@ -149,13 +149,13 @@ On iOS and Android, the map is the Navigation destination after sign-in. A persi
 
 **Suggestions.** While the query is non-empty, up to five labels. Selecting a label requests the route. An empty query shows no suggestions.
 
-**Route preview.** The route is drawn, with the destination. The screen shows distance, expected duration, and two actions: start guidance, and dismiss.
+**Route preview.** The route is drawn, with the destination. The screen shows distance, expected duration, a fare estimate from the driver's tariff and the route distance, and two actions: start guidance, and dismiss.
 
-**Guiding.** The search field is not shown. A card shows the maneuver, the distance to the end of the current step, and the instruction. The camera follows the device, heading-up and tilted, framed so the fix stays near the bottom center of the screen (Android map content padding; iOS look-ahead along the travel bearing). The bearing follows the device course when the fix includes one, otherwise the device heading. When neither is available, the camera still frames from the fix with a north bearing. A bar shows remaining time, remaining distance, arrival time, and two controls: end guidance, and mute. Where the toolkit exposes a traffic layer, that layer is on. The spoken duration still comes only from the route response.
+**Guiding.** The search field is not shown. A card shows the maneuver, the distance to the end of the current step, and the instruction. The camera follows the device, heading-up and tilted, framed so the fix stays near the bottom center of the screen (Android map content padding; iOS look-ahead along the travel bearing). The bearing follows the device course when the fix includes one, otherwise the device heading. When neither is available, the camera still frames from the fix with a north bearing. End guidance is on the meter panel from slice 004 (End Sortie). Where the toolkit exposes a traffic layer, that layer is on. The spoken duration still comes only from the route response.
 
-**Arrived.** The card shows that the person has arrived. End guidance returns to the map.
+**Arrived.** The card shows that the person has arrived. End Sortie on the meter panel returns to the map.
 
-The phone speaks with the device speech synthesizer. It speaks the current step's instruction once when guidance starts, once when the current step changes, and once on arrival. Mute silences speech. The control starts unmuted. Turning sound back on does not repeat the current instruction.
+The phone speaks with the device speech synthesizer. It speaks the current step's instruction once when guidance starts, once when the current step changes, and once on arrival.
 
 On web, Navigation shows the slice 001 signed-in identity and live-connection state. Sign out is on Settings.
 
@@ -211,8 +211,8 @@ The slice works when all of the following are true on the local stack:
 1. A signed-in person on Android or iOS sees a full-screen map.
 2. A non-empty search shows at most five labeled suggestions. An empty query shows none, and the server does not call Google for it.
 3. With location available, selecting a suggestion authors a destination-only immediate sortie, then draws one driving route from the current location and shows distance and duration. If that sortie is not created, the route is not drawn and guidance does not start.
-4. Starting guidance shows the current maneuver, the distance to it, remaining time, remaining distance, and arrival time, and the map follows the device heading-up.
-5. The phone speaks the instruction when guidance starts and when the maneuver changes, once each. Mute silences speech. Speech starts unmuted. Turning sound back on does not repeat the current instruction.
+4. Starting guidance shows the current maneuver and the distance to it, and the map follows the device heading-up.
+5. The phone speaks the instruction when guidance starts and when the maneuver changes, once each.
 6. A location fix within 30 meters of the current step's end shows the next step, and one fix changes at most one step.
 7. Staying more than 50 meters from the route path for 5 seconds requests a new route to the same destination and shows that route. Returning inside 50 meters before 5 seconds does not request one.
 8. A failed reroute leaves the previous route on screen and says that rerouting failed.

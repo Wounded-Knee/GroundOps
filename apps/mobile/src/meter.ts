@@ -202,3 +202,9 @@ export function formatWaitClock(waitSeconds: number): string {
 export function formatMoney(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
+
+/** Pre-trip fare from tariff and full route distance; "—" when tariff is missing. */
+export function formatTripEstimate(tariff: Tariff | null, distanceMeters: number): string {
+  const charges = meterCharges(tariff, 0, 0, distanceMeters);
+  return charges ? formatMoney(charges.estimateCents) : "—";
+}
