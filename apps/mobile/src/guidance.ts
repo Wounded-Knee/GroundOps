@@ -1,6 +1,9 @@
 import type { DrivingRoute, GeoCoordinate, Maneuver, RouteStep } from "@groundops/contracts";
 
+/** Default distance to the step end at which the current step is considered completed. */
 export const stepAdvanceMeters = 30;
+/** Default distance before the upcoming maneuver at which guidance announces. */
+export const announceLeadMeters = 250;
 export const offRouteMeters = 50;
 export const offRouteMilliseconds = 5_000;
 export const arrivalMeters = 40;
@@ -26,6 +29,7 @@ export function applyLocationFix(input: {
   now: number;
   offRouteSince: number | null;
   rerouteInFlight: boolean;
+  stepAdvanceMeters: number;
 }): FixResult {
   if (distanceMeters(input.fix, input.destination) <= arrivalMeters) {
     return {
@@ -39,7 +43,11 @@ export function applyLocationFix(input: {
   const lastIndex = Math.max(0, input.route.steps.length - 1);
   let stepIndex = Math.min(Math.max(0, input.stepIndex), lastIndex);
   const step = input.route.steps[stepIndex];
-  if (step && stepIndex < lastIndex && distanceToStepEnd(input.fix, step) <= stepAdvanceMeters) {
+  if (
+    step &&
+    stepIndex < lastIndex &&
+    distanceToStepEnd(input.fix, step) <= input.stepAdvanceMeters
+  ) {
     stepIndex += 1;
   }
 
@@ -147,6 +155,36 @@ export function distanceToStepEnd(fix: GeoCoordinate, step: RouteStep): number {
     return step.distanceMeters;
   }
   return distanceMeters(fix, end);
+}
+
+/** Index of the maneuver to show/announce while driving the current segment. */
+export function upcomingStepIndex(route: DrivingRoute, stepIndex: number): number {
+  const lastIndex = Math.max(0, route.steps.length - 1);
+  const current = Math.min(Math.max(0, stepIndex), lastIndex);
+  return current < lastIndex ? current + 1 : current;
+}
+
+export function upcomingStep(route: DrivingRoute, stepIndex: number): RouteStep | null {
+  return route.steps[upcomingStepIndex(route, stepIndex)] ?? null;
+}
+
+/** Distance to the upcoming maneuver (end of the current segment). */
+export function distanceToUpcomingManeuver(
+  fix: GeoCoordinate,
+  route: DrivingRoute,
+  stepIndex: number,
+): number {
+  const lastIndex = Math.max(0, route.steps.length - 1);
+  const current = Math.min(Math.max(0, stepIndex), lastIndex);
+  const currentStep = route.steps[current];
+  if (!currentStep) {
+    return 0;
+  }
+  return distanceToStepEnd(fix, currentStep);
+}
+
+export function shouldAnnounceUpcoming(distanceToManeuverMeters: number, leadMeters: number): boolean {
+  return distanceToManeuverMeters <= leadMeters;
 }
 
 export function distanceMeters(from: GeoCoordinate, to: GeoCoordinate): number {

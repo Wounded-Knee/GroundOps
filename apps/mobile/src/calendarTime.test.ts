@@ -8,11 +8,17 @@ import {
   hourHeightMax,
   hourHeightMin,
   minuteDeltaFromPixels,
+  arrivalFromTimeInput,
+  calendarTimeInputValue,
+  minutesFromMidnight,
   moveInterval,
+  nowLineTop,
   phoneDigits,
   resizeEnd,
   resizeStart,
+  setCalendarTimeZoneOverride,
   shiftIntervalDays,
+  startOfDay,
   visibleRange,
 } from "./calendarTime.js";
 
@@ -73,12 +79,18 @@ describe("calendar time", () => {
     const zoomed = blockOnDay(new Date(2026, 8, 28, 9, 0), new Date(2026, 8, 28, 10, 0), new Date(2026, 8, 28, 12), 128);
     assert.equal(zoomed?.top, 9 * 128);
     assert.equal(zoomed?.height, 128);
+    const short = blockOnDay(new Date(2026, 8, 28, 9, 0), new Date(2026, 8, 28, 9, 15), new Date(2026, 8, 28, 12));
+    assert.equal(short?.height, 16);
   });
 
   it("clamps the hour scale used for pinch zoom", () => {
     assert.equal(clampHourHeight(hourHeightMin - 10), hourHeightMin);
     assert.equal(clampHourHeight(hourHeightMax + 10), hourHeightMax);
     assert.equal(clampHourHeight(80), 80);
+    assert.equal(clampHourHeight(80.4), 80);
+    assert.equal(clampHourHeight(80.6), 81);
+    assert.equal(clampHourHeight(66.2, 3.5), 66 + 1 / 3.5);
+    assert.equal(clampHourHeight(66.3, 3.5), 66 + 1 / 3.5);
   });
 
   it("formats a US phone and keeps ten digits", () => {
@@ -86,5 +98,36 @@ describe("calendar time", () => {
     assert.equal(formatUsPhone("(555) 123-4567"), "(555) 123-4567");
     assert.equal(phoneDigits("(555) 123-4567"), "5551234567");
     assert.equal(phoneDigits("555"), "555");
+  });
+
+  it("places the now-line using an explicit IANA zone when the runtime is UTC", () => {
+    setCalendarTimeZoneOverride("America/New_York");
+    try {
+      // 2026-10-05T01:27:00Z == 2026-10-04 21:27 EDT
+      const now = new Date("2026-10-05T01:27:00.000Z");
+      assert.equal(minutesFromMidnight(now), 21 * 60 + 27);
+      assert.equal(nowLineTop(now, 64), ((21 * 60 + 27) / 60) * 64);
+      const day = startOfDay(now);
+      assert.equal(day.toISOString(), "2026-10-04T04:00:00.000Z");
+    } finally {
+      setCalendarTimeZoneOverride(null);
+    }
+  });
+
+  it("formats and parses web time inputs in the calendar zone", () => {
+    setCalendarTimeZoneOverride("America/New_York");
+    try {
+      // 2026-10-04 17:50 EDT
+      const arrival = new Date("2026-10-04T21:50:00.000Z");
+      assert.equal(calendarTimeInputValue(arrival), "17:50");
+      const next = arrivalFromTimeInput("17:50", arrival);
+      assert.ok(next);
+      assert.equal(next.toISOString(), "2026-10-04T21:50:00.000Z");
+      const changed = arrivalFromTimeInput("18:15", arrival);
+      assert.ok(changed);
+      assert.equal(changed.toISOString(), "2026-10-04T22:15:00.000Z");
+    } finally {
+      setCalendarTimeZoneOverride(null);
+    }
   });
 });

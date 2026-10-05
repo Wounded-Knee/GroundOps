@@ -104,6 +104,7 @@ function isSortie(value: unknown): value is Sortie {
     typeof record.arrivalAuthored === "boolean" &&
     typeof record.scheduledStart === "string" &&
     typeof record.scheduledEnd === "string" &&
+    (record.actualStart === null || typeof record.actualStart === "string") &&
     typeof record.departureAddress === "string" &&
     (record.passengerName === null || typeof record.passengerName === "string") &&
     (record.passengerPhone === null || typeof record.passengerPhone === "string") &&
@@ -124,6 +125,8 @@ function isStop(value: unknown): value is SortieStop {
     typeof record.latitude === "number" &&
     Number.isFinite(record.latitude) &&
     typeof record.longitude === "number" &&
-    Number.isFinite(record.longitude)
+    Number.isFinite(record.longitude) &&
+    Number.isInteger(record.waitMinutes) &&
+    Number(record.waitMinutes) >= 0
   );
 }

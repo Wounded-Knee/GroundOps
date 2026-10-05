@@ -1,7 +1,7 @@
 import type { GeoCoordinate, SortieStop } from "@groundops/contracts";
 
-/** Ten statute miles. A later fix at least this far from the last computation anchor recomputes the window. */
-export const recomputeMeters = 10 * 1609.344;
+/** Five statute miles. A later fix at least this far from the last computation anchor recomputes the window. */
+export const recomputeMeters = 5 * 1609.344;
 
 export const scheduleBackoffMs = 5 * 60 * 1000;
 
@@ -122,14 +122,17 @@ async function authoredWindow(
   if (approach === "failed") {
     return "failed";
   }
-  const onward = await onwardSeconds(stops, arrivalAt, now, driveDuration);
+  const firstWaitSeconds = waitSeconds(target);
+  const onwardDeparture = new Date(arrivalAt.getTime() + firstWaitSeconds * 1000);
+  const onward = await onwardSeconds(stops, onwardDeparture, now, driveDuration);
   if (onward === "failed") {
     return "failed";
   }
+  const dwellSeconds = firstWaitSeconds + laterWaitSeconds(stops, target);
   return {
     arrivalAt,
     scheduledStart: new Date(arrivalAt.getTime() - approach * 1000),
-    scheduledEnd: new Date(arrivalAt.getTime() + onward * 1000),
+    scheduledEnd: new Date(arrivalAt.getTime() + (dwellSeconds + onward) * 1000),
   };
 }
 
@@ -145,14 +148,17 @@ async function immediateWindow(
     return "failed";
   }
   const arrivalAt = new Date(now.getTime() + approach * 1000);
-  const onward = await onwardSeconds(stops, arrivalAt, now, driveDuration);
+  const firstWaitSeconds = waitSeconds(target);
+  const onwardDeparture = new Date(arrivalAt.getTime() + firstWaitSeconds * 1000);
+  const onward = await onwardSeconds(stops, onwardDeparture, now, driveDuration);
   if (onward === "failed") {
     return "failed";
   }
+  const dwellSeconds = firstWaitSeconds + laterWaitSeconds(stops, target);
   return {
     arrivalAt,
     scheduledStart: new Date(now.getTime()),
-    scheduledEnd: new Date(arrivalAt.getTime() + onward * 1000),
+    scheduledEnd: new Date(arrivalAt.getTime() + (dwellSeconds + onward) * 1000),
   };
 }
 
@@ -183,6 +189,35 @@ async function onwardSeconds(
 
 function coordinate(stop: SortieStop): GeoCoordinate {
   return { latitude: stop.latitude, longitude: stop.longitude };
+}
+
+function waitSeconds(stop: SortieStop): number {
+  return Math.max(0, stop.waitMinutes) * 60;
+}
+
+/** Waits on every stop after the first place on the sortie. */
+function laterWaitSeconds(stops: SortieStop[], first: SortieStop): number {
+  let seen = false;
+  let total = 0;
+  for (const stop of stops) {
+    if (!seen) {
+      if (stop === first || sameStop(stop, first)) {
+        seen = true;
+      }
+      continue;
+    }
+    total += waitSeconds(stop);
+  }
+  return total;
+}
+
+function sameStop(left: SortieStop, right: SortieStop): boolean {
+  return (
+    left.role === right.role &&
+    left.latitude === right.latitude &&
+    left.longitude === right.longitude &&
+    left.label === right.label
+  );
 }
 
 async function approachSeconds(

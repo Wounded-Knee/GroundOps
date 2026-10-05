@@ -3,13 +3,26 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { createElement, useState } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
-import { formatUsPhone, phoneDigits, withPickedDate, withPickedTime } from "./calendarTime";
+import {
+  arrivalFromDateInput,
+  arrivalFromTimeInput,
+  calendarDateInputValue,
+  calendarTimeInputValue,
+  formatCalendarDate,
+  formatCalendarTime,
+  formatUsPhone,
+  hourLabel,
+  phoneDigits,
+  withPickedDate,
+  withPickedTime,
+} from "./calendarTime";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
 
 export type StopDraft = {
   query: string;
   chosen: PlaceSuggestion | null;
+  waitMinutes: number;
 };
 
 export type DialogDraft = {
@@ -52,6 +65,11 @@ export function SortieDialog({
   const [picker, setPicker] = useState<PickerTarget | null>(null);
 
   function applyPicked(target: PickerTarget, picked: Date): void {
+    if (Platform.OS === "web") {
+      // WebPicker already built a calendar-zone instant; keep picker open so hour+minute can both be set.
+      setArrival(picked);
+      return;
+    }
     if (target === "arrival-date") {
       setArrival((current) => withPickedDate(current ?? new Date(), picked));
     } else {
@@ -107,14 +125,14 @@ export function SortieDialog({
               <View style={styles.arrivalHalf}>
                 <PickerButton
                   label="Arrival date"
-                  value={arrival.toLocaleDateString()}
+                  value={formatCalendarDate(arrival)}
                   onPress={() => setPicker("arrival-date")}
                 />
               </View>
               <View style={styles.arrivalHalf}>
                 <PickerButton
                   label="Arrival time"
-                  value={arrival.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                  value={formatCalendarTime(arrival)}
                   onPress={() => setPicker("arrival-time")}
                 />
               </View>
@@ -127,7 +145,12 @@ export function SortieDialog({
         </View>
         {arrival && picker ? (
           Platform.OS === "web" ? (
-            <WebPicker mode={pickerMode} value={arrival} onPicked={(picked) => applyPicked(picker, picked)} />
+            <>
+              <WebPicker mode={pickerMode} value={arrival} onPicked={(picked) => applyPicked(picker, picked)} />
+              <Pressable onPress={() => setPicker(null)} style={styles.secondary}>
+                <Text style={styles.secondaryText}>Done</Text>
+              </Pressable>
+            </>
           ) : (
             <DateTimePicker
               value={arrival}
@@ -243,15 +266,31 @@ function PlaceField({
         token={token}
         onQueryChange={(query) => {
           const chosen = stop.chosen && stop.chosen.label === query ? stop.chosen : null;
-          onChange({ query, chosen });
+          onChange({ query, chosen, waitMinutes: stop.waitMinutes });
         }}
-        onSelect={(suggestion) => onChange({ query: suggestion.label, chosen: suggestion })}
+        onSelect={(suggestion) =>
+          onChange({ query: suggestion.label, chosen: suggestion, waitMinutes: stop.waitMinutes })
+        }
         onUnauthorized={onUnauthorized}
       />
       {stop.chosen ? (
-        <Pressable onPress={onClear} style={styles.secondary}>
-          <Text style={styles.secondaryText}>{clearLabel}</Text>
-        </Pressable>
+        <>
+          <Text style={styles.fieldLabel}>Wait (minutes)</Text>
+          <TextInput
+            value={String(stop.waitMinutes)}
+            onChangeText={(value) => {
+              const digits = value.replace(/\D/g, "");
+              onChange({ ...stop, waitMinutes: digits.length === 0 ? 0 : Number(digits) });
+            }}
+            keyboardType={Platform.OS === "web" ? "default" : "number-pad"}
+            inputMode={Platform.OS === "web" ? "numeric" : undefined}
+            placeholderTextColor={colors.textMuted}
+            style={styles.input}
+          />
+          <Pressable onPress={onClear} style={styles.secondary}>
+            <Text style={styles.secondaryText}>{clearLabel}</Text>
+          </Pressable>
+        </>
       ) : null}
     </View>
   );
@@ -269,12 +308,55 @@ function PickerButton({ label, value, onPress }: { label: string; value: string;
 }
 
 function WebPicker({ mode, value, onPicked }: { mode: "date" | "time"; value: Date; onPicked: (date: Date) => void }) {
-  const shown = mode === "date" ? dateInputValue(value) : timeInputValue(value);
+  const shown = mode === "date" ? calendarDateInputValue(value) : calendarTimeInputValue(value);
+
+  function commitTime(raw: string): void {
+    const next = arrivalFromTimeInput(raw, value);
+    if (next) {
+      onPicked(next);
+    }
+  }
+
+  if (mode === "time") {
+    const hour = shown.slice(0, 2);
+    const minute = shown.slice(3, 5);
+    return createElement(
+      "div",
+      { style: { display: "flex", gap: 8, marginTop: 8, alignItems: "center" } },
+      createElement(
+        "select",
+        {
+          value: hour,
+          "aria-label": "Arrival hour",
+          onChange: (event: { target: { value: string } }) => commitTime(`${event.target.value}:${minute}`),
+          style: { fontSize: 16, padding: 8 },
+        },
+        ...Array.from({ length: 24 }, (_, h) => {
+          const option = String(h).padStart(2, "0");
+          return createElement("option", { key: option, value: option }, hourLabel(h));
+        }),
+      ),
+      createElement(
+        "select",
+        {
+          value: minute,
+          "aria-label": "Arrival minute",
+          onChange: (event: { target: { value: string } }) => commitTime(`${hour}:${event.target.value}`),
+          style: { fontSize: 16, padding: 8 },
+        },
+        ...Array.from({ length: 60 }, (_, m) => {
+          const option = String(m).padStart(2, "0");
+          return createElement("option", { key: option, value: option }, option);
+        }),
+      ),
+    );
+  }
+
   return createElement("input", {
-    type: mode,
+    type: "date",
     value: shown,
     onChange: (event: { target: { value: string } }) => {
-      const next = mode === "date" ? dateFromInput(event.target.value, value) : timeFromInput(event.target.value, value);
+      const next = arrivalFromDateInput(event.target.value, value);
       if (next) {
         onPicked(next);
       }
@@ -289,67 +371,56 @@ function chosenStops(pickup: StopDraft, destination: StopDraft, waypoints: StopD
   }
   const stops: SortieStop[] = [];
   if (pickup.chosen) {
-    stops.push(toStop("pickup", pickup.chosen));
+    const stop = toStop("pickup", pickup);
+    if (!stop) {
+      return null;
+    }
+    stops.push(stop);
   }
   if (pickup.chosen && destination.chosen) {
     for (const waypoint of waypoints) {
       if (!waypoint.chosen) {
         return null;
       }
-      stops.push(toStop("waypoint", waypoint.chosen));
+      const stop = toStop("waypoint", waypoint);
+      if (!stop) {
+        return null;
+      }
+      stops.push(stop);
     }
   }
   if (destination.chosen) {
-    stops.push(toStop("destination", destination.chosen));
+    const stop = toStop("destination", destination);
+    if (!stop) {
+      return null;
+    }
+    stops.push(stop);
   }
   return stops;
 }
 
-function toStop(role: StopRole, suggestion: PlaceSuggestion): SortieStop {
+function toStop(role: StopRole, draft: StopDraft): SortieStop | null {
+  if (!draft.chosen || !Number.isInteger(draft.waitMinutes) || draft.waitMinutes < 0) {
+    return null;
+  }
   return {
     role,
-    label: suggestion.label,
-    latitude: suggestion.latitude,
-    longitude: suggestion.longitude,
+    label: draft.chosen.label,
+    latitude: draft.chosen.latitude,
+    longitude: draft.chosen.longitude,
+    waitMinutes: draft.waitMinutes,
   };
 }
 
-function dateInputValue(date: Date): string {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function timeInputValue(date: Date): string {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function dateFromInput(value: string, base: Date): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) {
-    return null;
-  }
-  return withPickedDate(base, new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-}
-
-function timeFromInput(value: string, base: Date): Date | null {
-  const match = /^(\d{2}):(\d{2})$/.exec(value);
-  if (!match) {
-    return null;
-  }
-  return withPickedTime(base, new Date(base.getFullYear(), base.getMonth(), base.getDate(), Number(match[1]), Number(match[2])));
-}
-
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
 function blankStop(): StopDraft {
-  return { query: "", chosen: null };
+  return { query: "", chosen: null, waitMinutes: 0 };
 }
 
 function draftFromStop(stop: SortieStop): StopDraft {
   return {
     query: stop.label,
     chosen: { label: stop.label, name: stop.label, detail: "", latitude: stop.latitude, longitude: stop.longitude },
+    waitMinutes: stop.waitMinutes,
   };
 }
 

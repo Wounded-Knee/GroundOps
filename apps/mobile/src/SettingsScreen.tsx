@@ -14,6 +14,14 @@ import {
   normalizeGuidanceCameraPrefs,
   saveGuidanceCameraPrefs,
 } from "./guidanceCameraPrefs";
+import {
+  announceLeadRange,
+  defaultGuidanceTimingPrefs,
+  ensureGuidanceTimingPrefsLoaded,
+  normalizeGuidanceTimingPrefs,
+  saveGuidanceTimingPrefs,
+  stepAdvanceRange,
+} from "./guidanceTimingPrefs";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
 import { throb } from "./VisualAlert";
@@ -60,10 +68,13 @@ export function SettingsScreen({
   const [waitText, setWaitText] = useState("");
   const [zoom, setZoom] = useState(defaultGuidanceCameraPrefs.zoom);
   const [tilt, setTilt] = useState(defaultGuidanceCameraPrefs.tilt);
+  const [announceLead, setAnnounceLead] = useState(defaultGuidanceTimingPrefs.announceLeadMeters);
+  const [stepAdvance, setStepAdvance] = useState(defaultGuidanceTimingPrefs.stepAdvanceMeters);
   const [message, setMessage] = useState<string | null>(null);
   const [editable, setEditable] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingCamera, setSavingCamera] = useState(false);
+  const [savingTiming, setSavingTiming] = useState(false);
   const [heldGeofence, setHeldGeofence] = useState<GeoCoordinate[]>(sampleGeofenceRing);
   const [geofenceOpen, setGeofenceOpen] = useState(false);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
@@ -84,9 +95,12 @@ export function SettingsScreen({
       setMessage(null);
       setEditable(false);
       const camera = await ensureGuidanceCameraPrefsLoaded();
+      const timing = await ensureGuidanceTimingPrefsLoaded();
       if (!cancelled) {
         setZoom(camera.zoom);
         setTilt(camera.tilt);
+        setAnnounceLead(timing.announceLeadMeters);
+        setStepAdvance(timing.stepAdvanceMeters);
       }
       const driver = await ensureCurrentDriver(apiUrl, token);
       if (cancelled) {
@@ -159,6 +173,23 @@ export function SettingsScreen({
     setSavingCamera(false);
     setZoom(saved.zoom);
     setTilt(saved.tilt);
+  }
+
+  async function onSaveTiming(): Promise<void> {
+    if (savingTiming) {
+      return;
+    }
+    setSavingTiming(true);
+    setMessage(null);
+    const saved = await saveGuidanceTimingPrefs(
+      normalizeGuidanceTimingPrefs({
+        announceLeadMeters: announceLead,
+        stepAdvanceMeters: stepAdvance,
+      }),
+    );
+    setSavingTiming(false);
+    setAnnounceLead(saved.announceLeadMeters);
+    setStepAdvance(saved.stepAdvanceMeters);
   }
 
   function updateVisualAlert(patch: Partial<VisualAlertPrefs>): void {
@@ -336,6 +367,34 @@ export function SettingsScreen({
       >
         <Text style={styles.saveButtonText}>Save camera</Text>
       </Pressable>
+      <Text style={styles.section}>Guidance timing</Text>
+      <View style={styles.row}>
+        <SliderField
+          label="Announce lead"
+          value={announceLead}
+          minimumValue={announceLeadRange.min}
+          maximumValue={announceLeadRange.max}
+          step={10}
+          formatValue={formatMetersSetting}
+          onChange={setAnnounceLead}
+        />
+        <SliderField
+          label="Step advance"
+          value={stepAdvance}
+          minimumValue={stepAdvanceRange.min}
+          maximumValue={stepAdvanceRange.max}
+          step={5}
+          formatValue={formatMetersSetting}
+          onChange={setStepAdvance}
+        />
+      </View>
+      <Pressable
+        style={[styles.button, styles.save, savingTiming ? styles.disabled : null]}
+        disabled={savingTiming}
+        onPress={() => void onSaveTiming()}
+      >
+        <Text style={styles.saveButtonText}>Save timing</Text>
+      </Pressable>
       <Text style={styles.section}>Meter tariff</Text>
       <View style={styles.row}>
         <Field label="Flag drop ($)" value={flagText} editable={editable} onChange={setFlagText} />
@@ -478,6 +537,10 @@ function formatTilt(value: number): string {
 
 function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
+}
+
+function formatMetersSetting(value: number): string {
+  return `${Math.round(value)} m`;
 }
 
 function createStyles(colors: ThemeColors) {

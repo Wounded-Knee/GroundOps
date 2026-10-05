@@ -727,7 +727,7 @@ Any change to:
 
 may trigger recalculation.
 
-Current location triggers that recalculation when the driver has moved at least ten miles from the position used for the last successful computation, and only for a sortie whose approach still starts from that position. A sortie with an authored arrival that follows another keeps the previous sortie's last place as its approach start. An arrival computed from an immediate departure is computed again from the new position. The cached origin includes the address of that starting place. The cached end of a sortie that is already past is left unchanged.
+Current location triggers that recalculation when the driver has moved at least five miles from the position used for the last successful computation, and only for a sortie whose approach still starts from that position. A sortie with an authored arrival that follows another keeps the previous sortie's last place as its approach start. An arrival computed from an immediate departure is computed again from the new position. The cached origin includes the address of that starting place. The cached end of a sortie that is already past is left unchanged.
 
 ---
 

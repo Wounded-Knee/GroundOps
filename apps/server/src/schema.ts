@@ -99,6 +99,7 @@ export const sortie = pgTable("sortie", {
   arrivalAuthored: boolean("arrival_authored").notNull().default(true),
   scheduledStart: timestamp("scheduled_start", { withTimezone: true, mode: "date" }).notNull(),
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true, mode: "date" }).notNull(),
+  actualStart: timestamp("actual_start", { withTimezone: true, mode: "date" }),
   scheduleOriginLatitude: doublePrecision("schedule_origin_latitude"),
   scheduleOriginLongitude: doublePrecision("schedule_origin_longitude"),
   scheduleOriginLabel: text("schedule_origin_label"),
@@ -121,6 +122,7 @@ export const sortieStop = pgTable(
     label: text("label").notNull(),
     latitude: doublePrecision("latitude").notNull(),
     longitude: doublePrecision("longitude").notNull(),
+    waitMinutes: integer("wait_minutes").notNull().default(0),
   },
   (table) => [uniqueIndex("sortie_stop_sortie_id_position_key").on(table.sortieId, table.position)],
 );

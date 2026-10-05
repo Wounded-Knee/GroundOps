@@ -5,6 +5,7 @@ import { findActiveSession } from "../identity/sessions.js";
 import { readBearer } from "../identity/tokens.js";
 import {
   authorSortie,
+  commenceSortie,
   defaultScheduleDeps,
   ensureDriver,
   readCalendar,
@@ -22,6 +23,7 @@ const stopBody = z.object({
   label: z.string(),
   latitude: z.number(),
   longitude: z.number(),
+  waitMinutes: z.number().int().nonnegative(),
 });
 
 const writeBody = z.object({
@@ -172,6 +174,28 @@ export function registerCalendarRoutes(
     if (result === "invalid") {
       return reply.code(400).send({ error: "invalid request" });
     }
+    if (result === "not-found") {
+      return reply.code(404).send({ error: "not found" });
+    }
+    if (result === "no-location") {
+      return reply.code(409).send({ error: "no location" });
+    }
+    if (result === "unavailable") {
+      return reply.code(503).send({ error: "schedule unavailable" });
+    }
+    return reply.send(result);
+  });
+
+  app.post("/sorties/:id/commence", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const params = sortieParams.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const result = await commenceSortie(active.user, params.data.id, deps);
     if (result === "not-found") {
       return reply.code(404).send({ error: "not found" });
     }

@@ -14,6 +14,13 @@ for (const [source, target] of clientIds) {
   }
 }
 
+// Web browsers (notably Firefox fingerprinting protection) may report UTC while the
+// host is not. Pin the calendar to the Expo host timezone for local web.
+if (!process.env.EXPO_PUBLIC_CALENDAR_TIMEZONE) {
+  process.env.EXPO_PUBLIC_CALENDAR_TIMEZONE =
+    Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, "../node_modules/expo/bin/cli");
 const child = spawn(process.execPath, [cli, ...process.argv.slice(2)], {

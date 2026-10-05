@@ -6,7 +6,7 @@ import {
   type SortieStop,
   type User,
 } from "@groundops/contracts";
-import { and, asc, desc, eq, gt, inArray, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../db.js";
 import { computeDriveDuration, lookupAddress } from "../routing/google.js";
 import {
@@ -32,6 +32,7 @@ const fallbackCompanyName = "Company";
 const sortieCreated = "sortie.created";
 const sortieRevised = "sortie.revised";
 const sortieScheduleComputed = "sortie.schedule_computed";
+const sortieCommenced = "sortie.commenced";
 
 export type SortieInput = {
   label: string;
@@ -82,6 +83,7 @@ type SortieRow = {
 
 type StoredSortie = SortieRow & {
   arrivalAuthored: boolean;
+  actualStart: Date | null;
   scheduleOriginLabel: string | null;
 };
 
@@ -128,15 +130,23 @@ export async function readCalendar(
       arrivalAuthored: sortie.arrivalAuthored,
       scheduledStart: sortie.scheduledStart,
       scheduledEnd: sortie.scheduledEnd,
+      actualStart: sortie.actualStart,
       scheduleOriginLabel: sortie.scheduleOriginLabel,
       passengerName: sortie.passengerName,
       passengerPhone: sortie.passengerPhone,
     })
     .from(sortie)
     .where(
-      and(eq(sortie.authorDriverId, author.id), lt(sortie.scheduledStart, to), gt(sortie.scheduledEnd, from)),
+      and(
+        eq(sortie.authorDriverId, author.id),
+        or(
+          and(isNotNull(sortie.actualStart), lt(sortie.actualStart, to)),
+          and(isNull(sortie.actualStart), lt(sortie.scheduledStart, to)),
+        ),
+        gt(sortie.scheduledEnd, from),
+      ),
     )
-    .orderBy(asc(sortie.scheduledStart), asc(sortie.id));
+    .orderBy(sql`coalesce(${sortie.actualStart}, ${sortie.scheduledStart})`, asc(sortie.id));
 
   const stops = await stopsBySortie(
     db,
@@ -199,6 +209,7 @@ export async function authorSortie(
         arrivalAuthored: sortie.arrivalAuthored,
         scheduledStart: sortie.scheduledStart,
         scheduledEnd: sortie.scheduledEnd,
+        actualStart: sortie.actualStart,
         scheduleOriginLabel: sortie.scheduleOriginLabel,
         passengerName: sortie.passengerName,
         passengerPhone: sortie.passengerPhone,
@@ -260,6 +271,7 @@ export async function reviseSortie(
         arrivalAuthored: valid.arrivalAt !== null,
         scheduledStart: window.scheduledStart,
         scheduledEnd: window.scheduledEnd,
+        actualStart: null,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
         scheduleOriginLabel: departureAddress,
@@ -275,6 +287,7 @@ export async function reviseSortie(
         arrivalAuthored: sortie.arrivalAuthored,
         scheduledStart: sortie.scheduledStart,
         scheduledEnd: sortie.scheduledEnd,
+        actualStart: sortie.actualStart,
         scheduleOriginLabel: sortie.scheduleOriginLabel,
         passengerName: sortie.passengerName,
         passengerPhone: sortie.passengerPhone,
@@ -293,6 +306,96 @@ export async function reviseSortie(
     await alignFollowingSorties(author.id, deps);
   }
   return revised;
+}
+
+export async function commenceSortie(
+  person: User,
+  sortieId: string,
+  deps: ScheduleDeps = defaultScheduleDeps,
+): Promise<Sortie | "not-found" | "no-location" | "unavailable"> {
+  const author = await findDriver(db, person.id);
+  if (!author) {
+    return "not-found";
+  }
+  const existing = await db
+    .select({
+      id: sortie.id,
+      label: sortie.label,
+      arrivalAt: sortie.arrivalAt,
+      arrivalAuthored: sortie.arrivalAuthored,
+      scheduledStart: sortie.scheduledStart,
+      scheduledEnd: sortie.scheduledEnd,
+      actualStart: sortie.actualStart,
+      scheduleOriginLabel: sortie.scheduleOriginLabel,
+      passengerName: sortie.passengerName,
+      passengerPhone: sortie.passengerPhone,
+    })
+    .from(sortie)
+    .where(and(eq(sortie.id, sortieId), eq(sortie.authorDriverId, author.id)))
+    .limit(1);
+  const row = existing[0];
+  if (!row) {
+    return "not-found";
+  }
+  const stops = (await stopsBySortie(db, [row.id])).get(row.id) ?? [];
+  if (row.actualStart !== null) {
+    return toSortie(row, stops);
+  }
+
+  const now = deps.now();
+  const position = await departurePosition(author.id, row.id, row.arrivalAuthored ? row.arrivalAt : null);
+  if (!position) {
+    return "no-location";
+  }
+  const window = await computeWindow(
+    position,
+    stops,
+    row.arrivalAuthored ? row.arrivalAt : null,
+    now,
+    deps.driveDuration,
+  );
+  if (window === "failed") {
+    return "unavailable";
+  }
+  const departureAddress = await originAddress(position, deps);
+
+  const commenced = await db.transaction(async (tx) => {
+    const updated = await tx
+      .update(sortie)
+      .set({
+        arrivalAt: window.arrivalAt,
+        scheduledStart: row.arrivalAuthored ? row.scheduledStart : window.scheduledStart,
+        scheduledEnd: window.scheduledEnd,
+        actualStart: now,
+        scheduleOriginLatitude: position.latitude,
+        scheduleOriginLongitude: position.longitude,
+        scheduleOriginLabel: departureAddress,
+        scheduleFailedAt: null,
+      })
+      .where(eq(sortie.id, sortieId))
+      .returning({
+        id: sortie.id,
+        label: sortie.label,
+        arrivalAt: sortie.arrivalAt,
+        arrivalAuthored: sortie.arrivalAuthored,
+        scheduledStart: sortie.scheduledStart,
+        scheduledEnd: sortie.scheduledEnd,
+        actualStart: sortie.actualStart,
+        scheduleOriginLabel: sortie.scheduleOriginLabel,
+        passengerName: sortie.passengerName,
+        passengerPhone: sortie.passengerPhone,
+      });
+    const next = updated[0];
+    if (!next) {
+      return "not-found" as const;
+    }
+    await writeEvent(tx, sortieCommenced, next, stops);
+    return toSortie(next, stops);
+  });
+  if (typeof commenced === "object") {
+    await alignFollowingSorties(author.id, deps);
+  }
+  return commenced;
 }
 
 export async function recordObservation(
@@ -325,6 +428,9 @@ async function recomputeOpenSorties(driverId: string, position: GeoCoordinate, d
 
   const places = await driverPlaces(driverId);
   for (const row of rows) {
+    if (row.actualStart !== null) {
+      continue;
+    }
     if (approachOrigin(places, row.arrivalAt, row.id, null) !== null) {
       continue;
     }
@@ -338,6 +444,9 @@ async function alignFollowingSorties(driverId: string, deps: ScheduleDeps): Prom
   const places = await driverPlaces(driverId);
   const rows = await openSorties(driverId, now);
   for (const row of rows) {
+    if (row.actualStart !== null) {
+      continue;
+    }
     const origin = approachOrigin(places, row.arrivalAt, row.id, gps);
     if (!origin) {
       continue;
@@ -507,7 +616,16 @@ function orderedStops(input: SortieStop[]): SortieStop[] | null {
     if (stopLabel.length === 0 || !Number.isFinite(stop.latitude) || !Number.isFinite(stop.longitude)) {
       return null;
     }
-    stops.push({ role: stop.role, label: stopLabel, latitude: stop.latitude, longitude: stop.longitude });
+    if (!Number.isInteger(stop.waitMinutes) || stop.waitMinutes < 0) {
+      return null;
+    }
+    stops.push({
+      role: stop.role,
+      label: stopLabel,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      waitMinutes: stop.waitMinutes,
+    });
   }
   return stops;
 }
@@ -549,6 +667,7 @@ async function writeStops(tx: Database, sortieId: string, stops: SortieStop[]): 
       label: stop.label,
       latitude: stop.latitude,
       longitude: stop.longitude,
+      waitMinutes: stop.waitMinutes,
     })),
   );
 }
@@ -580,6 +699,7 @@ async function stopsBySortie(tx: Database, sortieIds: string[]): Promise<Map<str
       label: sortieStop.label,
       latitude: sortieStop.latitude,
       longitude: sortieStop.longitude,
+      waitMinutes: sortieStop.waitMinutes,
     })
     .from(sortieStop)
     .where(inArray(sortieStop.sortieId, sortieIds))
@@ -590,7 +710,13 @@ async function stopsBySortie(tx: Database, sortieIds: string[]): Promise<Map<str
     if (!role) {
       continue;
     }
-    list.push({ role, label: row.label, latitude: row.latitude, longitude: row.longitude });
+    list.push({
+      role,
+      label: row.label,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      waitMinutes: row.waitMinutes,
+    });
     grouped.set(row.sortieId, list);
   }
   return grouped;
@@ -642,6 +768,7 @@ async function openSorties(driverId: string, now: Date): Promise<OpenSortie[]> {
       arrivalAuthored: sortie.arrivalAuthored,
       scheduledStart: sortie.scheduledStart,
       scheduledEnd: sortie.scheduledEnd,
+      actualStart: sortie.actualStart,
       passengerName: sortie.passengerName,
       passengerPhone: sortie.passengerPhone,
       scheduleOriginLatitude: sortie.scheduleOriginLatitude,
@@ -730,6 +857,7 @@ function toSortie(row: StoredSortie, stops: SortieStop[]): Sortie {
     arrivalAuthored: row.arrivalAuthored,
     scheduledStart: row.scheduledStart.toISOString(),
     scheduledEnd: row.scheduledEnd.toISOString(),
+    actualStart: row.actualStart ? row.actualStart.toISOString() : null,
     departureAddress: row.scheduleOriginLabel ?? "",
     passengerName: row.passengerName,
     passengerPhone: row.passengerPhone,

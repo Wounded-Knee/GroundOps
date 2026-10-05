@@ -85,6 +85,7 @@ function AppContent() {
   const [compose, setCompose] = useState<DialogDraft | null>(null);
   const [composeMessage, setComposeMessage] = useState<string | null>(null);
   const [calendarReload, setCalendarReload] = useState(0);
+  const [calendarScopeCycle, setCalendarScopeCycle] = useState(0);
   const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
@@ -108,6 +109,8 @@ function AppContent() {
         : AuthSession.ResponseType.IdToken,
       scopes: ["openid", "profile", "email"],
       usePKCE: nativeGoogleSignIn,
+      // Multiple Google accounts share the same display name here; always show the chooser.
+      prompt: AuthSession.Prompt.SelectAccount,
       extraParams: nativeGoogleSignIn ? undefined : { nonce },
     },
     googleDiscovery,
@@ -355,6 +358,10 @@ function AppContent() {
   }
 
   function onNavigate(next: SignedInDestination): void {
+    if (next === "calendar" && destination === "calendar" && compose === null) {
+      setCalendarScopeCycle((count) => count + 1);
+      return;
+    }
     setCompose(null);
     setComposeMessage(null);
     setDestination(next);
@@ -400,6 +407,16 @@ function AppContent() {
   }
 
   const signedIn = phase.status === "signed-in";
+  const meterOverlaysMap = destination === "navigation" && compose === null;
+  const meterStrip =
+    meterReading ? (
+      <MeterStrip
+        reading={meterReading}
+        onEndSortie={() => {
+          endGuidanceRef.current?.();
+        }}
+      />
+    ) : null;
   const overlay = (
     <VisualAlert
       color={visualAlert.color}
@@ -445,6 +462,7 @@ function AppContent() {
                     userId={phase.user.id}
                     token={phase.token}
                     reloadToken={calendarReload}
+                    scopeCycleToken={calendarScopeCycle}
                     onUnauthorized={() => void onSessionRejected()}
                     onGuide={(command) => {
                       setSortieGuide(command);
@@ -476,15 +494,13 @@ function AppContent() {
                   onSave={(body) => void saveCompose(phase.token, body)}
                 />
               ) : null}
+              {meterOverlaysMap && meterStrip ? (
+                <View style={styles.meterOverlay} pointerEvents="box-none">
+                  {meterStrip}
+                </View>
+              ) : null}
             </View>
-            {meterReading ? (
-              <MeterStrip
-                reading={meterReading}
-                onEndSortie={() => {
-                  endGuidanceRef.current?.();
-                }}
-              />
-            ) : null}
+            {!meterOverlaysMap ? meterStrip : null}
             <BottomNav
               destination={destination}
               composeOpen={compose !== null}
@@ -563,6 +579,9 @@ function Offline({ message, onRetry }: { message: string; onRetry: () => void })
 }
 
 function identityLabel(user: User): string {
+  if (user.displayName && user.email) {
+    return `${user.displayName} (${user.email})`;
+  }
   return user.displayName ?? user.email ?? "Signed in";
 }
 
@@ -660,6 +679,13 @@ function createStyles(colors: ThemeColors) {
       bottom: 0,
       left: 0,
       backgroundColor: colors.background,
+    },
+    meterOverlay: {
+      position: "absolute",
+      left: 0,
+      right: 0,
+      bottom: 0,
+      zIndex: 5,
     },
     identity: {
       fontSize: 20,

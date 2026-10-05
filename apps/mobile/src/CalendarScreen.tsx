@@ -6,6 +6,7 @@ import {
   Alert,
   AppState,
   PanResponder,
+  PixelRatio,
   Platform,
   Pressable,
   ScrollView,
@@ -18,7 +19,15 @@ import {
 } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { readCalendarCache, writeCalendarCache } from "./calendarCache";
-import { authorSortie, ensureCurrentDriver, requestCalendar, requestTariff, reviseSortie } from "./calendarClient";
+import {
+  authorSortie,
+  commenceSortie,
+  ensureCurrentDriver,
+  requestCalendar,
+  requestTariff,
+  reviseSortie,
+} from "./calendarClient";
+import { coalescedStartDate } from "./sortieStart";
 import {
   blockOnDay,
   calendarDayDelta,
@@ -27,13 +36,18 @@ import {
   formatUsPhone,
   hourHeight,
   hourLabel,
+  formatCalendarDate,
+  formatCalendarDateTime,
+  formatCalendarTime,
   hourSlot,
   minuteDeltaFromPixels,
   monthGridDays,
+  nowLineTop,
   periodLabel,
   sameLocalDay,
   shiftAnchor,
   shiftArrival,
+  startOfDay,
   visibleRange,
   weekDays,
   type CalendarScope,
@@ -49,6 +63,7 @@ const couldNotRefresh = "The calendar could not be refreshed.";
 const notSaved = "The sortie was not saved.";
 const locationRequired = "Location is required to schedule the sortie.";
 const routeFailed = "The route failed.";
+const departureFailed = "The departure could not be recorded.";
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hours = Array.from({ length: 24 }, (_, hour) => hour);
 
@@ -68,7 +83,7 @@ type Ready = {
 function emptyCalendar(anchor: Date): Ready {
   return {
     status: "ready",
-    scope: "month",
+    scope: "day",
     anchor,
     sorties: [],
     live: false,
@@ -90,12 +105,14 @@ export function CalendarScreen({
   userId,
   token,
   reloadToken = 0,
+  scopeCycleToken = 0,
   onUnauthorized,
   onGuide,
 }: {
   userId: string;
   token: string;
   reloadToken?: number;
+  scopeCycleToken?: number;
   onUnauthorized: () => void;
   onGuide?: (command: SortieGuideCommand) => void;
 }) {
@@ -113,7 +130,9 @@ export function CalendarScreen({
   const hourFrameRef = useRef<View>(null);
   const hourPxRef = useRef(hourHeight);
   const scrollYRef = useRef(0);
+  const hourScrollViewportH = useRef(0);
   const hourFrameBox = useRef({ y: 0, height: 0 });
+  const scopeCycleSeen = useRef(scopeCycleToken);
   const pinch = useRef({
     active: false,
     startDist: 0,
@@ -127,8 +146,24 @@ export function CalendarScreen({
   const shown = useRef({ scope: screen.scope, anchor: screen.anchor, live: screen.live });
   shown.current = { scope: screen.scope, anchor: screen.anchor, live: screen.live };
 
+  function scrollNowIntoCenter(at: Date = now): void {
+    if (screen.scope === "month") {
+      return;
+    }
+    const viewportHeight = hourScrollViewportH.current;
+    if (viewportHeight <= 0) {
+      return;
+    }
+    const nowY = nowLineTop(at, hourPxRef.current);
+    const contentHeight = 24 * hourPxRef.current;
+    const maxScroll = Math.max(0, contentHeight - viewportHeight);
+    const y = Math.min(maxScroll, Math.max(0, nowY - viewportHeight / 2));
+    scrollYRef.current = y;
+    hourScroll.current?.scrollTo({ y, animated: false });
+  }
+
   function applyHourZoom(nextHourPx: number, startHourPx: number, startScrollY: number, focalInView: number): void {
-    const clamped = clampHourHeight(nextHourPx);
+    const clamped = clampHourHeight(nextHourPx, PixelRatio.get());
     if (clamped === hourPxRef.current) {
       return;
     }
@@ -194,7 +229,7 @@ export function CalendarScreen({
 
   useEffect(() => {
     const current = ++generation.current;
-    void load("month", new Date(), current);
+    void load("day", new Date(), current);
   }, [token, userId]);
 
   useEffect(() => {
@@ -411,10 +446,23 @@ export function CalendarScreen({
       setScreen({ ...ready, summary: sortie, message: routeFailed });
       return;
     }
+    const commenced = await commenceSortie(apiUrl, token, sortie.id);
+    if (commenced === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (commenced === "no-location") {
+      setScreen({ ...ready, summary: sortie, message: locationRequired });
+      return;
+    }
+    if (typeof commenced === "string") {
+      setScreen({ ...ready, summary: sortie, message: departureFailed });
+      return;
+    }
     setScreen({ ...ready, summary: null, message: null });
     onGuide({
-      sortieId: sortie.id,
-      stops: sortie.stops,
+      sortieId: commenced.id,
+      stops: commenced.stops,
       firstStopPosition: 0,
       route,
       tariff,
@@ -440,16 +488,22 @@ export function CalendarScreen({
   }
 
   useEffect(() => {
-    if (!ready || ready.scope === "month") {
+    if (screen.scope === "month") {
       return;
     }
-    const y = 7 * hourPxRef.current;
-    scrollYRef.current = y;
-    hourScroll.current?.scrollTo({ y, animated: false });
-  }, [ready?.scope, ready?.anchor]);
+    scrollNowIntoCenter();
+  }, [screen.scope, screen.anchor]);
+
+  useEffect(() => {
+    if (scopeCycleToken === scopeCycleSeen.current) {
+      return;
+    }
+    scopeCycleSeen.current = scopeCycleToken;
+    showPeriod(nextCalendarScope(screen.scope), screen.anchor);
+  }, [scopeCycleToken]);
 
   function confirmArrivalChange(readyState: Ready, sortie: Sortie, arrival: Date): void {
-    const whenLabel = arrival.toLocaleString([], {
+    const whenLabel = formatCalendarDateTime(arrival, {
       weekday: "short",
       month: "short",
       day: "numeric",
@@ -515,7 +569,7 @@ export function CalendarScreen({
               </View>
               <View ref={gridRef} onLayout={captureGrid} style={styles.monthGrid}>
                 {days.map((day) => {
-                  const chips = ready.sorties.filter((sortie) => sameLocalDay(new Date(sortie.scheduledStart), day));
+                  const chips = ready.sorties.filter((sortie) => sameLocalDay(coalescedStartDate(sortie), day));
                   const inMonth = day.getMonth() === ready.anchor.getMonth();
                   const today = sameLocalDay(day, new Date());
                   return (
@@ -544,7 +598,7 @@ export function CalendarScreen({
                             }
                             const arrival = shiftArrival(
                               new Date(sortie.arrivalAt),
-                              calendarDayDelta(new Date(sortie.scheduledStart), target),
+                              calendarDayDelta(coalescedStartDate(sortie), target),
                               0,
                             );
                             if (!arrival) {
@@ -581,7 +635,7 @@ export function CalendarScreen({
                   ready.scope === "week" ? (
                     <Pressable key={day.toDateString()} onPress={() => showPeriod("day", day)} style={styles.dayHeading}>
                       <Text style={[styles.dayHeadingText, sameLocalDay(day, new Date()) ? styles.todayText : null]}>
-                        {day.toLocaleDateString([], { weekday: "short", day: "numeric" })}
+                        {formatCalendarDate(day, { weekday: "short", day: "numeric" })}
                       </Text>
                     </Pressable>
                   ) : (
@@ -589,7 +643,7 @@ export function CalendarScreen({
                       key={day.toDateString()}
                       style={[styles.dayHeading, styles.dayHeadingText, sameLocalDay(day, new Date()) ? styles.todayText : null]}
                     >
-                      {day.toLocaleDateString([], { weekday: "short", day: "numeric" })}
+                      {formatCalendarDate(day, { weekday: "short", day: "numeric" })}
                     </Text>
                   ),
                 )}
@@ -597,15 +651,19 @@ export function CalendarScreen({
               <ScrollView
                 ref={hourScroll}
                 style={styles.gridScroll}
+                onLayout={(event) => {
+                  hourScrollViewportH.current = event.nativeEvent.layout.height;
+                  scrollNowIntoCenter();
+                }}
                 onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => {
                   scrollYRef.current = event.nativeEvent.contentOffset.y;
                 }}
                 scrollEventThrottle={16}
               >
                 <View style={[styles.hourRow, { height: 24 * hourPx }]}>
-                  <View style={styles.hourGutter}>
+                  <View style={[styles.hourGutter, { height: 24 * hourPx }]}>
                     {hours.map((hour) => (
-                      <Text key={hour} style={[styles.hourLabel, { height: hourPx }]}>
+                      <Text key={hour} style={[styles.hourLabel, { top: hour * hourPx, height: hourPx }]}>
                         {hourLabel(hour)}
                       </Text>
                     ))}
@@ -625,11 +683,11 @@ export function CalendarScreen({
                           onPress={() => {
                             openDialog(ready, dialogForCreate(hourSlot(day, hour).start));
                           }}
-                          style={[styles.hourSlot, { height: hourPx }]}
+                          style={[styles.hourSlot, { top: hour * hourPx, height: hourPx }]}
                         />
                       ))}
                       {ready.sorties.map((sortie) => {
-                        const start = new Date(sortie.scheduledStart);
+                        const start = coalescedStartDate(sortie);
                         const end = new Date(sortie.scheduledEnd);
                         const block = blockOnDay(start, end, day, hourPx);
                         if (!block) {
@@ -658,7 +716,7 @@ export function CalendarScreen({
                     </View>
                   ))}
                   {days.some((day) => sameLocalDay(day, now)) ? (
-                    <View pointerEvents="none" style={[styles.nowLine, { top: nowLineTop(now, hourPx) }]}>
+                    <View pointerEvents="none" style={[styles.nowLine, { top: nowLineTop(now, hourPx) - nowLineHalf }]}>
                       <View style={styles.nowDot} />
                       <View style={styles.nowStroke} />
                     </View>
@@ -708,7 +766,7 @@ export function CalendarScreen({
 }
 
 function startOfShownDay(anchor: Date): Date {
-  return new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+  return startOfDay(anchor);
 }
 
 function dialogFor(sortie: Sortie): DialogDraft {
@@ -745,7 +803,7 @@ function writeFrom(sortie: Sortie, arrival: Date): SortieWriteRequest {
 
 function when(value: string): string {
   const date = new Date(value);
-  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  return `${formatCalendarDate(date)} ${formatCalendarTime(date)}`;
 }
 
 function dayAtPoint(box: GridBox | null, pageX: number, pageY: number): Date | null {
@@ -771,9 +829,18 @@ function scopeLabel(scope: CalendarScope): string {
   return "Day";
 }
 
-function nowLineTop(now: Date, pixelsPerHour: number): number {
-  return ((now.getHours() * 60 + now.getMinutes()) / 60) * pixelsPerHour;
+function nextCalendarScope(scope: CalendarScope): CalendarScope {
+  if (scope === "day") {
+    return "week";
+  }
+  if (scope === "week") {
+    return "month";
+  }
+  return "day";
 }
+
+/** Half the now-dot height so the stroke centers on the true time Y. */
+const nowLineHalf = 4;
 
 function scopeIcon(scope: CalendarScope): keyof typeof Ionicons.glyphMap {
   if (scope === "month") {
@@ -885,13 +952,17 @@ function SortieSummary({
       <ScrollView contentContainerStyle={styles.summaryCard}>
         <Text style={styles.summaryTitle}>{sortieTitle(sortie)}</Text>
         <SummaryRow label="Arrival" value={when(sortie.arrivalAt)} />
-        <SummaryRow label="Start" value={when(sortie.scheduledStart)} />
+        <SummaryRow label="Start" value={when(sortie.actualStart ?? sortie.scheduledStart)} />
         <SummaryRow label="Depart from" value={sortie.departureAddress.length > 0 ? sortie.departureAddress : "—"} />
         <SummaryRow label="End" value={when(sortie.scheduledEnd)} />
         <SummaryRow label="Passenger" value={sortie.passengerName ?? "—"} />
         <SummaryRow label="Phone" value={sortie.passengerPhone ? formatUsPhone(sortie.passengerPhone) : "—"} />
         {sortie.stops.map((stop, index) => (
-          <SummaryRow key={`${stop.role}-${stop.label}-${index}`} label={stopRoleLabel(stop.role)} value={stop.label} />
+          <SummaryRow
+            key={`${stop.role}-${stop.label}-${index}`}
+            label={stopRoleLabel(stop.role)}
+            value={stop.waitMinutes > 0 ? `${stop.label} · wait ${stop.waitMinutes} min` : stop.label}
+          />
         ))}
         {message ? <Text style={styles.message}>{message}</Text> : null}
         <View style={styles.summaryActions}>
@@ -1147,8 +1218,12 @@ function createStyles(colors: ThemeColors) {
     },
     hourGutter: {
       width: 52,
+      position: "relative",
     },
     hourLabel: {
+      position: "absolute",
+      left: 0,
+      right: 0,
       fontSize: 11,
       color: colors.textSecondary,
     },
@@ -1156,8 +1231,12 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
       borderLeftWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
+      position: "relative",
     },
     hourSlot: {
+      position: "absolute",
+      left: 0,
+      right: 0,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
     },

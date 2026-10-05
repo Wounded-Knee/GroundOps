@@ -16,7 +16,7 @@ This document is the implementation boundary. Responsibility, acceptance, and na
 
 After this slice, a person who is signed in, as slice 001 defines, can:
 
-1. Open a calendar and switch among month, week, and day.
+1. Open a calendar in day view and switch among month, week, and day.
 2. Become a driver by opening that calendar, when they do not already have one.
 3. Author a sortie from a dialog: an optional label, an optional arrival date and arrival time, an optional passenger name, an optional phone number, and at least one chosen place. The author marks that place as a pickup or a destination, and may add the other. Waypoints are allowed only between both. When an arrival is set, it is when the driver is to arrive at the pickup, or at the destination when the sortie has no pickup. When no arrival is set, the server assumes immediate departure and computes the arrival. The server computes the scheduled start and end from traffic-aware drive time and caches them.
 4. See a summary of a sortie by tapping it, and revise that sortie from the summary, or by dragging it so the arrival changes. The server recomputes the cached start and end.
@@ -24,7 +24,7 @@ After this slice, a person who is signed in, as slice 001 defines, can:
 6. See the last fetched calendar range when the server cannot be reached.
 7. Sign out, so that session can no longer be used, as slice 001 defines. Sign-out clears the local calendar cache.
 
-On every platform the calendar opens from the bottom bar. It stays available during guidance and arrival. Authoring is also available from the New Sortie control on that bar. On iOS and Android, choosing a place in the navigation Where to? field authors a destination-only immediate sortie for the signed-in driver before the map previews a route or starts guidance. That choice does not open this dialog.
+On every platform the calendar opens from the bottom bar in **day** view. While Calendar is already open, another tap on that Calendar control rotates the scope day → week → month → day. The calendar stays available during guidance and arrival. Authoring is also available from the New Sortie control on that bar. On iOS and Android, choosing a place in the navigation Where to? field authors a destination-only immediate sortie for the signed-in driver before the map previews a route or starts guidance. That choice does not open this dialog.
 
 Search and driving guidance from slice 002 stay as they are.
 
@@ -65,7 +65,7 @@ An authored sortie uses that company as its company of record and records the au
 
 The first place to reach is the pickup when the sortie has one, otherwise the destination. An onward drive exists only from a pickup through any waypoints to a destination. When the caller sets an arrival, the start is that arrival minus the traffic-aware drive to the first place. That drive starts at the last place of the previous sortie when this arrival is later than another sortie on the driver's calendar. Otherwise it starts at the driver's latest location observation. The end is the arrival when nothing follows that place, otherwise the arrival plus the onward drive, departing at the arrival. The server asks for the approach drive at the arrival, then again at arrival minus that duration, and keeps the second duration. When the caller omits the arrival, the driver departs now from the latest location observation, not from a previous sortie. The arrival is now plus the drive to the first place, asked at the current time. The end is that arrival, or that arrival plus the onward drive when a destination follows a pickup. The start is now. A departure the routing provider will not accept in the past is asked as the current time. The stored start may still fall before the current time. The address of the starting place is stored with the cached window. When the start is a previous place, it is that stop's label. When the start is the driver's position, it is the reverse-geocoded address of that observation. Both durations include projected traffic. The result is cached on the sortie, together with the coordinate and address used for that computation. A calendar read does not call the routing provider.
 
-An authored arrival uses the previous sortie's last place when this arrival is later than another of that driver's sorties, and otherwise the latest stored observation. An omitted arrival uses only that observation. If the observation is required and the driver has none, the write is rejected and the screen says location is required. If the routing call fails, the write is rejected and the sortie is left unchanged. Saving a sortie also refreshes any still-open sortie whose approach start changed because of that write. A later observation recomputes a still-open sortie that starts from the driver's position when the new fix is at least ten miles from the coordinate of the last successful computation, or when that coordinate is missing. It does not recompute a sortie that starts from a previous place. An authored arrival stays put and the window is refreshed around it. An arrival the server computed is computed again as an immediate departure from the new fix. A sortie whose cached end is already past is left unchanged. A failed recompute leaves the cached window and the coordinate unchanged and is not retried for five minutes. That recompute appends `sortie.schedule_computed`. It is not a revise.
+An authored arrival uses the previous sortie's last place when this arrival is later than another of that driver's sorties, and otherwise the latest stored observation. An omitted arrival uses only that observation. If the observation is required and the driver has none, the write is rejected and the screen says location is required. If the routing call fails, the write is rejected and the sortie is left unchanged. Saving a sortie also refreshes any still-open sortie whose approach start changed because of that write. A later observation recomputes a still-open sortie that starts from the driver's position when the new fix is at least five miles from the coordinate of the last successful computation, or when that coordinate is missing. It does not recompute a sortie that starts from a previous place. An authored arrival stays put and the window is refreshed around it. An arrival the server computed is computed again as an immediate departure from the new fix. A sortie whose cached end is already past is left unchanged. A failed recompute leaves the cached window and the coordinate unchanged and is not retried for five minutes. That recompute appends `sortie.schedule_computed`. It is not a revise.
 
 While the person is signed in, the client reports location observations in the foreground and in the background on iOS and Android. It sends a fix when the device has moved at least 100 meters from the last accepted report, or five minutes have passed, and it drops a fix whose accuracy is worse than 100 meters. Off-duty suppression is not applied, because this slice has no duty. An observation is not broadcast, and no other driver can read it. Web reports only while the tab is open.
 
@@ -73,13 +73,13 @@ A sortie has at least one stop, and that stop is a pickup or a destination. It m
 
 Creating a sortie does not make the driver responsible. This slice records no acceptance. The calendar shows the sorties that driver authored. Within a day they are ordered by scheduled start and then by id. Two intervals may overlap. The calendar does not list dispatch shifts, duty shifts, vehicle assignments, or time held for another company.
 
-The visible scope is one of three:
+The visible scope is one of three. Opening the calendar starts in **day**.
 
 - **Month.** A month grid. Each sortie is a chip on the day of its cached start, showing the label. Today is marked.
-- **Week.** Seven day columns and an hour grid. Each sortie is a block from its cached start to its cached end.
-- **Day.** The same hour grid for one date.
+- **Week.** Seven day columns and an hour grid. Each sortie is a block from its cached start to its cached end. The hour grid jumps so the now-line is vertically centered when week is shown.
+- **Day.** The same hour grid for one date. The hour grid jumps so the now-line is vertically centered when day is shown.
 
-Previous, next, and today move the visible period. A scope control switches month, week, and day. Tapping a day in the month grid, or a day heading in the week, opens that day. Tapping a sortie opens a summary of that sortie. One create action is available in every scope. It opens the dialog with no arrival, so a save is an immediate departure. In week and day, tapping an empty hour opens create with that hour as the arrival.
+Previous, next, and today move the visible period. A scope control switches month, week, and day. While Calendar is open, another bottom-bar Calendar tap rotates day → week → month → day. Tapping a day in the month grid, or a day heading in the week, opens that day. Tapping a sortie opens a summary of that sortie. One create action is available in every scope. It opens the dialog with no arrival, so a save is an immediate departure. In week and day, tapping an empty hour opens create with that hour as the arrival.
 
 The author may revise the label, the arrival, the passenger fields, and the stops. The sortie remains. This slice has no delete. The summary shows the label, or the address when the label is empty, the arrival, the cached start, the address the start was driven from, the cached end, the passenger name, the phone, and the stops in order. Revise on the summary opens the dialog. A sortie whose arrival was computed opens with no arrival. A sortie whose arrival was authored opens with that arrival. Close dismisses the summary.
 
@@ -144,7 +144,7 @@ Creating a driver is current identity state. This slice writes no operational ev
 
 A **stop** is one chosen place on a sortie, in order. It stores a role, the suggestion label, and a coordinate. The role is pickup, waypoint, or destination. A pickup, when present, is first. A destination, when present, is last. Waypoints lie between them and require both.
 
-A stop is not a driving route and not a place id.
+A stop is not a driving route and not a place id. Authored wait minutes on a stop, and sealing actual departure when Guide starts, are slice 005.
 
 ---
 
@@ -157,7 +157,7 @@ A stop is not a driving route and not a place id.
 | Month, week, or day | Another scope or period | The client reads the sorties for the range now on screen. |
 | No sortie | Sortie authored | The server accepts the dialog, writes the sortie, its stops, and a `sortie.created` event, and the client reads the calendar again. |
 | Sortie authored | Sortie revised | The server updates the sortie and replaces its stops, recomputes the cached window, appends `sortie.revised`, and the client reads the calendar again. A drag sends the new arrival and the existing label, passenger fields, and stops. |
-| Sortie with a cached window | Window recomputed | A new location observation is at least ten miles from the computation coordinate, the cached end is still in the future, and the approach still starts from the driver's position. A following sortie is recomputed when the previous destination it starts from changes. The server replaces the cached start and end and appends `sortie.schedule_computed`. |
+| Sortie with a cached window | Window recomputed | A new location observation is at least five miles from the computation coordinate, the cached end is still in the future, and the approach still starts from the driver's position. A following sortie is recomputed when the previous destination it starts from changes. The server replaces the cached start and end and appends `sortie.schedule_computed`. |
 | Calendar reachable | Cached calendar | The server cannot be reached. The person can still change scope and period. The screen shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are refused. |
 | Signed in | Signed out | The server revokes the session presented by the client, as slice 001 defines. The client deletes the calendar cache. |
 
@@ -171,11 +171,11 @@ A rejected session creates no driver and no sortie. No chosen pickup or destinat
 
 **Month.** A month grid. A chip on the cached start day shows the label. Today is marked. Previous, next, and today move the month. Tapping a day opens that day. Dragging a chip onto another day shifts the arrival by whole days and keeps the clock time.
 
-**Week.** Seven day columns and an hour grid. A block runs from the sortie's cached start to its cached end. Previous, next, and today move the week. Tapping a day heading opens that day.
+**Week.** Seven day columns and an hour grid. A block runs from the sortie's cached start to its cached end. Previous, next, and today move the week. Tapping a day heading opens that day. When week is activated, the hour grid jumps (no animation) so the now-line sits at the vertical center of the scroll viewport.
 
-**Day.** One date and the same hour grid. Previous, next, and today move the day.
+**Day.** One date and the same hour grid. Previous, next, and today move the day. When day is activated, the hour grid jumps so the now-line sits at the vertical center of the scroll viewport.
 
-**Scope.** Month, week, and day. Switching scope reads the range that scope shows.
+**Scope.** Month, week, and day. Switching scope reads the range that scope shows. Opening the calendar starts in day. The in-calendar scope control switches among the three. While Calendar is the active bottom-bar destination, another Calendar tap rotates day → week → month → day.
 
 **Create.** One action in every scope opens the dialog with no arrival. In week and day, tapping an empty hour opens the dialog with that hour as the arrival. The New Sortie control on the bottom bar opens the same dialog over the current screen, with no arrival, and ensures a driver before save.
 
@@ -189,7 +189,7 @@ A rejected session creates no driver and no sortie. No chosen pickup or destinat
 
 When the server cannot be reached and a range is cached, month, week, day, previous, next, and today stay available. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are unavailable. A period that was never fetched is empty.
 
-On every platform a persistent bottom bar opens Navigation, New Sortie, Settings, and Calendar. Leaving the calendar returns to Navigation. Sign out is on Settings. The calendar has no sign-out action.
+On every platform a persistent bottom bar opens Navigation, New Sortie, Settings, and Calendar. Opening Calendar shows day view. Another Calendar tap while Calendar is already open rotates day → week → month → day. Leaving the calendar returns to Navigation. Sign out is on Settings. The calendar has no sign-out action.
 
 The person sees a failure in these cases:
 
@@ -212,7 +212,7 @@ Commands and queries are HTTP JSON. Zod validates input at the boundary. Domain 
 | Read calendar | `GET /calendar` with the session token, `from`, and `to` | The sorties that driver authored whose cached interval overlaps the range, ordered by scheduled start and then by id. Each sortie includes the arrival, the cached start and end, the departure address used for that start, the passenger fields, and its stops in position order. The user must already have a driver |
 | Author sortie | `POST /sorties` with the session token, a label, an optional arrival, an optional passenger name, an optional phone, and at least one pickup or destination | The sortie, with its resolved arrival, whether that arrival was authored, and its cached start and end, together with a `sortie.created` event. Rejection when the user has no driver, neither a pickup nor a destination is present, a waypoint lacks both ends, a stop has no coordinate, the phone is present and is not ten digits, the driver has no location observation, or the routing call fails |
 | Revise sortie | `PATCH /sorties/:id` with the session token and the same fields | The sortie, together with a `sortie.revised` event. Rejection when the sortie is missing, another driver authored it, or the body fails the same checks as author. A routing failure leaves the previous window |
-| Report location | `POST /location-observations` with the session token, an observed time, a latitude, a longitude, and an accuracy | Stores the fix for that driver and recomputes a still-open sortie that starts from the driver's position when the fix is at least ten miles from its last computation coordinate. Rejection when the user has no driver or the body is not a fix |
+| Report location | `POST /location-observations` with the session token, an observed time, a latitude, a longitude, and an accuracy | Stores the fix for that driver and recomputes a still-open sortie that starts from the driver's position when the fix is at least five miles from its last computation coordinate. Rejection when the user has no driver or the body is not a fix |
 
 A stop in the request is a role, a label, a latitude, and a longitude. The role is `pickup`, `waypoint`, or `destination`. The client sends a stop only after the person chooses a place suggestion. Place suggestions remain `POST /place-suggestions` from slice 002. An omitted arrival is `null`. A present arrival is the authored time.
 
@@ -264,7 +264,7 @@ The slice works when all of the following are true on the local stack:
 2. A second Google account produces a second driver and a second company. Each driver sees only the sorties they authored.
 3. Authoring a sortie shows it on the calendar. Month, week, and day each show that sortie when it falls in the visible range. Switching scope or period reads that range from the server.
 4. Reloading the app, and opening the calendar on a second session for the same user, shows that sortie from the server.
-5. Revising from the dialog changes what the calendar shows. Each author adds one `sortie.created` event. Each revise, including a drag, adds one `sortie.revised` event. A recompute after a ten-mile move adds one `sortie.schedule_computed` event and does not add `sortie.revised`. Restarting the server keeps the sortie and the cached window.
+5. Revising from the dialog changes what the calendar shows. Each author adds one `sortie.created` event. Each revise, including a drag, adds one `sortie.revised` event. A recompute after a five-mile move adds one `sortie.schedule_computed` event and does not add `sortie.revised`. Restarting the server keeps the sortie and the cached window.
 6. When an arrival is set, its date and time share one row, and each takes half of that row. The author can clear that arrival. Those controls are the only times the dialog sends. The calendar block uses the cached start and end. A phone displays as `(555) 123-4567` and is stored as ten digits.
 7. A sortie is valid with a chosen pickup, a chosen destination, or both. A waypoint added between both is stored and returned in that order. A query that is not chosen does not become a stop. An empty label is stored, and the calendar shows the address.
 8. No pickup or destination, a waypoint without both ends, a phone number that is not ten digits, or a missing location observation creates no sortie and no event. A failed routing call creates no sortie. An omitted arrival is now plus the drive to the one place, and the sortie records that the arrival was not authored.
@@ -277,7 +277,7 @@ The slice works when all of the following are true on the local stack:
 15. The persisted sortie has its own id, type `task`, a company of record, an authoring driver, and its own stop rows. The database has no appointment table.
 16. The flow runs with `pnpm dev:server` and `pnpm dev:mobile` on web, and with the local development build on iOS and Android. No EAS build and no store build are required.
 17. Tapping a sortie opens a summary of the label, or the address when the label is empty, the arrival, the cached start, the address the start was driven from, the cached end, the passenger fields, and the stops. That address is the same place used to compute the start. Revise on that summary opens the dialog.
-18. A fix within ten miles of the last computation leaves the cached window. A fix at least ten miles away recomputes a sortie that starts from the driver's position and whose cached end is still in the future. An authored arrival stays, and the window is refreshed around it. A computed arrival is computed again from an immediate departure. A later sortie with an authored arrival starts from the previous sortie's last place, and that GPS fix does not recompute it. An ended sortie is left unchanged.
+18. A fix within five miles of the last computation leaves the cached window. A fix at least five miles away recomputes a sortie that starts from the driver's position and whose cached end is still in the future. An authored arrival stays, and the window is refreshed around it. A computed arrival is computed again from an immediate departure. A later sortie with an authored arrival starts from the previous sortie's last place, and that GPS fix does not recompute it. An ended sortie is left unchanged.
 
 ---
 

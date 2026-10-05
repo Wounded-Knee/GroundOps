@@ -2,13 +2,13 @@
 
 ## Status
 
-**CURRENT SLICE**
+**Previous slice**
 
 **Derived from:** Development Methodology (`docs/02-development-methodology.md`) section 6, the driver interaction model and cost estimation in Architectural Specification (`docs/01-architecture..md`) sections 8, 11, and 23.2, the cost estimate and sortie in `docs/03-domain-model.md`, the routing and navigation boundaries in Technical Architecture (`docs/04-technical-architecture.md`) section 8, and slices 002 and 003.
 
 **Purpose:** A signed-in driver can open guidance for a sortie they authored, and while that guidance runs see a programmable fare reading application-wide above the bottom bar.
 
-This document is the implementation boundary. The platform object is a **cost estimate** for the sortie being guided. There is no taxi entity, no `TaxiMeter` type, and no company pricing system. The general fare model in the architectural specification stays open. This slice stores one programmable **tariff** on the driver. Company-wide pricing stays out. Responsibility, acceptance, commencement, and completion stay outside this slice. Search guidance from slice 002 stays as it is.
+This document is the implementation boundary. The platform object is a **cost estimate** for the sortie being guided. There is no taxi entity, no `TaxiMeter` type, and no company pricing system. The general fare model in the architectural specification stays open. This slice stores one programmable **tariff** on the driver. Company-wide pricing stays out. Responsibility, acceptance, commencement, and completion stay outside this slice. Search guidance from slice 002 stays as it is. Meter wait is fare time while stationary during guidance. Authored dwell on a stop for the calendar schedule is slice 005.
 
 ---
 
@@ -17,14 +17,14 @@ This document is the implementation boundary. The platform object is a **cost es
 After this slice, a person who is signed in, as slice 001 defines, and who has a driver and authored sorties, as slice 003 defines, can:
 
 1. On iOS or Android, open a sortie they authored and start guidance for its stops. The map and guidance chrome from slice 002 present that route.
-2. While that guidance is in use, see a meter panel about one quarter of the screen height directly above the bottom bar on every signed-in screen. The panel shows Estimated (full trip miles, trip duration, and trip fare estimate) on the left, the running fare large in the center, and Actual (miles traveled, wait minutes, and fare so far) on the right with right-aligned text. Below that, a thin bar fills with proximity to the next turn, and a 1em bar fills with proximity to the destination (remaining versus the baseline when the current route was set). Neither bar carries text.
+2. While that guidance is in use, see a meter panel about one quarter of the screen height directly above the bottom bar on every signed-in screen. On Navigation the panel overlays the map; on Calendar, Settings, and New Sortie it sits in the column above the bottom bar. The panel shows Estimated (full trip miles, trip duration, and trip fare estimate) on the left, the running fare large in the center, and Actual (miles traveled, wait minutes, and fare so far) on the right with right-aligned text. Below that, a thin bar fills with proximity to the next turn, and a 1em bar fills with proximity to the destination (remaining versus the baseline when the current route was set). Neither bar carries text.
 3. Tap that panel to swap its contents for an End Sortie action. Tap the panel again to restore the meter reading. End Sortie ends guidance and clears the meter.
 4. On every platform, open Settings, see the driver's tariff — flag drop, dollars per mile, and dollars per wait minute — and save new rates. Those rates program the meter.
 5. Sign out, so that session can no longer be used, as slice 001 defines.
 
 Search that authors a destination sortie and starts guidance uses the same meter. Before Start, the map route preview shows the same trip estimate from the tariff snapshot and the route distance. A route that is not a sortie does not show the meter. Web still has no driving guidance, so it has no Guide action and no meter panel. The tariff fields are editable on web.
 
-Starting guidance is not commencement. This slice does not record responsibility, acceptance, commencement, or completion.
+Starting guidance is not responsibility, acceptance, or completion. Sealing the calendar’s actual departure when Guide starts is slice 005.
 
 ---
 
@@ -108,9 +108,9 @@ A missing location fix, a rejected route, or a route the provider will not compu
 
 **Summary.** On iOS and Android, the calendar summary of a sortie the person authored shows Guide beside Revise. Guide starts guidance as section 4 says. On web, Guide is not shown.
 
-**Guiding a sortie.** The maneuver card from slice 002 remains. End guidance is on the meter panel (End Sortie). The bottom guidance bar with remaining time, distance, arrival, End, and Mute is not shown while the meter is in use. The meter panel appears above the bottom bar.
+**Guiding a sortie.** The maneuver card from slice 002 remains. End guidance is on the meter panel (End Sortie). The bottom guidance bar with remaining time, distance, arrival, End, and Mute is not shown while the meter is in use. The meter panel appears above the bottom bar, overlaying the map on Navigation.
 
-**Meter panel.** While sortie guidance is in use, a panel about one quarter of the screen height sits directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie. The content band has three columns: Estimated (heading, then Miles, Time, and Fare as smaller rows — full trip miles as traveled plus remaining, the active route's trip duration, and the trip fare estimate), a centered bold running fare sized to the content height, and Actual (heading, then Miles, Time, and Fare — miles traveled to one decimal, wait as whole minutes, and the cumulative total), with Actual text right-aligned. Below the content band, a bar about 0.5em high fills with proximity to the end of the current guidance step (remaining distance to that step's end versus the step's distance). Under that, a bar about 1em high fills with proximity along the active route: empty when remaining equals the baseline snapshotted when that route was set (start or successful reroute), full when remaining is 0. If remaining grows above the baseline before a reroute, fill stays empty. Neither progress bar shows text. Tapping the panel swaps all of its contents for End Sortie; tapping again restores the meter reading. End Sortie ends guidance.
+**Meter panel.** While sortie guidance is in use, a panel about one quarter of the screen height sits directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie. On Navigation the panel overlays the map so the map stays full-bleed under it; on Calendar, Settings, and New Sortie the panel reserves space in the column above the bottom bar. The content band has three columns: Estimated (heading, then Miles, Time, and Fare as smaller rows — full trip miles as traveled plus remaining, the active route's trip duration, and the trip fare estimate), a centered bold running fare sized to the content height, and Actual (heading, then Miles, Time, and Fare — miles traveled to one decimal, wait as whole minutes, and the cumulative total), with Actual text right-aligned. Below the content band, a bar about 0.5em high fills with proximity to the end of the current guidance step (remaining distance to that step's end versus the step's distance). Under that, a bar about 1em high fills with proximity along the active route: empty when remaining equals the baseline snapshotted when that route was set (start or successful reroute), full when remaining is 0. If remaining grows above the baseline before a reroute, fill stays empty. Neither progress bar shows text. Tapping the panel swaps all of its contents for End Sortie; tapping again restores the meter reading. End Sortie ends guidance.
 
 **Settings.** On every platform, Settings shows the three tariff fields — flag drop, dollars per mile, and dollars per wait minute — above Sign out. Opening Settings ensures a driver, then reads that driver's tariff. The fields are editable money amounts. One action: save. Sign out stays below the tariff.
 
@@ -169,7 +169,7 @@ The slice works when all of the following are true on the local stack:
 
 1. On iOS or Android, a signed-in driver can open a sortie they authored and tap Guide. With a location fix, Navigation opens in guidance for a route from that fix through the sortie's stops.
 2. Reaching a stop short of the destination continues guidance toward the remaining stops. Within 40 meters of the final stop, the screen shows arrival.
-3. While sortie guidance is in use, a meter panel about one quarter of the screen height appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie, showing Estimated (full trip miles, trip duration, trip fare estimate), a large centered running fare, and Actual (miles traveled, wait minutes, fare so far, right-aligned), with a thin next-turn progress bar and a 1em destination progress bar (remaining versus the route baseline) and no text on either bar.
+3. While sortie guidance is in use, a meter panel about one quarter of the screen height appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie — overlaying the map on Navigation and reserving column space on the other screens — showing Estimated (full trip miles, trip duration, trip fare estimate), a large centered running fare, and Actual (miles traveled, wait minutes, fare so far, right-aligned), with a thin next-turn progress bar and a 1em destination progress bar (remaining versus the route baseline) and no text on either bar.
 4. Tapping the panel swaps its contents for End Sortie; tapping again restores the meter. End Sortie ends guidance and removes the panel.
 5. Ending guidance clears the route and removes the panel. Sign-out does the same.
 6. Starting guidance for a destination authored from search shows the meter. A route that is not a sortie does not.

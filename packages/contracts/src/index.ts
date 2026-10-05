@@ -103,6 +103,7 @@ export type SortieStop = {
   label: string;
   latitude: number;
   longitude: number;
+  waitMinutes: number;
 };
 
 export type Sortie = {
@@ -113,6 +114,7 @@ export type Sortie = {
   arrivalAuthored: boolean;
   scheduledStart: string;
   scheduledEnd: string;
+  actualStart: string | null;
   departureAddress: string;
   passengerName: string | null;
   passengerPhone: string | null;

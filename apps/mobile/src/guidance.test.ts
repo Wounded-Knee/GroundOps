@@ -4,6 +4,7 @@ import type { DrivingRoute, GeoCoordinate, RouteStep } from "@groundops/contract
 import {
   applyLocationFix,
   distanceMeters,
+  distanceToUpcomingManeuver,
   formatMeters,
   formatSeconds,
   guidanceLookAheadMeters,
@@ -12,7 +13,11 @@ import {
   projectOntoPath,
   remainingDistanceMeters,
   remainingDurationSeconds,
+  shouldAnnounceUpcoming,
   smoothBearing,
+  stepAdvanceMeters,
+  upcomingStep,
+  upcomingStepIndex,
 } from "./guidance.js";
 
 const origin: GeoCoordinate = { latitude: 0, longitude: 0 };
@@ -33,6 +38,7 @@ describe("guidance", () => {
       now: 0,
       offRouteSince: null,
       rerouteInFlight: false,
+      stepAdvanceMeters,
     });
     assert.equal(first.arrived, false);
     assert.equal(first.stepIndex, 1);
@@ -49,10 +55,52 @@ describe("guidance", () => {
       now: 0,
       offRouteSince: null,
       rerouteInFlight: false,
+      stepAdvanceMeters,
     });
     assert.equal(result.arrived, true);
     assert.equal(result.stepIndex, 0);
     assert.equal(result.shouldReroute, false);
+  });
+
+  it("uses the supplied step advance distance", () => {
+    const route = routeWithEnds(80, 100);
+    const destination = north(origin, 200);
+    const far = applyLocationFix({
+      fix: origin,
+      destination,
+      route,
+      stepIndex: 0,
+      now: 0,
+      offRouteSince: null,
+      rerouteInFlight: false,
+      stepAdvanceMeters: 30,
+    });
+    assert.equal(far.stepIndex, 0);
+
+    const near = applyLocationFix({
+      fix: origin,
+      destination,
+      route,
+      stepIndex: 0,
+      now: 0,
+      offRouteSince: null,
+      rerouteInFlight: false,
+      stepAdvanceMeters: 100,
+    });
+    assert.equal(near.stepIndex, 1);
+  });
+
+  it("selects the upcoming maneuver and announce window", () => {
+    const route = routeWithEnds(500, 200);
+    assert.equal(upcomingStepIndex(route, 0), 1);
+    assert.equal(upcomingStep(route, 0), route.steps[1]);
+    assert.equal(upcomingStepIndex(route, 1), 1);
+    assert.equal(upcomingStep(route, 1), route.steps[1]);
+    const distance = distanceToUpcomingManeuver(origin, route, 0);
+    assert.ok(Math.abs(distance - 500) < 2);
+    assert.equal(shouldAnnounceUpcoming(500, 250), false);
+    assert.equal(shouldAnnounceUpcoming(250, 250), true);
+    assert.equal(shouldAnnounceUpcoming(80, 250), true);
   });
 
   it("requests a reroute only after 5 seconds off the path", () => {
@@ -66,6 +114,7 @@ describe("guidance", () => {
       now: 1_000,
       offRouteSince: null,
       rerouteInFlight: false,
+      stepAdvanceMeters,
     });
     assert.equal(started.shouldReroute, false);
     assert.equal(started.offRouteSince, 1_000);
@@ -78,6 +127,7 @@ describe("guidance", () => {
       now: 5_999,
       offRouteSince: started.offRouteSince,
       rerouteInFlight: false,
+      stepAdvanceMeters,
     });
     assert.equal(waiting.shouldReroute, false);
 
@@ -89,6 +139,7 @@ describe("guidance", () => {
       now: 6_000,
       offRouteSince: started.offRouteSince,
       rerouteInFlight: false,
+      stepAdvanceMeters,
     });
     assert.equal(due.shouldReroute, true);
 
@@ -100,6 +151,7 @@ describe("guidance", () => {
       now: 7_000,
       offRouteSince: started.offRouteSince,
       rerouteInFlight: true,
+      stepAdvanceMeters,
     });
     assert.equal(inFlight.shouldReroute, false);
     assert.equal(inFlight.offRouteSince, 1_000);
@@ -112,6 +164,7 @@ describe("guidance", () => {
       now: 2_000,
       offRouteSince: 1_000,
       rerouteInFlight: false,
+      stepAdvanceMeters,
     });
     assert.equal(returned.offRouteSince, null);
     assert.equal(returned.shouldReroute, false);

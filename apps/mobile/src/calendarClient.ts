@@ -77,6 +77,35 @@ export async function reviseSortie(
   return writeSortie(apiUrl, token, "PATCH", `/sorties/${sortieId}`, body);
 }
 
+export async function commenceSortie(
+  apiUrl: string,
+  token: string,
+  sortieId: string,
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+  try {
+    const response = await fetch(`${apiUrl}/sorties/${sortieId}/commence`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 409 && (await readError(response)) === "no location") {
+      return "no-location";
+    }
+    if (response.status === 400 || response.status === 404 || response.status === 409 || response.status === 503) {
+      return "rejected";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const parsed: unknown = await response.json();
+    return isSortie(parsed) ? parsed : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
 async function writeSortie(
   apiUrl: string,
   token: string,
@@ -142,6 +171,7 @@ function isSortie(value: unknown): value is Sortie {
     typeof record.arrivalAuthored === "boolean" &&
     typeof record.scheduledStart === "string" &&
     typeof record.scheduledEnd === "string" &&
+    (record.actualStart === null || typeof record.actualStart === "string") &&
     typeof record.departureAddress === "string" &&
     (record.passengerName === null || typeof record.passengerName === "string") &&
     (record.passengerPhone === null || typeof record.passengerPhone === "string") &&
@@ -272,6 +302,8 @@ function isStop(value: unknown): value is SortieStop {
     typeof record.latitude === "number" &&
     Number.isFinite(record.latitude) &&
     typeof record.longitude === "number" &&
-    Number.isFinite(record.longitude)
+    Number.isFinite(record.longitude) &&
+    Number.isInteger(record.waitMinutes) &&
+    Number(record.waitMinutes) >= 0
   );
 }

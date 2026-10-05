@@ -20,6 +20,7 @@ import {
 } from "../schema.js";
 import {
   authorSortie,
+  commenceSortie,
   ensureDriver,
   readCalendar,
   recordObservation,
@@ -547,7 +548,7 @@ describe("calendar", () => {
     assert.equal(window.scheduledEnd.toISOString(), "2026-09-02T16:30:00.000Z");
   });
 
-  it("keeps the cached window until the driver moves ten miles, then recomputes it", async () => {
+  it("keeps the cached window until the driver moves five miles, then recomputes it", async () => {
     const person = await createSession({
       sub: `calendar-move-${crypto.randomUUID()}`,
       displayName: "Mover",
@@ -799,12 +800,19 @@ describe("calendar", () => {
       displayName: "Chain",
       email: null,
     });
-    const laterOrigin = { role: "pickup" as const, label: "Later origin", latitude: 41, longitude: -73 };
+    const laterOrigin = {
+      role: "pickup" as const,
+      label: "Later origin",
+      latitude: 41,
+      longitude: -73,
+      waitMinutes: 0,
+    };
     const laterDestination = {
       role: "destination" as const,
       label: "Later destination",
       latitude: 41.2,
       longitude: -73.2,
+      waitMinutes: 0,
     };
 
     try {
@@ -870,6 +878,147 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
+
+  it("includes stop wait minutes in the scheduled end and onward departure", async () => {
+    const arrival = new Date("2026-09-02T15:00:00.000Z");
+    const departures: string[] = [];
+    const window = await computeWindow(
+      driverFix,
+      [
+        { ...originStop, waitMinutes: 10 },
+        { ...waypointStop, waitMinutes: 5 },
+        { ...destinationStop, waitMinutes: 15 },
+      ],
+      arrival,
+      scheduleNow,
+      async (origin, destination, _intermediates, departure) => {
+        departures.push(departure.toISOString());
+        if (destination.latitude === originStop.latitude && origin.latitude === driverFix.latitude) {
+          return 1800;
+        }
+        return 3600;
+      },
+    );
+    assert.equal(typeof window, "object");
+    if (typeof window !== "object") {
+      return;
+    }
+    assert.ok(departures.includes("2026-09-02T15:10:00.000Z"));
+    assert.equal(window.scheduledStart.toISOString(), "2026-09-02T14:30:00.000Z");
+    assert.equal(window.scheduledEnd.toISOString(), "2026-09-02T16:30:00.000Z");
+  });
+
+  it("seals actualStart on commence and clears it on revise", async () => {
+    const person = await createSession({
+      sub: `calendar-commence-${crypto.randomUUID()}`,
+      displayName: "Commence",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id);
+      const arrival = new Date("2026-09-02T15:00:00.000Z");
+      const authored = await authorSortie(person.user, task("Seal", arrival), scheduleDeps);
+      assert.equal(typeof authored, "object");
+      if (typeof authored !== "object") {
+        return;
+      }
+      assert.equal(authored.actualStart, null);
+
+      const commenceNow = new Date("2026-09-02T14:20:00.000Z");
+      const commenced = await commenceSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => commenceNow,
+      });
+      assert.equal(typeof commenced, "object");
+      if (typeof commenced !== "object") {
+        return;
+      }
+      assert.equal(commenced.actualStart, commenceNow.toISOString());
+      assert.equal(commenced.scheduledStart, authored.scheduledStart);
+
+      const again = await commenceSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => new Date("2026-09-02T14:25:00.000Z"),
+      });
+      assert.equal(typeof again, "object");
+      if (typeof again !== "object") {
+        return;
+      }
+      assert.equal(again.actualStart, commenceNow.toISOString());
+
+      const revised = await reviseSortie(
+        person.user,
+        authored.id,
+        task("Seal", arrival),
+        scheduleDeps,
+      );
+      assert.equal(typeof revised, "object");
+      if (typeof revised !== "object") {
+        return;
+      }
+      assert.equal(revised.actualStart, null);
+
+      const events = await eventsFor(authored.id);
+      assert.ok(events.some((event) => event.type === "sortie.commenced"));
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("does not recompute a commenced sortie from a later GPS fix", async () => {
+    const person = await createSession({
+      sub: `calendar-sealed-${crypto.randomUUID()}`,
+      displayName: "Sealed",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id);
+      let approach = 1800;
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        driveDuration: async (origin, destination) =>
+          destination.latitude === originStop.latitude && origin.latitude !== originStop.latitude ? approach : 3600,
+      };
+      const arrival = new Date("2026-09-02T15:00:00.000Z");
+      const authored = await authorSortie(person.user, task("Frozen", arrival), deps);
+      assert.equal(typeof authored, "object");
+      if (typeof authored !== "object") {
+        return;
+      }
+      const commenced = await commenceSortie(person.user, authored.id, {
+        ...deps,
+        now: () => new Date("2026-09-02T14:20:00.000Z"),
+      });
+      assert.equal(typeof commenced, "object");
+      if (typeof commenced !== "object") {
+        return;
+      }
+      approach = 600;
+      const moved = await recordObservation(
+        person.user,
+        {
+          observedAt: new Date("2026-09-01T14:00:00.000Z"),
+          latitude: 40.2,
+          longitude: -74,
+          accuracyMeters: 10,
+        },
+        deps,
+      );
+      assert.equal(moved, "ok");
+      const kept = await db
+        .select({ scheduledStart: sortie.scheduledStart, actualStart: sortie.actualStart })
+        .from(sortie)
+        .where(eq(sortie.id, authored.id));
+      assert.equal(kept[0]?.scheduledStart.toISOString(), commenced.scheduledStart);
+      assert.equal(kept[0]?.actualStart?.toISOString(), commenced.actualStart);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
 });
 
 async function companiesFor(userId: string): Promise<string[]> {
@@ -902,14 +1051,27 @@ async function eventsFor(
     .orderBy(operationalEvent.recordedAt);
 }
 
-const originStop = { role: "pickup" as const, label: "Origin", latitude: 40.7128, longitude: -74.006 };
+const originStop = {
+  role: "pickup" as const,
+  label: "Origin",
+  latitude: 40.7128,
+  longitude: -74.006,
+  waitMinutes: 0,
+};
 const destinationStop = {
   role: "destination" as const,
   label: "Destination",
   latitude: 40.758,
   longitude: -73.9855,
+  waitMinutes: 0,
 };
-const waypointStop = { role: "waypoint" as const, label: "Waypoint", latitude: 40.73, longitude: -73.99 };
+const waypointStop = {
+  role: "waypoint" as const,
+  label: "Waypoint",
+  latitude: 40.73,
+  longitude: -73.99,
+  waitMinutes: 0,
+};
 
 const driverFix = { latitude: 40, longitude: -74 };
 const scheduleNow = new Date("2026-09-01T00:00:00.000Z");

@@ -1,20 +1,30 @@
-import type { DrivingRoute, GeoCoordinate, PlaceSuggestion, SortieStop, Tariff } from "@groundops/contracts";
+import type { DrivingRoute, GeoCoordinate, PlaceSuggestion, Sortie, SortieStop, Tariff } from "@groundops/contracts";
 import { Ionicons } from "@expo/vector-icons";
 import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { AppState, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { useTheme } from "./ThemeProvider";
 import { withAlpha, type ThemeColors } from "./theme";
 import { resolveApiUrl } from "./apiUrl";
-import { authorSortie, ensureCurrentDriver, reportLocationObservation, requestTariff } from "./calendarClient";
+import {
+  authorSortie,
+  commenceSortie,
+  ensureCurrentDriver,
+  reportLocationObservation,
+  requestCalendar,
+  requestTariff,
+} from "./calendarClient";
+import { cancelDepartureAlerts, scheduleDepartureAlerts } from "./departureAlerts";
+import { formatCountdown, nextDeparture, type NextDeparture } from "./nextDeparture";
 import {
   applyLocationFix,
   arrivalMeters,
   distanceMeters,
   distanceToStepEnd,
+  distanceToUpcomingManeuver,
   formatMeters,
   formatSeconds,
   guidanceLookAheadMeters,
@@ -24,14 +34,27 @@ import {
   pathLengthMeters,
   projectOntoPath,
   remainingDistanceMeters,
+  shouldAnnounceUpcoming,
   smoothBearing,
   travelBearing,
+  upcomingStep,
+  upcomingStepIndex,
 } from "./guidance";
 import {
   ensureGuidanceCameraPrefsLoaded,
   getGuidanceCameraPrefs,
   subscribeGuidanceCameraPrefs,
 } from "./guidanceCameraPrefs";
+import {
+  ensureGuidanceMutePrefsLoaded,
+  getGuidanceMutePrefs,
+  saveGuidanceMutePrefs,
+} from "./guidanceMutePrefs";
+import {
+  ensureGuidanceTimingPrefsLoaded,
+  getGuidanceTimingPrefs,
+  subscribeGuidanceTimingPrefs,
+} from "./guidanceTimingPrefs";
 import {
   advanceMeterAlongRoute,
   emptyMeter,
@@ -44,6 +67,7 @@ import type { MeterDisplay } from "./MeterStrip";
 import { PlatformMap, type MapCamera, type MapHandle } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
 import type { SortieGuideCommand } from "./sortieGuide";
+import { throb } from "./VisualAlert";
 
 export type { SortieGuideCommand } from "./sortieGuide";
 
@@ -101,6 +125,7 @@ export function NavigationScreen({
   endGuidanceRef?: MutableRefObject<(() => void) | null>;
 }) {
   const { colors } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
   const styles = createStyles(colors);
   const mapRef = useRef<MapHandle>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
@@ -112,12 +137,18 @@ export function NavigationScreen({
   const [compass, setCompass] = useState<number | null>(null);
   const [routeEpoch, setRouteEpoch] = useState(0);
   const [meter, setMeter] = useState<MeterState>(emptyMeter());
+  const [upcomingSorties, setUpcomingSorties] = useState<Sortie[]>([]);
+  const [clock, setClock] = useState(() => Date.now());
   const cameraPrefs = useSyncExternalStore(
     subscribeGuidanceCameraPrefs,
     getGuidanceCameraPrefs,
     getGuidanceCameraPrefs,
   );
-
+  const timingPrefs = useSyncExternalStore(
+    subscribeGuidanceTimingPrefs,
+    getGuidanceTimingPrefs,
+    getGuidanceTimingPrefs,
+  );
   const navRef = useRef(nav);
   navRef.current = nav;
   const fixRef = useRef(fix);
@@ -135,6 +166,82 @@ export function NavigationScreen({
   const speechGeneration = useRef(0);
   const guidedCameraRef = useRef<MapCamera | null>(null);
   const stopAdvanceInFlight = useRef(false);
+  const nextDepartureRef = useRef<NextDeparture | null>(null);
+
+  useEffect(() => {
+    if (Platform.OS === "web" || nav.mode !== "browse") {
+      return;
+    }
+    let cancelled = false;
+    async function loadUpcoming(): Promise<void> {
+      const from = new Date();
+      const to = new Date(from.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const result = await requestCalendar(apiUrl, token, from.toISOString(), to.toISOString());
+      if (cancelled) {
+        return;
+      }
+      if (result === "unauthorized") {
+        onUnauthorized();
+        return;
+      }
+      if (typeof result === "string") {
+        return;
+      }
+      setUpcomingSorties(result.sorties);
+    }
+    void loadUpcoming();
+    const poll = setInterval(() => {
+      void loadUpcoming();
+    }, 60_000);
+    const appState = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void loadUpcoming();
+      }
+    });
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+      appState.remove();
+    };
+  }, [apiUrl, token, onUnauthorized, nav.mode]);
+
+  useEffect(() => {
+    if (Platform.OS === "web" || nav.mode !== "browse") {
+      return;
+    }
+    const tick = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [nav.mode]);
+
+  const upcoming = Platform.OS === "web" || nav.mode !== "browse" ? null : nextDeparture(upcomingSorties, new Date(clock));
+  nextDepartureRef.current = upcoming;
+
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      return;
+    }
+    const syncAlerts = (state: string): void => {
+      if (state === "active") {
+        void cancelDepartureAlerts();
+        return;
+      }
+      void scheduleDepartureAlerts(nextDepartureRef.current, new Date());
+    };
+    syncAlerts(AppState.currentState);
+    const sub = AppState.addEventListener("change", syncAlerts);
+    return () => {
+      sub.remove();
+      void cancelDepartureAlerts();
+    };
+  }, []);
+
+  const upcomingDepartAt = upcoming?.departAt.getTime() ?? null;
+  useEffect(() => {
+    if (Platform.OS === "web" || AppState.currentState === "active") {
+      return;
+    }
+    void scheduleDepartureAlerts(upcoming, new Date());
+  }, [upcoming?.sortieId, upcomingDepartAt]);
 
   function sendGuidanceCamera(camera: MapCamera): void {
     const previous = guidedCameraRef.current;
@@ -245,7 +352,7 @@ export function NavigationScreen({
       destination,
       route: sortieGuide.route,
       stepIndex: 0,
-      muted: false,
+      muted: getGuidanceMutePrefs().muted,
       offRouteSince: null,
       rerouteMessage: null,
       sortieId: sortieGuide.sortieId,
@@ -454,6 +561,7 @@ export function NavigationScreen({
       now: Date.now(),
       offRouteSince: offRouteSinceRef.current,
       rerouteInFlight: rerouteInFlight.current,
+      stepAdvanceMeters: timingPrefs.stepAdvanceMeters,
     });
     offRouteSinceRef.current = outcome.offRouteSince;
     if (outcome.arrived) {
@@ -519,25 +627,51 @@ export function NavigationScreen({
       }
       setRouteEpoch((epoch) => epoch + 1);
     })();
-  }, [fix, bearingInput, nav.mode, token, onUnauthorized, cameraPrefs.zoom, cameraPrefs.tilt]);
+  }, [
+    fix,
+    bearingInput,
+    nav.mode,
+    token,
+    onUnauthorized,
+    cameraPrefs.zoom,
+    cameraPrefs.tilt,
+    timingPrefs.stepAdvanceMeters,
+  ]);
 
   useEffect(() => {
     void ensureGuidanceCameraPrefsLoaded();
+    void ensureGuidanceTimingPrefsLoaded();
+    void ensureGuidanceMutePrefsLoaded();
   }, []);
 
   useEffect(() => {
     if (nav.mode === "guiding") {
-      const key = `${routeEpoch}:${nav.stepIndex}`;
+      const announceIndex = upcomingStepIndex(nav.route, nav.stepIndex);
+      const announceStep = nav.route.steps[announceIndex];
+      if (!announceStep) {
+        return;
+      }
+      const key = `${routeEpoch}:${announceIndex}`;
       if (spokenKey.current === key) {
         return;
       }
+      const currentStep = nav.route.steps[nav.stepIndex];
+      const distance = fix
+        ? distanceToUpcomingManeuver(fix, nav.route, nav.stepIndex)
+        : (currentStep?.distanceMeters ?? 0);
+      if (!shouldAnnounceUpcoming(distance, timingPrefs.announceLeadMeters)) {
+        return;
+      }
       spokenKey.current = key;
-      const instruction = nav.route.steps[nav.stepIndex]?.instruction;
-      if (!instruction || nav.muted) {
+      if (!announceStep.instruction) {
+        return;
+      }
+      if (nav.muted) {
+        throb(10);
         return;
       }
       const generation = ++speechGeneration.current;
-      void speak(generation, speechGeneration, instruction);
+      void speak(generation, speechGeneration, announceStep.instruction);
       return;
     }
     if (nav.mode === "arrived") {
@@ -555,7 +689,7 @@ export function NavigationScreen({
     speechGeneration.current += 1;
     spokenKey.current = null;
     void Speech.stop();
-  }, [nav, routeEpoch]);
+  }, [nav, routeEpoch, fix, timingPrefs.announceLeadMeters]);
 
   async function onSelect(suggestion: PlaceSuggestion): Promise<void> {
     setQuery(suggestion.label);
@@ -615,6 +749,7 @@ export function NavigationScreen({
           label: suggestion.label,
           latitude: suggestion.latitude,
           longitude: suggestion.longitude,
+          waitMinutes: 0,
         },
       ],
     });
@@ -668,8 +803,22 @@ export function NavigationScreen({
     }
   }
 
-  function onStart(): void {
+  async function onStart(): Promise<void> {
     if (nav.mode !== "preview") {
+      return;
+    }
+    const preview = nav;
+    const commenced = await commenceSortie(apiUrl, token, preview.sortieId);
+    if (commenced === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (typeof commenced === "string") {
+      setNav({
+        mode: "browse",
+        destination: preview.destination,
+        message: "The departure could not be recorded.",
+      });
       return;
     }
     bearingRef.current = travelBearing(course, compass);
@@ -683,20 +832,20 @@ export function NavigationScreen({
     const started = emptyMeter();
     setMeter(started);
     meterRef.current = started;
-    snapshotProgressBaseline(origin, nav.route);
+    snapshotProgressBaseline(origin, preview.route);
     const next: NavState = {
       mode: "guiding",
       kind: "sortie",
-      destination: nav.destination,
-      route: nav.route,
+      destination: preview.destination,
+      route: preview.route,
       stepIndex: 0,
-      muted: false,
+      muted: getGuidanceMutePrefs().muted,
       offRouteSince: null,
       rerouteMessage: null,
-      sortieId: nav.sortieId,
-      stops: nav.stops,
+      sortieId: commenced.id,
+      stops: commenced.stops,
       firstStopPosition: 0,
-      tariff: nav.tariff,
+      tariff: preview.tariff,
     };
     setNav(next);
     setRouteEpoch((epoch) => epoch + 1);
@@ -729,6 +878,7 @@ export function NavigationScreen({
       void Speech.stop();
     }
     setNav({ ...nav, muted });
+    void saveGuidanceMutePrefs({ muted });
   }
 
   if (endGuidanceRef) {
@@ -741,8 +891,15 @@ export function NavigationScreen({
   const showSearch = nav.mode === "browse" || nav.mode === "preview";
   const route = preview?.route ?? guiding?.route ?? arrived?.route ?? null;
   const destination = nav.destination;
-  const step = guiding ? guiding.route.steps[guiding.stepIndex] : null;
+  const step = guiding ? upcomingStep(guiding.route, guiding.stepIndex) : null;
+  const stepDistanceMeters =
+    guiding && step
+      ? fix
+        ? distanceToUpcomingManeuver(fix, guiding.route, guiding.stepIndex)
+        : (guiding.route.steps[guiding.stepIndex]?.distanceMeters ?? step.distanceMeters)
+      : 0;
   const browseMessage = nav.mode === "browse" ? nav.message : null;
+  const meterChromeInset = meterActive ? windowHeight * 0.25 : 0;
 
   return (
     <View style={styles.screen}>
@@ -754,7 +911,10 @@ export function NavigationScreen({
         showTraffic={guiding !== null || arrived !== null}
         followUser={nav.mode === "browse" && permission === "granted"}
       />
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <View
+        style={[StyleSheet.absoluteFill, meterChromeInset > 0 ? { paddingBottom: meterChromeInset } : null]}
+        pointerEvents="box-none"
+      >
         {showSearch ? (
           <View style={styles.searchCard} pointerEvents="auto">
             <AddressPicker
@@ -786,10 +946,17 @@ export function NavigationScreen({
           </View>
         ) : null}
 
+        {upcoming ? (
+          <View style={styles.countdownCard} pointerEvents="none">
+            <Text style={styles.countdownTime}>{formatCountdown(upcoming.departAt.getTime() - clock)}</Text>
+            <Text style={styles.countdownLabel}>Depart for {upcoming.label}</Text>
+          </View>
+        ) : null}
+
         {step ? (
           <View style={styles.maneuverCard} pointerEvents="none">
             <Text style={styles.maneuver}>{maneuverLabel(step.maneuver)}</Text>
-            <Text style={styles.maneuverDistance}>{formatMeters(fix ? distanceToStepEnd(fix, step) : step.distanceMeters)}</Text>
+            <Text style={styles.maneuverDistance}>{formatMeters(stepDistanceMeters)}</Text>
             <Text style={styles.instruction}>{step.instruction}</Text>
           </View>
         ) : null}
@@ -897,6 +1064,26 @@ function createStyles(colors: ThemeColors) {
       borderColor: colors.borderStrong,
       borderRadius: 12,
       overflow: "hidden",
+    },
+    countdownCard: {
+      marginHorizontal: 12,
+      marginTop: 4,
+      backgroundColor: withAlpha(colors.surface, 0.92),
+      borderRadius: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    countdownTime: {
+      fontSize: 28,
+      fontWeight: "700",
+      color: colors.text,
+    },
+    countdownLabel: {
+      marginTop: 4,
+      fontSize: 15,
+      color: colors.textSecondary,
     },
     maneuverCard: {
       marginHorizontal: 12,
