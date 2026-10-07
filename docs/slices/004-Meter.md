@@ -22,7 +22,7 @@ After this slice, a person who is signed in, as slice 001 defines, and who has a
 4. On every platform, open Settings, see the driver's tariff — flag drop, dollars per mile, and dollars per wait minute — and save new rates. Those rates program the meter.
 5. Sign out, so that session can no longer be used, as slice 001 defines.
 
-Search that authors a destination sortie and starts guidance uses the same meter. Before Start, the map route preview shows the same trip estimate from the tariff snapshot and the route distance. A route that is not a sortie does not show the meter. Web still has no driving guidance, so it has no Guide action and no meter panel. The tariff fields are editable on web.
+Search that authors a one-stop passenger sortie and starts guidance uses the same meter (passenger on, so accrual starts with guidance). Before Start, the map route preview shows the same trip estimate from the tariff snapshot and the route distance. A route that is not a sortie does not show the meter. Web still has no driving guidance, so it has no Guide action and no meter panel. The tariff fields are editable on web.
 
 Starting guidance is not responsibility, acceptance, or completion. Sealing the calendar’s actual departure when Guide starts is slice 005.
 
@@ -57,7 +57,7 @@ The route reuses slice 002's driving-route result and the existing guidance scre
 
 A new `POST /sorties/:id/driving-route` takes the session token, an origin coordinate, and the position of the first stop still ahead. The server loads a sortie that driver authored, uses the stored stops from that position through the last stop, and returns one driving route. A missing sortie, or a sortie another driver authored, is rejected. The position must be a stop index on that sortie. Otherwise the request is rejected.
 
-A stop is reached when the device is within 40 meters of it, the same arrival distance as slice 002. Reached stops drop out of the remaining route. Reroute calls the same endpoint with the first stop still ahead. Arrival, speech, step advance, and the off-route rule stay as slice 002 defines them. The trip arrives only at the final stop. Reaching a pickup or a waypoint does not end guidance and does not stop the meter.
+A stop is reached when the device is within 40 meters of it, the same arrival distance as slice 002. Reached stops drop out of the remaining route. Reroute calls the same endpoint with the first stop still ahead. Arrival, speech, step advance, and the off-route rule stay as slice 002 defines them. The trip arrives only at the final stop. Reaching a stop short of the last does not end guidance. The meter accrues only while the current leg’s target stop has passenger on; non-passenger legs freeze the reading without clearing it.
 
 Leaving Navigation for Calendar, Settings, or New Sortie does not end guidance. The map stays mounted under those screens, as the signed-in shell already does. Ending guidance, or signing out, clears the route and stops the meter.
 
@@ -91,9 +91,9 @@ A **sortie driving route** is one driving route, as slice 002 defines, from the 
 
 | From | To | What happens |
 | --- | --- | --- |
-| Sortie summary | Guiding a sortie | The person taps Guide with a location fix. The server returns a driving route through the remaining stops. Navigation opens in guidance. The meter starts with a tariff snapshot. |
-| Guiding a sortie | Guiding a sortie | A stop short of the destination is reached and drops out, the current step advances, or a reroute replaces the route with the same first stop still ahead. The meter keeps its snapshot and its miles and wait. |
-| Guiding a sortie | Arrived | The device is within 40 meters of the final stop. The meter keeps running until the person ends guidance. |
+| Sortie summary | Guiding a sortie | The person taps Guide with a location fix. The server returns a driving route through the remaining stops. Navigation opens in guidance. The meter starts with a tariff snapshot. Accrual runs only on passenger legs. |
+| Guiding a sortie | Guiding a sortie | A stop short of the last is reached and drops out, the current step advances, or a reroute replaces the route with the same first stop still ahead. The meter keeps its snapshot and its cumulative miles and wait; accrual pauses on non-passenger legs. |
+| Guiding a sortie | Arrived | The device is within 40 meters of the final stop. If that stop has passenger on, the meter keeps accruing until the person ends guidance; otherwise the reading stays frozen. |
 | Guiding or arrived | Map | The person ends guidance. The route leaves the map. The meter panel disappears. |
 | No tariff saved | Tariff saved | The person saves valid rates on Settings. The server replaces that driver's tariff. |
 | Signed in | Signed out | The server revokes the session, as slice 001 defines. Guidance and the meter end. |
@@ -172,7 +172,7 @@ The slice works when all of the following are true on the local stack:
 3. While sortie guidance is in use, a meter panel about one quarter of the screen height appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie — overlaying the map on Navigation and reserving column space on the other screens — showing Estimated (full trip miles, trip duration, trip fare estimate), a large centered running fare, and Actual (miles traveled, wait minutes, fare so far, right-aligned), with a thin next-turn progress bar and a 1em destination progress bar (remaining versus the route baseline) and no text on either bar.
 4. Tapping the panel swaps its contents for End Sortie; tapping again restores the meter. End Sortie ends guidance and removes the panel.
 5. Ending guidance clears the route and removes the panel. Sign-out does the same.
-6. Starting guidance for a destination authored from search shows the meter. A route that is not a sortie does not.
+6. Starting guidance for a one-stop passenger sortie authored from search shows the meter with accrual. A route that is not a sortie does not. A guided sortie with passenger off on the current leg shows the meter panel but does not accrue miles or wait until a passenger leg.
 7. On every platform, Settings shows flag drop, dollars per mile, and dollars per wait minute. Saving valid rates persists them. Reloading Settings, and opening Settings on a second session for the same user, shows the saved rates. Defaults are $3.00, $2.50, and $0.40 when none were saved.
 8. An empty or invalid tariff field does not save. Zero is allowed. Amounts are non-negative and at most two decimal places.
 9. A meter started under one tariff keeps that snapshot when Settings later saves different rates. The next Guide uses the new rates.

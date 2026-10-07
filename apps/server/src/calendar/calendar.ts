@@ -597,21 +597,11 @@ function validSortie(input: SortieInput): ValidSortie | null {
 }
 
 function orderedStops(input: SortieStop[]): SortieStop[] | null {
-  const pickup = input.filter((stop) => stop.role === "pickup");
-  const destination = input.filter((stop) => stop.role === "destination");
-  const waypoints = input.filter((stop) => stop.role === "waypoint");
-  if (pickup.length + destination.length + waypoints.length !== input.length) {
+  if (input.length === 0) {
     return null;
   }
-  if (pickup.length > 1 || destination.length > 1 || (pickup.length === 0 && destination.length === 0)) {
-    return null;
-  }
-  if (waypoints.length > 0 && (pickup.length === 0 || destination.length === 0)) {
-    return null;
-  }
-  const ordered = [...pickup, ...waypoints, ...destination];
   const stops: SortieStop[] = [];
-  for (const stop of ordered) {
+  for (const stop of input) {
     const stopLabel = stop.label.trim();
     if (stopLabel.length === 0 || !Number.isFinite(stop.latitude) || !Number.isFinite(stop.longitude)) {
       return null;
@@ -619,12 +609,15 @@ function orderedStops(input: SortieStop[]): SortieStop[] | null {
     if (!Number.isInteger(stop.waitMinutes) || stop.waitMinutes < 0) {
       return null;
     }
+    if (typeof stop.passenger !== "boolean") {
+      return null;
+    }
     stops.push({
-      role: stop.role,
       label: stopLabel,
       latitude: stop.latitude,
       longitude: stop.longitude,
       waitMinutes: stop.waitMinutes,
+      passenger: stop.passenger,
     });
   }
   return stops;
@@ -663,11 +656,11 @@ async function writeStops(tx: Database, sortieId: string, stops: SortieStop[]): 
     stops.map((stop, position) => ({
       sortieId,
       position,
-      role: stop.role,
       label: stop.label,
       latitude: stop.latitude,
       longitude: stop.longitude,
       waitMinutes: stop.waitMinutes,
+      passenger: stop.passenger,
     })),
   );
 }
@@ -695,27 +688,23 @@ async function stopsBySortie(tx: Database, sortieIds: string[]): Promise<Map<str
     .select({
       sortieId: sortieStop.sortieId,
       position: sortieStop.position,
-      role: sortieStop.role,
       label: sortieStop.label,
       latitude: sortieStop.latitude,
       longitude: sortieStop.longitude,
       waitMinutes: sortieStop.waitMinutes,
+      passenger: sortieStop.passenger,
     })
     .from(sortieStop)
     .where(inArray(sortieStop.sortieId, sortieIds))
     .orderBy(asc(sortieStop.position));
   for (const row of rows) {
     const list = grouped.get(row.sortieId) ?? [];
-    const role = stopRole(row.role);
-    if (!role) {
-      continue;
-    }
     list.push({
-      role,
       label: row.label,
       latitude: row.latitude,
       longitude: row.longitude,
       waitMinutes: row.waitMinutes,
+      passenger: row.passenger,
     });
     grouped.set(row.sortieId, list);
   }
@@ -736,13 +725,6 @@ async function departurePosition(
   }
   const places = await driverPlaces(driverId);
   return approachOrigin(places, arrivalAt, sortieId, gps);
-}
-
-function stopRole(value: string): SortieStop["role"] | null {
-  if (value === "pickup" || value === "waypoint" || value === "destination") {
-    return value;
-  }
-  return null;
 }
 
 async function originAddress(origin: ApproachOrigin, deps: ScheduleDeps): Promise<string> {

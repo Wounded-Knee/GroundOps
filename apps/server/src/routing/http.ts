@@ -18,6 +18,8 @@ const drivingRouteBody = z.object({
   destination: coordinateSchema,
 });
 
+const reverseGeocodeBody = coordinateSchema;
+
 export type RoutingDeps = {
   findSession: (authorization: string | undefined) => Promise<ActiveSession | null>;
   suggestPlaces: (query: string, bias: GeoCoordinate | null) => Promise<PlaceSuggestion[] | "failed">;
@@ -25,6 +27,7 @@ export type RoutingDeps = {
     origin: GeoCoordinate,
     destination: GeoCoordinate,
   ) => Promise<DrivingRoute | "no-route" | "failed">;
+  lookupAddress: (position: GeoCoordinate) => Promise<string | null>;
 };
 
 export function registerRoutingRoutes(app: FastifyInstance, deps: RoutingDeps): void {
@@ -70,6 +73,24 @@ export function registerRoutingRoutes(app: FastifyInstance, deps: RoutingDeps): 
       return reply.code(422).send({ error: "no route" });
     }
     return reply.send({ route });
+  });
+
+  app.post("/reverse-geocode", async (request, reply) => {
+    const session = await deps.findSession(oneHeader(request.headers.authorization));
+    if (!session) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+
+    const parsed = reverseGeocodeBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+
+    const address = await deps.lookupAddress(parsed.data);
+    if (address === null || address.trim().length === 0) {
+      return reply.code(502).send({ error: "provider failed" });
+    }
+    return reply.send({ address: address.trim() });
   });
 }
 

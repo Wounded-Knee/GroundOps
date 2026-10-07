@@ -957,13 +957,17 @@ function SortieSummary({
         <SummaryRow label="End" value={when(sortie.scheduledEnd)} />
         <SummaryRow label="Passenger" value={sortie.passengerName ?? "—"} />
         <SummaryRow label="Phone" value={sortie.passengerPhone ? formatUsPhone(sortie.passengerPhone) : "—"} />
-        {sortie.stops.map((stop, index) => (
-          <SummaryRow
-            key={`${stop.role}-${stop.label}-${index}`}
-            label={stopRoleLabel(stop.role)}
-            value={stop.waitMinutes > 0 ? `${stop.label} · wait ${stop.waitMinutes} min` : stop.label}
-          />
-        ))}
+        {sortie.stops.map((stop, index) => {
+          const wait = stop.waitMinutes > 0 ? ` · wait ${stop.waitMinutes} min` : "";
+          const meter = stop.passenger ? " · meter" : "";
+          return (
+            <SummaryRow
+              key={`${index}-${stop.label}`}
+              label={`Stop ${index + 1}`}
+              value={`${stop.label}${meter}${wait}`}
+            />
+          );
+        })}
         {message ? <Text style={styles.message}>{message}</Text> : null}
         <View style={styles.summaryActions}>
           {onGuide ? (
@@ -992,16 +996,6 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
       <Text style={styles.summaryValue}>{value}</Text>
     </View>
   );
-}
-
-function stopRoleLabel(role: Sortie["stops"][number]["role"]): string {
-  if (role === "pickup") {
-    return "Pickup";
-  }
-  if (role === "destination") {
-    return "Destination";
-  }
-  return "Waypoint";
 }
 
 function HourBlock({

@@ -1,8 +1,10 @@
-import type { PlaceSuggestion, SortieStop, SortieWriteRequest, StopRole } from "@groundops/contracts";
+import type { PlaceSuggestion, SortieStop, SortieWriteRequest } from "@groundops/contracts";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { createElement, useState } from "react";
+import * as Location from "expo-location";
+import { createElement, useEffect, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
+import { resolveApiUrl } from "./apiUrl";
 import {
   arrivalFromDateInput,
   arrivalFromTimeInput,
@@ -16,13 +18,17 @@ import {
   withPickedDate,
   withPickedTime,
 } from "./calendarTime";
+import { requestReverseGeocode } from "./routingClient";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
+
+const apiUrl = resolveApiUrl();
 
 export type StopDraft = {
   query: string;
   chosen: PlaceSuggestion | null;
   waitMinutes: number;
+  passenger: boolean;
 };
 
 export type DialogDraft = {
@@ -31,9 +37,7 @@ export type DialogDraft = {
   arrival: Date | null;
   passengerName: string;
   phone: string;
-  pickup: StopDraft;
-  destination: StopDraft;
-  waypoints: StopDraft[];
+  stops: StopDraft[];
 };
 
 type PickerTarget = "arrival-date" | "arrival-time";
@@ -56,17 +60,49 @@ export function SortieDialog({
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const [label, setLabel] = useState(draft.label);
+  const [labelManual, setLabelManual] = useState(draft.sortieId !== null && draft.label.trim().length > 0);
   const [arrival, setArrival] = useState(draft.arrival);
   const [passengerName, setPassengerName] = useState(draft.passengerName);
   const [phone, setPhone] = useState(draft.phone);
-  const [pickup, setPickup] = useState(draft.pickup);
-  const [destination, setDestination] = useState(draft.destination);
-  const [waypoints, setWaypoints] = useState(draft.waypoints);
+  const [stops, setStops] = useState(draft.stops.length > 0 ? draft.stops : [blankStop()]);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
+  const gpsSeeded = useRef(false);
+
+  useEffect(() => {
+    if (draft.sortieId !== null || gpsSeeded.current) {
+      return;
+    }
+    gpsSeeded.current = true;
+    void (async () => {
+      const place = await currentGpsPlace(token, onUnauthorized);
+      if (!place) {
+        return;
+      }
+      setStops((current) => {
+        const head = current[0];
+        if (head && head.chosen !== null) {
+          return current;
+        }
+        const seeded: StopDraft = {
+          query: place.label,
+          chosen: place,
+          waitMinutes: 0,
+          passenger: false,
+        };
+        return current.length === 0 ? [seeded] : [seeded, ...current.slice(1)];
+      });
+    })();
+  }, [draft.sortieId, onUnauthorized, token]);
+
+  useEffect(() => {
+    if (labelManual) {
+      return;
+    }
+    setLabel(derivedLabel(passengerName, stops));
+  }, [labelManual, passengerName, stops]);
 
   function applyPicked(target: PickerTarget, picked: Date): void {
     if (Platform.OS === "web") {
-      // WebPicker already built a calendar-zone instant; keep picker open so hour+minute can both be set.
       setArrival(picked);
       return;
     }
@@ -80,18 +116,9 @@ export function SortieDialog({
     }
   }
 
-  function clearEnd(which: "pickup" | "destination"): void {
-    if (which === "pickup") {
-      setPickup(blankStop());
-    } else {
-      setDestination(blankStop());
-    }
-    setWaypoints([]);
-  }
-
   function save(): void {
-    const stops = chosenStops(pickup, destination, waypoints);
-    if (!stops) {
+    const chosen = chosenStops(stops);
+    if (!chosen) {
       onSave("invalid");
       return;
     }
@@ -101,11 +128,10 @@ export function SortieDialog({
       arrivalAt: arrival ? arrival.toISOString() : null,
       passengerName: passengerName.trim().length === 0 ? null : passengerName.trim(),
       passengerPhone: digits.length === 0 ? null : digits,
-      stops,
+      stops: chosen,
     });
   }
 
-  const bothEnds = pickup.chosen !== null && destination.chosen !== null;
   const pickerMode = picker === "arrival-date" ? "date" : "time";
 
   return (
@@ -115,7 +141,10 @@ export function SortieDialog({
         <Text style={styles.fieldLabel}>Label</Text>
         <TextInput
           value={label}
-          onChangeText={setLabel}
+          onChangeText={(value) => {
+            setLabelManual(true);
+            setLabel(value);
+          }}
           placeholderTextColor={colors.textMuted}
           style={styles.input}
         />
@@ -188,44 +217,20 @@ export function SortieDialog({
           placeholderTextColor={colors.textMuted}
           style={styles.input}
         />
-        <PlaceField
-          label="Pickup"
-          stop={pickup}
-          token={token}
-          clearLabel="Clear pickup"
-          onChange={setPickup}
-          onClear={() => clearEnd("pickup")}
-          onUnauthorized={onUnauthorized}
-        />
-        {waypoints.map((stop, index) => (
-          <View key={`waypoint-${index}`}>
-            <PlaceField
-              label="Waypoint"
-              stop={stop}
-              token={token}
-              onChange={(next) =>
-                setWaypoints((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)))
-              }
-              onClear={() => setWaypoints((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-              clearLabel="Remove waypoint"
-              onUnauthorized={onUnauthorized}
-            />
-          </View>
+        {stops.map((stop, index) => (
+          <StopFieldset
+            key={`stop-${index}`}
+            stop={stop}
+            token={token}
+            canRemove={stops.length > 1}
+            onChange={(next) => setStops((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)))}
+            onRemove={() => setStops((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+            onUnauthorized={onUnauthorized}
+          />
         ))}
-        <PlaceField
-          label="Destination"
-          stop={destination}
-          token={token}
-          clearLabel="Clear destination"
-          onChange={setDestination}
-          onClear={() => clearEnd("destination")}
-          onUnauthorized={onUnauthorized}
-        />
-        {bothEnds ? (
-          <Pressable onPress={() => setWaypoints((current) => [...current, blankStop()])} style={styles.secondary}>
-            <Text style={styles.secondaryText}>Add waypoint</Text>
-          </Pressable>
-        ) : null}
+        <Pressable onPress={() => setStops((current) => [...current, blankStop()])} style={styles.addStop}>
+          <Text style={styles.addStopText}>+</Text>
+        </Pressable>
         {message ? <Text style={styles.message}>{message}</Text> : null}
         <Pressable onPress={save} style={styles.primary}>
           <Text style={styles.primaryText}>Save</Text>
@@ -238,41 +243,56 @@ export function SortieDialog({
   );
 }
 
-function PlaceField({
-  label,
+function StopFieldset({
   stop,
   token,
-  clearLabel = "Clear",
+  canRemove,
   onChange,
-  onClear,
+  onRemove,
   onUnauthorized,
 }: {
-  label: string;
   stop: StopDraft;
   token: string;
-  clearLabel?: string;
+  canRemove: boolean;
   onChange: (stop: StopDraft) => void;
-  onClear: () => void;
+  onRemove: () => void;
   onUnauthorized: () => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
   return (
-    <View>
-      <AddressPicker
-        label={label}
-        appearance="field"
-        query={stop.query}
-        token={token}
-        onQueryChange={(query) => {
-          const chosen = stop.chosen && stop.chosen.label === query ? stop.chosen : null;
-          onChange({ query, chosen, waitMinutes: stop.waitMinutes });
-        }}
-        onSelect={(suggestion) =>
-          onChange({ query: suggestion.label, chosen: suggestion, waitMinutes: stop.waitMinutes })
-        }
-        onUnauthorized={onUnauthorized}
-      />
+    <View style={styles.legFieldset}>
+      <View style={styles.legRow}>
+        <Pressable
+          onPress={() => onChange({ ...stop, passenger: !stop.passenger })}
+          style={[styles.passengerToggle, stop.passenger ? styles.passengerToggleOn : null]}
+          accessibilityRole="button"
+          accessibilityState={{ selected: stop.passenger }}
+          accessibilityLabel="Passenger"
+        >
+          <Text style={[styles.passengerToggleText, stop.passenger ? styles.passengerToggleTextOn : null]}>P</Text>
+        </Pressable>
+        <View style={styles.addressSlot}>
+          <AddressPicker
+            appearance="field"
+            query={stop.query}
+            token={token}
+            onQueryChange={(query) => {
+              const chosen = stop.chosen && stop.chosen.label === query ? stop.chosen : null;
+              onChange({ query, chosen, waitMinutes: stop.waitMinutes, passenger: stop.passenger });
+            }}
+            onSelect={(suggestion) =>
+              onChange({
+                query: suggestion.label,
+                chosen: suggestion,
+                waitMinutes: stop.waitMinutes,
+                passenger: stop.passenger,
+              })
+            }
+            onUnauthorized={onUnauthorized}
+          />
+        </View>
+      </View>
       {stop.chosen ? (
         <>
           <Text style={styles.fieldLabel}>Wait (minutes)</Text>
@@ -287,9 +307,11 @@ function PlaceField({
             placeholderTextColor={colors.textMuted}
             style={styles.input}
           />
-          <Pressable onPress={onClear} style={styles.secondary}>
-            <Text style={styles.secondaryText}>{clearLabel}</Text>
-          </Pressable>
+          {canRemove ? (
+            <Pressable onPress={onRemove} style={styles.secondary}>
+              <Text style={styles.secondaryText}>Remove stop</Text>
+            </Pressable>
+          ) : null}
         </>
       ) : null}
     </View>
@@ -365,32 +387,13 @@ function WebPicker({ mode, value, onPicked }: { mode: "date" | "time"; value: Da
   });
 }
 
-function chosenStops(pickup: StopDraft, destination: StopDraft, waypoints: StopDraft[]): SortieStop[] | null {
-  if (!pickup.chosen && !destination.chosen) {
+function chosenStops(drafts: StopDraft[]): SortieStop[] | null {
+  if (drafts.length === 0) {
     return null;
   }
   const stops: SortieStop[] = [];
-  if (pickup.chosen) {
-    const stop = toStop("pickup", pickup);
-    if (!stop) {
-      return null;
-    }
-    stops.push(stop);
-  }
-  if (pickup.chosen && destination.chosen) {
-    for (const waypoint of waypoints) {
-      if (!waypoint.chosen) {
-        return null;
-      }
-      const stop = toStop("waypoint", waypoint);
-      if (!stop) {
-        return null;
-      }
-      stops.push(stop);
-    }
-  }
-  if (destination.chosen) {
-    const stop = toStop("destination", destination);
+  for (const draft of drafts) {
+    const stop = toStop(draft);
     if (!stop) {
       return null;
     }
@@ -399,21 +402,21 @@ function chosenStops(pickup: StopDraft, destination: StopDraft, waypoints: StopD
   return stops;
 }
 
-function toStop(role: StopRole, draft: StopDraft): SortieStop | null {
+function toStop(draft: StopDraft): SortieStop | null {
   if (!draft.chosen || !Number.isInteger(draft.waitMinutes) || draft.waitMinutes < 0) {
     return null;
   }
   return {
-    role,
     label: draft.chosen.label,
     latitude: draft.chosen.latitude,
     longitude: draft.chosen.longitude,
     waitMinutes: draft.waitMinutes,
+    passenger: draft.passenger,
   };
 }
 
 function blankStop(): StopDraft {
-  return { query: "", chosen: null, waitMinutes: 0 };
+  return { query: "", chosen: null, waitMinutes: 0, passenger: false };
 }
 
 function draftFromStop(stop: SortieStop): StopDraft {
@@ -421,21 +424,16 @@ function draftFromStop(stop: SortieStop): StopDraft {
     query: stop.label,
     chosen: { label: stop.label, name: stop.label, detail: "", latitude: stop.latitude, longitude: stop.longitude },
     waitMinutes: stop.waitMinutes,
+    passenger: stop.passenger,
   };
 }
 
-export function emptyPlaces(): Pick<DialogDraft, "pickup" | "destination" | "waypoints"> {
-  return { pickup: blankStop(), destination: blankStop(), waypoints: [] };
+export function emptyPlaces(): Pick<DialogDraft, "stops"> {
+  return { stops: [blankStop()] };
 }
 
-export function placesFromSortie(stops: SortieStop[]): Pick<DialogDraft, "pickup" | "destination" | "waypoints"> {
-  const pickup = stops.find((stop) => stop.role === "pickup");
-  const destination = stops.find((stop) => stop.role === "destination");
-  return {
-    pickup: pickup ? draftFromStop(pickup) : blankStop(),
-    destination: destination ? draftFromStop(destination) : blankStop(),
-    waypoints: stops.filter((stop) => stop.role === "waypoint").map(draftFromStop),
-  };
+export function placesFromSortie(stops: SortieStop[]): Pick<DialogDraft, "stops"> {
+  return { stops: stops.length > 0 ? stops.map(draftFromStop) : [blankStop()] };
 }
 
 export function sortieTitle(sortie: { label: string; stops: SortieStop[] }): string {
@@ -443,11 +441,55 @@ export function sortieTitle(sortie: { label: string; stops: SortieStop[] }): str
   if (label.length > 0) {
     return label;
   }
-  return (
-    sortie.stops.find((stop) => stop.role === "pickup")?.label ??
-    sortie.stops.find((stop) => stop.role === "destination")?.label ??
-    ""
-  );
+  return sortie.stops[0]?.label ?? "";
+}
+
+export function derivedLabel(passengerName: string, stops: StopDraft[]): string {
+  const name = passengerName.trim();
+  if (name.length > 0) {
+    return name;
+  }
+  for (const stop of stops) {
+    if (stop.passenger && stop.chosen) {
+      return stop.chosen.label;
+    }
+  }
+  return "";
+}
+
+async function currentGpsPlace(
+  token: string,
+  onUnauthorized: () => void,
+): Promise<PlaceSuggestion | null> {
+  try {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (!permission.granted) {
+      return null;
+    }
+    const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    const coordinate = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+    };
+    const address = await requestReverseGeocode(apiUrl, token, coordinate);
+    if (address === "unauthorized") {
+      onUnauthorized();
+      return null;
+    }
+    const label =
+      address === "failed" || address.trim().length === 0
+        ? `${coordinate.latitude}, ${coordinate.longitude}`
+        : address;
+    return {
+      label,
+      name: label,
+      detail: "",
+      latitude: coordinate.latitude,
+      longitude: coordinate.longitude,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function createStyles(colors: ThemeColors) {
@@ -491,6 +533,58 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 12,
       color: colors.text,
       backgroundColor: colors.surface,
+    },
+    legFieldset: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      padding: 8,
+      gap: 4,
+      marginTop: 4,
+    },
+    legRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 8,
+    },
+    passengerToggle: {
+      width: 44,
+      minHeight: 44,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.surfaceMuted,
+      marginTop: 4,
+    },
+    passengerToggleOn: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    passengerToggleText: {
+      fontSize: 16,
+      fontWeight: "700",
+      color: colors.text,
+    },
+    passengerToggleTextOn: {
+      color: colors.primaryText,
+    },
+    addressSlot: {
+      flex: 1,
+      minWidth: 0,
+    },
+    addStop: {
+      backgroundColor: colors.surfaceMuted,
+      borderRadius: 8,
+      paddingVertical: 10,
+      alignItems: "center",
+      marginTop: 8,
+    },
+    addStopText: {
+      fontSize: 22,
+      color: colors.text,
+      lineHeight: 26,
     },
     pickerButton: {
       borderWidth: 1,

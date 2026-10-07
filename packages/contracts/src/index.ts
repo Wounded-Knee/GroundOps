@@ -94,16 +94,12 @@ export type Driver = {
   userId: string;
 };
 
-export const stopRoles = ["pickup", "waypoint", "destination"] as const;
-
-export type StopRole = (typeof stopRoles)[number];
-
 export type SortieStop = {
-  role: StopRole;
   label: string;
   latitude: number;
   longitude: number;
   waitMinutes: number;
+  passenger: boolean;
 };
 
 export type Sortie = {

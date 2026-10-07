@@ -18,13 +18,13 @@ describe("nextDeparture", () => {
           id: "later",
           scheduledStart: "2026-09-02T14:00:00.000Z",
           label: "Later",
-          stops: [stop("destination", "Later stop")],
+          stops: [stop("Later stop")],
         }),
         sortie({
           id: "soon",
           scheduledStart: "2026-09-02T13:00:00.000Z",
           label: "Soon",
-          stops: [stop("pickup", "Soon stop")],
+          stops: [stop("Soon stop")],
         }),
         sortie({
           id: "commenced",
@@ -88,10 +88,10 @@ function sortie(partial: {
     departureAddress: "",
     passengerName: null,
     passengerPhone: null,
-    stops: partial.stops ?? [stop("destination", "Place")],
+    stops: partial.stops ?? [stop("Place", true)],
   };
 }
 
-function stop(role: "pickup" | "destination", label: string): Sortie["stops"][number] {
-  return { role, label, latitude: 40, longitude: -74, waitMinutes: 0 };
+function stop(label: string, passenger = false): Sortie["stops"][number] {
+  return { label, latitude: 40, longitude: -74, waitMinutes: 0, passenger };
 }

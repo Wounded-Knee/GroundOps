@@ -163,7 +163,7 @@ async function immediateWindow(
 }
 
 function firstStop(stops: SortieStop[]): SortieStop | null {
-  return stops.find((stop) => stop.role === "pickup") ?? stops.find((stop) => stop.role === "destination") ?? null;
+  return stops[0] ?? null;
 }
 
 async function onwardSeconds(
@@ -172,14 +172,17 @@ async function onwardSeconds(
   now: Date,
   driveDuration: DriveDuration,
 ): Promise<number | "failed"> {
-  const pickup = stops.find((stop) => stop.role === "pickup");
-  const destination = stops.find((stop) => stop.role === "destination");
-  if (!pickup || !destination) {
+  if (stops.length < 2) {
     return 0;
   }
-  const intermediates = stops.filter((stop) => stop.role === "waypoint").map(coordinate);
+  const origin = stops[0];
+  const destination = stops[stops.length - 1];
+  if (!origin || !destination) {
+    return 0;
+  }
+  const intermediates = stops.slice(1, -1).map(coordinate);
   const onward = await driveDuration(
-    coordinate(pickup),
+    coordinate(origin),
     coordinate(destination),
     intermediates,
     futureDeparture(departureAt, now),
@@ -213,7 +216,6 @@ function laterWaitSeconds(stops: SortieStop[], first: SortieStop): number {
 
 function sameStop(left: SortieStop, right: SortieStop): boolean {
   return (
-    left.role === right.role &&
     left.latitude === right.latitude &&
     left.longitude === right.longitude &&
     left.label === right.label

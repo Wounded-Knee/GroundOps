@@ -296,7 +296,6 @@ function isStop(value: unknown): value is SortieStop {
   }
   const record = value as Record<string, unknown>;
   return (
-    (record.role === "pickup" || record.role === "waypoint" || record.role === "destination") &&
     typeof record.label === "string" &&
     record.label.length > 0 &&
     typeof record.latitude === "number" &&
@@ -304,6 +303,7 @@ function isStop(value: unknown): value is SortieStop {
     typeof record.longitude === "number" &&
     Number.isFinite(record.longitude) &&
     Number.isInteger(record.waitMinutes) &&
-    Number(record.waitMinutes) >= 0
+    Number(record.waitMinutes) >= 0 &&
+    typeof record.passenger === "boolean"
   );
 }

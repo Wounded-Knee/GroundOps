@@ -54,6 +54,36 @@ export async function requestPlaceSuggestions(
   }
 }
 
+export async function requestReverseGeocode(
+  apiUrl: string,
+  token: string,
+  position: GeoCoordinate,
+): Promise<string | "failed" | "unauthorized"> {
+  try {
+    const response = await fetch(`${apiUrl}/reverse-geocode`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(position),
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (!response.ok) {
+      return "failed";
+    }
+    const payload: unknown = await response.json();
+    if (!isRecord(payload) || typeof payload.address !== "string" || payload.address.trim().length === 0) {
+      return "failed";
+    }
+    return payload.address.trim();
+  } catch {
+    return "failed";
+  }
+}
+
 export async function requestDrivingRoute(
   apiUrl: string,
   token: string,

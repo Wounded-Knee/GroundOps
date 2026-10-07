@@ -31,6 +31,7 @@ describe("routing http", () => {
       findSession: async () => null,
       suggestPlaces: async () => [],
       computeDrivingRoute: async () => route,
+      lookupAddress: async () => "Somewhere",
     });
     const suggestions = await app.inject({
       method: "POST",
@@ -45,8 +46,14 @@ describe("routing http", () => {
         destination: { latitude: 3, longitude: 4 },
       },
     });
+    const reverse = await app.inject({
+      method: "POST",
+      url: "/reverse-geocode",
+      payload: { latitude: 1, longitude: 2 },
+    });
     assert.equal(suggestions.statusCode, 401);
     assert.equal(driving.statusCode, 401);
+    assert.equal(reverse.statusCode, 401);
     await app.close();
   });
 
@@ -59,6 +66,7 @@ describe("routing http", () => {
         return [];
       },
       computeDrivingRoute: async () => "failed",
+      lookupAddress: async () => null,
     });
     const response = await app.inject({
       method: "POST",
@@ -78,6 +86,7 @@ describe("routing http", () => {
       suggestPlaces: async () =>
         [{ label: "Library", name: "Library", detail: "", latitude: 1, longitude: 2 }] satisfies PlaceSuggestion[],
       computeDrivingRoute: async () => route,
+      lookupAddress: async () => "1 Main St",
     });
     const response = await app.inject({
       method: "POST",
@@ -93,6 +102,14 @@ describe("routing http", () => {
     assert.equal(body.route.steps[0]?.instruction, "Head north");
     assert.equal(JSON.stringify(body).includes("encodedPolyline"), false);
     assert.equal(JSON.stringify(body).includes("placeId"), false);
+    const reverse = await app.inject({
+      method: "POST",
+      url: "/reverse-geocode",
+      headers: { authorization: "Bearer token" },
+      payload: { latitude: 1, longitude: 2 },
+    });
+    assert.equal(reverse.statusCode, 200);
+    assert.deepEqual(reverse.json(), { address: "1 Main St" });
     await app.close();
   });
 
@@ -101,6 +118,7 @@ describe("routing http", () => {
       findSession: async () => session,
       suggestPlaces: async () => "failed",
       computeDrivingRoute: async () => "no-route",
+      lookupAddress: async () => null,
     });
     const response = await app.inject({
       method: "POST",

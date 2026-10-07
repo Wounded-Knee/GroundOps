@@ -43,7 +43,6 @@ export async function computeSortieDrivingRoute(
   const stops = await db
     .select({
       position: sortieStop.position,
-      role: sortieStop.role,
       label: sortieStop.label,
       latitude: sortieStop.latitude,
       longitude: sortieStop.longitude,

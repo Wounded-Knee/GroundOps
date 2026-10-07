@@ -669,7 +669,7 @@ The routing provider must be replaceable.
 
 Google Maps is an initial provider but must not be embedded as an irreplaceable core dependency.
 
-A sortie window uses that traffic-aware multi-stop duration, including projected traffic for a departure time. A sortie is valid with one chosen address, a pickup or a destination. When the driver authors an arrival, the scheduled start is that arrival minus the drive to the first place. The drive starts at the previous sortie's last place when this sortie follows another on the calendar, and at the driver's current position when it does not. The scheduled end is that arrival when nothing follows, otherwise that arrival plus the drive onward to the destination. When the driver does not author an arrival, departure is immediate from the current position and the arrival is computed from that drive. The result is cached on the sortie, including the address of the place the start drive used.
+A sortie window uses that traffic-aware multi-stop duration, including projected traffic for a departure time. A sortie is valid with one or more chosen addresses in order. When the driver authors an arrival, the scheduled start is that arrival minus the drive to the first place. The drive starts at the previous sortie's last place when this sortie follows another on the calendar, and at the driver's current position when it does not. The scheduled end is that arrival when nothing follows, otherwise that arrival plus authored dwell at stops and the drive onward through the later places. When the driver does not author an arrival, departure is immediate from the current position and the arrival is computed from that drive. The result is cached on the sortie, including the address of the place the start drive used.
 
 ---
 

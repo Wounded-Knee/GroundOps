@@ -1,4 +1,3 @@
-import { stopRoles } from "@groundops/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { findActiveSession } from "../identity/sessions.js";
@@ -19,11 +18,11 @@ import { defaultSortieRouteDeps, computeSortieDrivingRoute, type SortieRouteDeps
 import { readTariff, replaceTariff } from "./tariff.js";
 
 const stopBody = z.object({
-  role: z.enum(stopRoles),
   label: z.string(),
   latitude: z.number(),
   longitude: z.number(),
   waitMinutes: z.number().int().nonnegative(),
+  passenger: z.boolean(),
 });
 
 const writeBody = z.object({

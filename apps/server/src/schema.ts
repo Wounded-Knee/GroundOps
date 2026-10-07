@@ -1,4 +1,3 @@
-import type { StopRole } from "@groundops/contracts";
 import {
   boolean,
   doublePrecision,
@@ -13,10 +12,11 @@ import {
 } from "drizzle-orm/pg-core";
 
 type StoredStop = {
-  role: StopRole;
   label: string;
   latitude: number;
   longitude: number;
+  waitMinutes: number;
+  passenger: boolean;
 };
 
 /** Platform user. The SQL name is quoted because user is reserved. */
@@ -109,7 +109,7 @@ export const sortie = pgTable("sortie", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 
-/** Ordered places on a sortie. A pickup, when present, is first. A destination, when present, is last. */
+/** Ordered places on a sortie. Client order is canonical. */
 export const sortieStop = pgTable(
   "sortie_stop",
   {
@@ -118,11 +118,11 @@ export const sortieStop = pgTable(
       .notNull()
       .references(() => sortie.id),
     position: integer("position").notNull(),
-    role: text("role").notNull(),
     label: text("label").notNull(),
     latitude: doublePrecision("latitude").notNull(),
     longitude: doublePrecision("longitude").notNull(),
     waitMinutes: integer("wait_minutes").notNull().default(0),
+    passenger: boolean("passenger").notNull().default(false),
   },
   (table) => [uniqueIndex("sortie_stop_sortie_id_position_key").on(table.sortieId, table.position)],
 );

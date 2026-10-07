@@ -415,7 +415,7 @@ describe("calendar", () => {
         }),
         scheduleDeps,
       );
-      const loneWaypoint = await authorSortie(
+      const singleStop = await authorSortie(
         person.user,
         task("Waypoint", new Date("2026-09-05T15:00:00.000Z"), {
           stops: [waypointStop],
@@ -424,7 +424,7 @@ describe("calendar", () => {
       );
       assert.equal(badPhone, "invalid");
       assert.equal(noStop, "invalid");
-      assert.equal(loneWaypoint, "invalid");
+      assert.equal(typeof singleStop, "object");
 
       const authored = await authorSortie(
         person.user,
@@ -455,8 +455,9 @@ describe("calendar", () => {
       if (!Array.isArray(calendar)) {
         return;
       }
+      const listed = calendar.find((sortie) => sortie.id === authored.id);
       assert.deepEqual(
-        calendar[0]?.stops.map((stop) => stop.label),
+        listed?.stops.map((stop) => stop.label),
         ["Origin", "Waypoint", "Destination"],
       );
 
@@ -758,7 +759,8 @@ describe("calendar", () => {
       assert.equal(pickup.arrivalAt, scheduleNow.toISOString());
       assert.equal(pickup.scheduledStart, scheduleNow.toISOString());
       assert.equal(pickup.scheduledEnd, scheduleNow.toISOString());
-      assert.equal(pickup.stops[0]?.role, "pickup");
+      assert.equal(pickup.stops[0]?.passenger, false);
+      assert.equal(pickup.stops[0]?.label, "Origin");
 
       const destination = await authorSortie(
         person.user,
@@ -773,7 +775,8 @@ describe("calendar", () => {
       assert.equal(destination.arrivalAt, "2026-09-01T01:00:00.000Z");
       assert.equal(destination.scheduledStart, scheduleNow.toISOString());
       assert.equal(destination.scheduledEnd, "2026-09-01T01:00:00.000Z");
-      assert.equal(destination.stops[0]?.role, "destination");
+      assert.equal(destination.stops[0]?.passenger, true);
+      assert.equal(destination.stops[0]?.label, "Destination");
 
       const authoredPickup = new Date("2026-09-02T15:00:00.000Z");
       const held = await authorSortie(
@@ -801,18 +804,18 @@ describe("calendar", () => {
       email: null,
     });
     const laterOrigin = {
-      role: "pickup" as const,
       label: "Later origin",
       latitude: 41,
       longitude: -73,
       waitMinutes: 0,
+      passenger: false,
     };
     const laterDestination = {
-      role: "destination" as const,
       label: "Later destination",
       latitude: 41.2,
       longitude: -73.2,
       waitMinutes: 0,
+      passenger: true,
     };
 
     try {
@@ -874,6 +877,153 @@ describe("calendar", () => {
         .from(sortie)
         .where(eq(sortie.id, second.id));
       assert.equal(kept[0]?.scheduledStart.toISOString(), second.scheduledStart);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("starts a one-stop sortie from GPS C to D ten minutes before arrival T", async () => {
+    const person = await createSession({
+      sub: `calendar-line-cd-${crypto.randomUUID()}`,
+      displayName: "Line CD",
+      email: null,
+    });
+    const calls: DriveCall[] = [];
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointC);
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        lookupAddress: async () => "Driver location",
+        driveDuration: lineDriveDuration(calls),
+      };
+      const authored = await authorSortie(
+        person.user,
+        {
+          label: "C to D",
+          arrivalAt: lineT,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointD, "D", true)],
+        },
+        deps,
+      );
+      assert.equal(typeof authored, "object");
+      if (typeof authored !== "object") {
+        return;
+      }
+      assert.equal(authored.arrivalAt, lineT.toISOString());
+      assert.equal(authored.scheduledStart, new Date(lineT.getTime() - hopSeconds * 1000).toISOString());
+      assert.equal(authored.scheduledEnd, lineT.toISOString());
+      assert.ok(
+        calls.some(
+          (call) =>
+            call.origin.latitude === pointC.latitude &&
+            call.origin.longitude === pointC.longitude &&
+            call.destination.latitude === pointD.latitude &&
+            call.destination.longitude === pointD.longitude &&
+            call.intermediates.length === 0,
+        ),
+      );
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("recomputes Stan's approach from Brittany's destination D on the A–E line", async () => {
+    const person = await createSession({
+      sub: `calendar-line-stan-${crypto.randomUUID()}`,
+      displayName: "Line Stan",
+      email: null,
+    });
+    const calls: DriveCall[] = [];
+    const brittanyArrival = new Date(lineT.getTime() + 20 * 60 * 1000);
+    const stanArrival = new Date(lineT.getTime() + 120 * 60 * 1000);
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointA);
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        lookupAddress: async () => "Driver location",
+        driveDuration: lineDriveDuration(calls),
+      };
+
+      const stan = await authorSortie(
+        person.user,
+        {
+          label: "Stan",
+          arrivalAt: stanArrival,
+          passengerName: "Stan",
+          passengerPhone: null,
+          stops: [lineStop(pointA, "A", false), lineStop(pointB, "B", true)],
+        },
+        deps,
+      );
+      assert.equal(typeof stan, "object");
+      if (typeof stan !== "object") {
+        return;
+      }
+
+      const brittany = await authorSortie(
+        person.user,
+        {
+          label: "Brittany",
+          arrivalAt: brittanyArrival,
+          passengerName: "Brittany",
+          passengerPhone: null,
+          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
+        },
+        deps,
+      );
+      assert.equal(typeof brittany, "object");
+      if (typeof brittany !== "object") {
+        return;
+      }
+      assert.equal(brittany.passengerName, "Brittany");
+      assert.equal(brittany.arrivalAt, brittanyArrival.toISOString());
+      assert.equal(brittany.scheduledStart, lineT.toISOString());
+      assert.equal(brittany.scheduledEnd, new Date(lineT.getTime() + 30 * 60 * 1000).toISOString());
+      assert.ok(
+        calls.some(
+          (call) =>
+            call.origin.latitude === pointA.latitude &&
+            call.destination.latitude === pointC.latitude &&
+            call.intermediates.length === 0,
+        ),
+      );
+
+      const calendar = await readCalendar(person.user, scheduleNow, new Date("2026-10-01T00:00:00.000Z"));
+      assert.equal(Array.isArray(calendar), true);
+      if (!Array.isArray(calendar)) {
+        return;
+      }
+      const stanAfter = calendar.find((item) => item.passengerName === "Stan");
+      assert.ok(stanAfter);
+      assert.equal(stanAfter.arrivalAt, stanArrival.toISOString());
+      assert.equal(stanAfter.scheduledStart, new Date(lineT.getTime() + 90 * 60 * 1000).toISOString());
+      assert.equal(stanAfter.scheduledEnd, new Date(lineT.getTime() + 130 * 60 * 1000).toISOString());
+      assert.equal(stanAfter.departureAddress, "D");
+      const stanAnchor = await db
+        .select({
+          latitude: sortie.scheduleOriginLatitude,
+          longitude: sortie.scheduleOriginLongitude,
+        })
+        .from(sortie)
+        .where(eq(sortie.id, stan.id));
+      assert.equal(stanAnchor[0]?.latitude, pointD.latitude);
+      assert.equal(stanAnchor[0]?.longitude, pointD.longitude);
+      assert.ok(
+        calls.some(
+          (call) =>
+            call.origin.latitude === pointD.latitude &&
+            call.origin.longitude === pointD.longitude &&
+            call.destination.latitude === pointA.latitude &&
+            call.destination.longitude === pointA.longitude &&
+            call.intermediates.length === 0,
+        ),
+      );
     } finally {
       await removeUser(person.user.id);
     }
@@ -1052,29 +1202,45 @@ async function eventsFor(
 }
 
 const originStop = {
-  role: "pickup" as const,
   label: "Origin",
   latitude: 40.7128,
   longitude: -74.006,
   waitMinutes: 0,
+  passenger: false,
 };
 const destinationStop = {
-  role: "destination" as const,
   label: "Destination",
   latitude: 40.758,
   longitude: -73.9855,
   waitMinutes: 0,
+  passenger: true,
 };
 const waypointStop = {
-  role: "waypoint" as const,
   label: "Waypoint",
   latitude: 40.73,
   longitude: -73.99,
   waitMinutes: 0,
+  passenger: true,
 };
 
 const driverFix = { latitude: 40, longitude: -74 };
 const scheduleNow = new Date("2026-09-01T00:00:00.000Z");
+
+const hopMeters = 10 * 1609.344;
+const hopSeconds = 600;
+const lineT = new Date("2026-09-02T15:00:00.000Z");
+const pointA = { latitude: 40, longitude: -74 };
+const pointB = northOf(pointA, hopMeters);
+const pointC = northOf(pointB, hopMeters);
+const pointD = northOf(pointC, hopMeters);
+const pointE = northOf(pointD, hopMeters);
+const linePoints = [pointA, pointB, pointC, pointD, pointE];
+
+type DriveCall = {
+  origin: { latitude: number; longitude: number };
+  destination: { latitude: number; longitude: number };
+  intermediates: { latitude: number; longitude: number }[];
+};
 
 const scheduleDeps: ScheduleDeps = {
   now: () => scheduleNow,
@@ -1082,6 +1248,55 @@ const scheduleDeps: ScheduleDeps = {
     destination.latitude === originStop.latitude && origin.latitude !== originStop.latitude ? 0 : 3600,
   lookupAddress: async () => "Driver location",
 };
+
+function northOf(
+  from: { latitude: number; longitude: number },
+  meters: number,
+): { latitude: number; longitude: number } {
+  return { latitude: from.latitude + meters / 111_320, longitude: from.longitude };
+}
+
+function lineStop(
+  point: { latitude: number; longitude: number },
+  label: string,
+  passenger: boolean,
+): SortieInput["stops"][number] {
+  return {
+    label,
+    latitude: point.latitude,
+    longitude: point.longitude,
+    waitMinutes: 0,
+    passenger,
+  };
+}
+
+function lineIndex(coordinate: { latitude: number; longitude: number }): number | null {
+  const index = linePoints.findIndex(
+    (point) => point.latitude === coordinate.latitude && point.longitude === coordinate.longitude,
+  );
+  return index >= 0 ? index : null;
+}
+
+function lineDriveDuration(calls: DriveCall[]): ScheduleDeps["driveDuration"] {
+  return async (origin, destination, intermediates) => {
+    calls.push({
+      origin: { latitude: origin.latitude, longitude: origin.longitude },
+      destination: { latitude: destination.latitude, longitude: destination.longitude },
+      intermediates: intermediates.map((point) => ({
+        latitude: point.latitude,
+        longitude: point.longitude,
+      })),
+    });
+    const from = lineIndex(origin);
+    const to = lineIndex(destination);
+    assert.notEqual(from, null);
+    assert.notEqual(to, null);
+    if (from === null || to === null) {
+      return "failed";
+    }
+    return Math.abs(to - from) * hopSeconds;
+  };
+}
 
 function task(label: string, arrivalAt: Date | null, extra?: Partial<SortieInput>): SortieInput {
   return {

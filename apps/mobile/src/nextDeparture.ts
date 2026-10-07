@@ -25,9 +25,7 @@ export function nextDeparture(sorties: Sortie[], now: Date): NextDeparture | nul
     if (Number.isNaN(departAt.getTime()) || departAt.getTime() <= now.getTime()) {
       continue;
     }
-    const first =
-      sortie.stops.find((stop) => stop.role === "pickup") ??
-      sortie.stops.find((stop) => stop.role === "destination");
+    const first = sortie.stops[0];
     const label = first?.label.trim() || sortie.label.trim() || "sortie";
     if (best === null || departAt.getTime() < best.departAt.getTime()) {
       best = { sortieId: sortie.id, departAt, label };

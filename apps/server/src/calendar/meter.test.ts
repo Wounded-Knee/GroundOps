@@ -182,9 +182,9 @@ function taskInput(): SortieInput {
     passengerName: null,
     passengerPhone: null,
     stops: [
-      { role: "pickup", label: "Hotel", latitude: 40.71, longitude: -74.01, waitMinutes: 0 },
-      { role: "waypoint", label: "Mid", latitude: 40.715, longitude: -74.015, waitMinutes: 0 },
-      { role: "destination", label: "JFK", latitude: 40.64, longitude: -73.78, waitMinutes: 0 },
+      { label: "Hotel", latitude: 40.71, longitude: -74.01, waitMinutes: 0, passenger: false },
+      { label: "Mid", latitude: 40.715, longitude: -74.015, waitMinutes: 0, passenger: true },
+      { label: "JFK", latitude: 40.64, longitude: -73.78, waitMinutes: 0, passenger: true },
     ],
   };
 }

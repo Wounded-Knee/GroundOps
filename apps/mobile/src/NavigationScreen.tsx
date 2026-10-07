@@ -103,6 +103,7 @@ type NavState =
       muted: boolean;
       tariff: Tariff | null;
       meter: MeterState;
+      stops: SortieStop[];
     };
 
 const apiUrl = resolveApiUrl();
@@ -397,7 +398,7 @@ export function NavigationScreen({
           setCourse(nextCourse);
           const currentNav = navRef.current;
           if (currentNav.mode === "guiding" || currentNav.mode === "arrived") {
-            if (currentNav.kind === "sortie") {
+            if (currentNav.kind === "sortie" && sortieLegBillable(currentNav)) {
               const advanced = advanceMeterAlongRoute(meterRef.current, {
                 fix: sampleFix,
                 observedAtMs: Date.now(),
@@ -442,17 +443,15 @@ export function NavigationScreen({
 
   const meterActive =
     (nav.mode === "guiding" || nav.mode === "arrived") && nav.kind === "sortie";
+  const legBillable = meterActive && sortieLegBillable(nav);
 
   useEffect(() => {
-    if (!meterActive) {
+    if (!meterActive || !legBillable) {
       return;
     }
     const timer = setInterval(() => {
       const current = navRef.current;
-      if (current.mode !== "guiding" && current.mode !== "arrived") {
-        return;
-      }
-      if (current.kind !== "sortie") {
+      if (!sortieLegBillable(current)) {
         return;
       }
       const ticked = tickMeterWait(meterRef.current, Date.now());
@@ -464,7 +463,7 @@ export function NavigationScreen({
       publishMeter(ticked, current, fixRef.current);
     }, 1_000);
     return () => clearInterval(timer);
-  }, [meterActive]);
+  }, [meterActive, legBillable]);
 
   // Prefer GPS course for the camera; only follow compass when course is absent so
   // high-rate heading ticks do not restart Android camera animations.
@@ -497,6 +496,7 @@ export function NavigationScreen({
             muted: current.muted,
             tariff: current.tariff,
             meter: meterRef.current,
+            stops: current.stops,
           };
           setNav(arrived);
           publishMeter(meterRef.current, arrived, fix);
@@ -573,6 +573,7 @@ export function NavigationScreen({
         muted: current.muted,
         tariff: current.tariff,
         meter: meterRef.current,
+        stops: current.kind === "sortie" ? current.stops : [],
       };
       setNav(arrived);
       if (current.kind === "sortie") {
@@ -745,11 +746,11 @@ export function NavigationScreen({
       passengerPhone: null,
       stops: [
         {
-          role: "destination",
           label: suggestion.label,
           latitude: suggestion.latitude,
           longitude: suggestion.longitude,
           waitMinutes: 0,
+          passenger: true,
         },
       ],
     });
@@ -1032,6 +1033,18 @@ function placeFromStop(stop: SortieStop): PlaceSuggestion {
     latitude: stop.latitude,
     longitude: stop.longitude,
   };
+}
+
+/** Meter accrues only while the current (or final arrived) leg has passenger on. */
+function sortieLegBillable(nav: NavState): boolean {
+  if ((nav.mode !== "guiding" && nav.mode !== "arrived") || nav.kind !== "sortie") {
+    return false;
+  }
+  if (nav.mode === "guiding") {
+    return nav.stops[nav.firstStopPosition]?.passenger === true;
+  }
+  const last = nav.stops[nav.stops.length - 1];
+  return last?.passenger === true;
 }
 
 function Awake() {
