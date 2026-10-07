@@ -10,8 +10,11 @@ import { readStoredSession } from "./sessionStore";
 export const locationObservationTaskName = "groundops-location-observations";
 
 const lastSentKey = "groundops.lastLocationObservation";
+const activeSortieKey = "groundops.activeSortieObservation";
 const moveMeters = 100;
 const heartbeatMs = 5 * 60 * 1000;
+const activeMoveMeters = 25;
+const activeHeartbeatMs = 30_000;
 const maxAccuracyMeters = 100;
 
 type SentFix = {
@@ -26,23 +29,36 @@ type WebStorage = {
   removeItem(key: string): void;
 };
 
+/** While a commenced sortie is guiding, denser GPS and sortie association for inference. */
+export async function setActiveSortieObservation(sortieId: string | null): Promise<void> {
+  if (sortieId === null) {
+    await removeRaw(activeSortieKey);
+    return;
+  }
+  await writeRaw(activeSortieKey, sortieId);
+}
+
 export async function reportEligibleLocationFix(
   location: Location.LocationObject,
 ): Promise<"ok" | "unauthorized" | "rejected" | "skipped"> {
   const accuracy = location.coords.accuracy;
+  const activeSortieId = await readRaw(activeSortieKey);
   const fix: LocationObservationRequest = {
     observedAt: new Date(location.timestamp).toISOString(),
     latitude: location.coords.latitude,
     longitude: location.coords.longitude,
     accuracyMeters: typeof accuracy === "number" && Number.isFinite(accuracy) ? accuracy : null,
+    sortieId: activeSortieId,
   };
   if (fix.accuracyMeters !== null && fix.accuracyMeters > maxAccuracyMeters) {
     return "skipped";
   }
 
+  const thresholdMove = activeSortieId ? activeMoveMeters : moveMeters;
+  const thresholdHeartbeat = activeSortieId ? activeHeartbeatMs : heartbeatMs;
   const previous = await readLastSent();
-  const moved = !previous || distanceMeters(previous, fix) >= moveMeters;
-  const due = !previous || Date.now() - previous.at >= heartbeatMs;
+  const moved = !previous || distanceMeters(previous, fix) >= thresholdMove;
+  const due = !previous || Date.now() - previous.at >= thresholdHeartbeat;
   if (!moved && !due) {
     return "skipped";
   }
@@ -139,6 +155,14 @@ async function writeRaw(key: string, value: string): Promise<void> {
     return;
   }
   await SecureStore.setItemAsync(key, value);
+}
+
+async function removeRaw(key: string): Promise<void> {
+  if (Platform.OS === "web") {
+    webStorage().removeItem(key);
+    return;
+  }
+  await SecureStore.deleteItemAsync(key);
 }
 
 function webStorage(): WebStorage {

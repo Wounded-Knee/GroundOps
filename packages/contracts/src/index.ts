@@ -94,12 +94,17 @@ export type Driver = {
   userId: string;
 };
 
-export type SortieStop = {
+export type SortieStopWrite = {
   label: string;
   latitude: number;
   longitude: number;
   waitMinutes: number;
   passenger: boolean;
+};
+
+export type SortieStop = SortieStopWrite & {
+  actualArrivedAt: string | null;
+  actualDepartedAt: string | null;
 };
 
 export type Sortie = {
@@ -111,6 +116,7 @@ export type Sortie = {
   scheduledStart: string;
   scheduledEnd: string;
   actualStart: string | null;
+  actualEnd: string | null;
   departureAddress: string;
   passengerName: string | null;
   passengerPhone: string | null;
@@ -122,7 +128,7 @@ export type SortieWriteRequest = {
   arrivalAt: string | null;
   passengerName: string | null;
   passengerPhone: string | null;
-  stops: SortieStop[];
+  stops: SortieStopWrite[];
 };
 
 export type LocationObservationRequest = {
@@ -130,6 +136,7 @@ export type LocationObservationRequest = {
   latitude: number;
   longitude: number;
   accuracyMeters: number | null;
+  sortieId?: string | null;
 };
 
 export type CalendarResponse = {

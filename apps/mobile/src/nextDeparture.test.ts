@@ -85,6 +85,7 @@ function sortie(partial: {
     scheduledStart: partial.scheduledStart,
     scheduledEnd: partial.scheduledStart,
     actualStart: partial.actualStart ?? null,
+    actualEnd: null,
     departureAddress: "",
     passengerName: null,
     passengerPhone: null,
@@ -93,5 +94,13 @@ function sortie(partial: {
 }
 
 function stop(label: string, passenger = false): Sortie["stops"][number] {
-  return { label, latitude: 40, longitude: -74, waitMinutes: 0, passenger };
+  return {
+    label,
+    latitude: 40,
+    longitude: -74,
+    waitMinutes: 0,
+    passenger,
+    actualArrivedAt: null,
+    actualDepartedAt: null,
+  };
 }

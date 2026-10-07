@@ -27,7 +27,8 @@ import {
   requestTariff,
   reviseSortie,
 } from "./calendarClient";
-import { coalescedStartDate } from "./sortieStart";
+import { coalescedEndDate, coalescedStartDate } from "./sortieStart";
+import { displayWaitMinutes } from "./sortieWait";
 import {
   blockOnDay,
   calendarDayDelta,
@@ -688,7 +689,7 @@ export function CalendarScreen({
                       ))}
                       {ready.sorties.map((sortie) => {
                         const start = coalescedStartDate(sortie);
-                        const end = new Date(sortie.scheduledEnd);
+                        const end = coalescedEndDate(sortie);
                         const block = blockOnDay(start, end, day, hourPx);
                         if (!block) {
                           return null;
@@ -951,14 +952,18 @@ function SortieSummary({
     <View style={styles.backdrop}>
       <ScrollView contentContainerStyle={styles.summaryCard}>
         <Text style={styles.summaryTitle}>{sortieTitle(sortie)}</Text>
-        <SummaryRow label="Arrival" value={when(sortie.arrivalAt)} />
+        <SummaryRow
+          label="Arrival"
+          value={when(sortie.stops[0]?.actualArrivedAt ?? sortie.arrivalAt)}
+        />
         <SummaryRow label="Start" value={when(sortie.actualStart ?? sortie.scheduledStart)} />
         <SummaryRow label="Depart from" value={sortie.departureAddress.length > 0 ? sortie.departureAddress : "—"} />
-        <SummaryRow label="End" value={when(sortie.scheduledEnd)} />
+        <SummaryRow label="End" value={when(sortie.actualEnd ?? sortie.scheduledEnd)} />
         <SummaryRow label="Passenger" value={sortie.passengerName ?? "—"} />
         <SummaryRow label="Phone" value={sortie.passengerPhone ? formatUsPhone(sortie.passengerPhone) : "—"} />
         {sortie.stops.map((stop, index) => {
-          const wait = stop.waitMinutes > 0 ? ` · wait ${stop.waitMinutes} min` : "";
+          const waitMinutes = displayWaitMinutes(stop);
+          const wait = waitMinutes > 0 ? ` · wait ${waitMinutes} min` : "";
           const meter = stop.passenger ? " · meter" : "";
           return (
             <SummaryRow

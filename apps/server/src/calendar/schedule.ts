@@ -1,4 +1,4 @@
-import type { GeoCoordinate, SortieStop } from "@groundops/contracts";
+import type { GeoCoordinate, SortieStopWrite } from "@groundops/contracts";
 
 /** Five statute miles. A later fix at least this far from the last computation anchor recomputes the window. */
 export const recomputeMeters = 5 * 1609.344;
@@ -81,7 +81,7 @@ function sortsBefore(place: SortiePlace, arrivalAt: Date, id: string | null): bo
 
 export async function computeWindow(
   position: GeoCoordinate,
-  stops: SortieStop[],
+  stops: SortieStopWrite[],
   arrivalAt: Date | null,
   now: Date,
   driveDuration: DriveDuration,
@@ -112,8 +112,8 @@ export function movedFarEnough(from: GeoCoordinate, to: GeoCoordinate): boolean 
 
 async function authoredWindow(
   position: GeoCoordinate,
-  stops: SortieStop[],
-  target: SortieStop,
+  stops: SortieStopWrite[],
+  target: SortieStopWrite,
   arrivalAt: Date,
   now: Date,
   driveDuration: DriveDuration,
@@ -138,8 +138,8 @@ async function authoredWindow(
 
 async function immediateWindow(
   position: GeoCoordinate,
-  stops: SortieStop[],
-  target: SortieStop,
+  stops: SortieStopWrite[],
+  target: SortieStopWrite,
   now: Date,
   driveDuration: DriveDuration,
 ): Promise<ComputedWindow | "failed"> {
@@ -162,12 +162,12 @@ async function immediateWindow(
   };
 }
 
-function firstStop(stops: SortieStop[]): SortieStop | null {
+function firstStop(stops: SortieStopWrite[]): SortieStopWrite | null {
   return stops[0] ?? null;
 }
 
 async function onwardSeconds(
-  stops: SortieStop[],
+  stops: SortieStopWrite[],
   departureAt: Date,
   now: Date,
   driveDuration: DriveDuration,
@@ -190,16 +190,16 @@ async function onwardSeconds(
   return typeof onward === "number" ? onward : "failed";
 }
 
-function coordinate(stop: SortieStop): GeoCoordinate {
+function coordinate(stop: SortieStopWrite): GeoCoordinate {
   return { latitude: stop.latitude, longitude: stop.longitude };
 }
 
-function waitSeconds(stop: SortieStop): number {
+function waitSeconds(stop: SortieStopWrite): number {
   return Math.max(0, stop.waitMinutes) * 60;
 }
 
 /** Waits on every stop after the first place on the sortie. */
-function laterWaitSeconds(stops: SortieStop[], first: SortieStop): number {
+function laterWaitSeconds(stops: SortieStopWrite[], first: SortieStopWrite): number {
   let seen = false;
   let total = 0;
   for (const stop of stops) {
@@ -214,7 +214,7 @@ function laterWaitSeconds(stops: SortieStop[], first: SortieStop): number {
   return total;
 }
 
-function sameStop(left: SortieStop, right: SortieStop): boolean {
+function sameStop(left: SortieStopWrite, right: SortieStopWrite): boolean {
   return (
     left.latitude === right.latitude &&
     left.longitude === right.longitude &&

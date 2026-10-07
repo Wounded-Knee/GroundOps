@@ -2,9 +2,9 @@
 
 ## Status
 
-**CURRENT SLICE**
-
 **Previous slice:** 004 — Meter
+
+**Next slice:** 006 — Sortie Actuals and Completion
 
 **Derived from:** Development Methodology (`docs/02-development-methodology.md`) section 6, sorties and schedule adherence in Architectural Specification (`docs/01-architecture..md`) sections 4, 9, 10, and 14, the sortie and driver calendar in `docs/03-domain-model.md`, and slices 002, 003, and 004.
 
@@ -183,9 +183,10 @@ This slice publishes no domain events on the bus. A second session sees commence
 
 # 15. Remains unimplemented
 
-- GPS-inferred actual arrival and departure
+- GPS-inferred actual arrival and departure — slice 006
+- Completion / `actualEnd` — slice 006
 - Countdown to end-of-wait mid-sortie or to arrival
 - Wait ceilings and usable schedule margin UX
 - Schedule conflict warnings
-- Responsibility, acceptance, and completion
+- Responsibility and acceptance
 - Server push notifications

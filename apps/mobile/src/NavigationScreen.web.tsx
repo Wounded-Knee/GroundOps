@@ -11,6 +11,7 @@ export function NavigationScreen(_props: {
   onSortieGuideConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
+  onSortieCompleted?: () => void;
   endGuidanceRef?: MutableRefObject<(() => void) | null>;
 }): null {
   return null;

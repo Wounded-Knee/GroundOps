@@ -1,4 +1,4 @@
-import type { PlaceSuggestion, SortieStop, SortieWriteRequest } from "@groundops/contracts";
+import type { PlaceSuggestion, SortieStop, SortieStopWrite, SortieWriteRequest } from "@groundops/contracts";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Location from "expo-location";
 import { createElement, useEffect, useRef, useState } from "react";
@@ -387,11 +387,11 @@ function WebPicker({ mode, value, onPicked }: { mode: "date" | "time"; value: Da
   });
 }
 
-function chosenStops(drafts: StopDraft[]): SortieStop[] | null {
+function chosenStops(drafts: StopDraft[]): SortieStopWrite[] | null {
   if (drafts.length === 0) {
     return null;
   }
-  const stops: SortieStop[] = [];
+  const stops: SortieStopWrite[] = [];
   for (const draft of drafts) {
     const stop = toStop(draft);
     if (!stop) {
@@ -402,7 +402,7 @@ function chosenStops(drafts: StopDraft[]): SortieStop[] | null {
   return stops;
 }
 
-function toStop(draft: StopDraft): SortieStop | null {
+function toStop(draft: StopDraft): SortieStopWrite | null {
   if (!draft.chosen || !Number.isInteger(draft.waitMinutes) || draft.waitMinutes < 0) {
     return null;
   }

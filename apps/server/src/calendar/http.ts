@@ -5,6 +5,7 @@ import { readBearer } from "../identity/tokens.js";
 import {
   authorSortie,
   commenceSortie,
+  completeSortie,
   defaultScheduleDeps,
   ensureDriver,
   readCalendar,
@@ -38,6 +39,7 @@ const observationBody = z.object({
   latitude: z.number(),
   longitude: z.number(),
   accuracyMeters: z.number().nullable(),
+  sortieId: z.uuid().nullable().optional(),
 });
 
 const rangeQuery = z.object({
@@ -207,6 +209,25 @@ export function registerCalendarRoutes(
     return reply.send(result);
   });
 
+  app.post("/sorties/:id/complete", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const params = sortieParams.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const result = await completeSortie(active.user, params.data.id, deps);
+    if (result === "not-found") {
+      return reply.code(404).send({ error: "not found" });
+    }
+    if (result === "not-commenced") {
+      return reply.code(409).send({ error: "not commenced" });
+    }
+    return reply.send(result);
+  });
+
   app.post("/sorties/:id/driving-route", async (request, reply) => {
     const active = await findPresentedSession(request.headers.authorization);
     if (!active) {
@@ -295,6 +316,7 @@ function readObservation(body: unknown): ObservationInput | null {
     latitude: parsed.data.latitude,
     longitude: parsed.data.longitude,
     accuracyMeters: parsed.data.accuracyMeters,
+    sortieId: parsed.data.sortieId ?? null,
   };
 }
 

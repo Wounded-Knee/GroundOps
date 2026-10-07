@@ -21,6 +21,7 @@ import {
 import {
   authorSortie,
   commenceSortie,
+  completeSortie,
   ensureDriver,
   readCalendar,
   recordObservation,
@@ -1117,6 +1118,238 @@ describe("calendar", () => {
     }
   });
 
+  it("infers stop arrival and departure from GPS and completes with actualEnd", async () => {
+    const person = await createSession({
+      sub: `calendar-actuals-${crypto.randomUUID()}`,
+      displayName: "Actuals",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id);
+      const arrival = new Date("2026-09-02T15:00:00.000Z");
+      const authored = await authorSortie(
+        person.user,
+        task("Trip", arrival, { stops: [originStop, destinationStop] }),
+        scheduleDeps,
+      );
+      assert.equal(typeof authored, "object");
+      if (typeof authored !== "object") {
+        return;
+      }
+
+      const commenceNow = new Date("2026-09-02T14:20:00.000Z");
+      const commenced = await commenceSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => commenceNow,
+      });
+      assert.equal(typeof commenced, "object");
+      if (typeof commenced !== "object") {
+        return;
+      }
+
+      const arrivedAt = new Date("2026-09-02T15:01:00.000Z");
+      assert.equal(
+        await recordObservation(
+          person.user,
+          {
+            observedAt: arrivedAt,
+            latitude: originStop.latitude,
+            longitude: originStop.longitude,
+            accuracyMeters: 5,
+            sortieId: authored.id,
+          },
+          scheduleDeps,
+        ),
+        "ok",
+      );
+
+      const afterArrive = await readCalendar(
+        person.user,
+        new Date("2026-09-02T12:00:00.000Z"),
+        new Date("2026-09-02T20:00:00.000Z"),
+      );
+      assert.ok(Array.isArray(afterArrive));
+      if (!Array.isArray(afterArrive)) {
+        return;
+      }
+      const inProgress = afterArrive.find((item) => item.id === authored.id);
+      assert.ok(inProgress);
+      assert.equal(inProgress?.stops[0]?.actualArrivedAt, arrivedAt.toISOString());
+      assert.equal(inProgress?.stops[0]?.actualDepartedAt, null);
+      assert.equal(inProgress?.stops[1]?.actualArrivedAt, null);
+      assert.equal(inProgress?.actualEnd, null);
+
+      const leftAt = new Date("2026-09-02T15:08:00.000Z");
+      assert.equal(
+        await recordObservation(
+          person.user,
+          {
+            observedAt: leftAt,
+            latitude: originStop.latitude + 0.001,
+            longitude: originStop.longitude,
+            accuracyMeters: 5,
+            sortieId: authored.id,
+          },
+          scheduleDeps,
+        ),
+        "ok",
+      );
+
+      const afterLeave = await readCalendar(
+        person.user,
+        new Date("2026-09-02T12:00:00.000Z"),
+        new Date("2026-09-02T20:00:00.000Z"),
+      );
+      assert.ok(Array.isArray(afterLeave));
+      if (!Array.isArray(afterLeave)) {
+        return;
+      }
+      const mid = afterLeave.find((item) => item.id === authored.id);
+      assert.equal(mid?.stops[0]?.actualDepartedAt, leftAt.toISOString());
+      assert.equal(mid?.stops[1]?.actualArrivedAt, null);
+
+      const atDestination = new Date("2026-09-02T16:00:00.000Z");
+      assert.equal(
+        await recordObservation(
+          person.user,
+          {
+            observedAt: atDestination,
+            latitude: destinationStop.latitude,
+            longitude: destinationStop.longitude,
+            accuracyMeters: 5,
+            sortieId: authored.id,
+          },
+          scheduleDeps,
+        ),
+        "ok",
+      );
+      const atEnd = await readCalendar(
+        person.user,
+        new Date("2026-09-02T12:00:00.000Z"),
+        new Date("2026-09-02T20:00:00.000Z"),
+      );
+      assert.ok(Array.isArray(atEnd));
+      if (!Array.isArray(atEnd)) {
+        return;
+      }
+      const arrivedFinal = atEnd.find((item) => item.id === authored.id);
+      assert.equal(arrivedFinal?.stops[1]?.actualArrivedAt, atDestination.toISOString());
+      assert.equal(arrivedFinal?.actualEnd, null);
+
+      const completeNow = new Date("2026-09-02T16:05:00.000Z");
+      const completed = await completeSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => completeNow,
+      });
+      assert.equal(typeof completed, "object");
+      if (typeof completed !== "object") {
+        return;
+      }
+      assert.equal(completed.actualEnd, completeNow.toISOString());
+      assert.equal(completed.stops[1]?.actualDepartedAt, completeNow.toISOString());
+
+      const again = await completeSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => new Date("2026-09-02T16:10:00.000Z"),
+      });
+      assert.equal(typeof again, "object");
+      if (typeof again !== "object") {
+        return;
+      }
+      assert.equal(again.actualEnd, completeNow.toISOString());
+
+      const observations = await db
+        .select({ sortieId: locationObservation.sortieId })
+        .from(locationObservation)
+        .innerJoin(driver, eq(driver.id, locationObservation.driverId))
+        .where(eq(driver.userId, person.user.id));
+      assert.ok(observations.some((row) => row.sortieId === authored.id));
+
+      const events = await eventsFor(authored.id);
+      assert.ok(events.some((event) => event.type === "sortie.stop_arrival_inferred"));
+      assert.ok(events.some((event) => event.type === "sortie.stop_departure_inferred"));
+      assert.ok(events.some((event) => event.type === "sortie.completed"));
+
+      const revised = await reviseSortie(person.user, authored.id, task("Trip", arrival), scheduleDeps);
+      assert.equal(typeof revised, "object");
+      if (typeof revised !== "object") {
+        return;
+      }
+      assert.equal(revised.actualStart, null);
+      assert.equal(revised.actualEnd, null);
+      assert.equal(revised.stops[0]?.actualArrivedAt, null);
+      assert.equal(revised.stops[0]?.actualDepartedAt, null);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("includes completed sorties in calendar range via coalesced end", async () => {
+    const person = await createSession({
+      sub: `calendar-coalesce-end-${crypto.randomUUID()}`,
+      displayName: "CoalesceEnd",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id);
+      const arrival = new Date("2026-09-02T15:00:00.000Z");
+      const authored = await authorSortie(person.user, task("Short", arrival), {
+        ...scheduleDeps,
+        driveDuration: async () => 60,
+      });
+      assert.equal(typeof authored, "object");
+      if (typeof authored !== "object") {
+        return;
+      }
+      await commenceSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        driveDuration: async () => 60,
+        now: () => new Date("2026-09-02T14:50:00.000Z"),
+      });
+      const completed = await completeSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => new Date("2026-09-02T14:55:00.000Z"),
+      });
+      assert.equal(typeof completed, "object");
+      if (typeof completed !== "object") {
+        return;
+      }
+
+      const during = await readCalendar(
+        person.user,
+        new Date("2026-09-02T14:52:00.000Z"),
+        new Date("2026-09-02T14:54:00.000Z"),
+      );
+      assert.ok(Array.isArray(during));
+      if (!Array.isArray(during)) {
+        return;
+      }
+      assert.ok(during.some((item) => item.id === authored.id));
+
+      // After actualEnd but still before scheduledEnd — coalesced end must exclude it.
+      assert.ok(new Date(completed.scheduledEnd).getTime() > new Date("2026-09-02T14:56:00.000Z").getTime());
+      const afterActual = await readCalendar(
+        person.user,
+        new Date("2026-09-02T14:56:00.000Z"),
+        new Date("2026-09-02T15:30:00.000Z"),
+      );
+      assert.ok(Array.isArray(afterActual));
+      if (!Array.isArray(afterActual)) {
+        return;
+      }
+      assert.equal(
+        afterActual.some((item) => item.id === authored.id),
+        false,
+      );
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
   it("does not recompute a commenced sortie from a later GPS fix", async () => {
     const person = await createSession({
       sub: `calendar-sealed-${crypto.randomUUID()}`,
@@ -1340,13 +1573,13 @@ async function placeDriver(
 async function removeUser(userId: string): Promise<void> {
   const drivers = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId));
   for (const row of drivers) {
+    await db.delete(locationObservation).where(eq(locationObservation.driverId, row.id));
     const sorties = await db.select({ id: sortie.id }).from(sortie).where(eq(sortie.authorDriverId, row.id));
     for (const item of sorties) {
       await db.delete(operationalEvent).where(eq(operationalEvent.sortieId, item.id));
       await db.delete(sortieStop).where(eq(sortieStop.sortieId, item.id));
     }
     await db.delete(sortie).where(eq(sortie.authorDriverId, row.id));
-    await db.delete(locationObservation).where(eq(locationObservation.driverId, row.id));
     await db.delete(driverTariff).where(eq(driverTariff.driverId, row.id));
     const links = await db
       .select({ companyId: driverCompany.companyId })

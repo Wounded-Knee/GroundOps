@@ -448,6 +448,9 @@ function AppContent() {
                   onMeterEnded={() => {
                     setMeterReading(null);
                   }}
+                  onSortieCompleted={() => {
+                    setCalendarReload((current) => current + 1);
+                  }}
                   endGuidanceRef={endGuidanceRef}
                 />
               ) : null}

@@ -17,6 +17,8 @@ type StoredStop = {
   longitude: number;
   waitMinutes: number;
   passenger: boolean;
+  actualArrivedAt: string | null;
+  actualDepartedAt: string | null;
 };
 
 /** Platform user. The SQL name is quoted because user is reserved. */
@@ -100,6 +102,7 @@ export const sortie = pgTable("sortie", {
   scheduledStart: timestamp("scheduled_start", { withTimezone: true, mode: "date" }).notNull(),
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true, mode: "date" }).notNull(),
   actualStart: timestamp("actual_start", { withTimezone: true, mode: "date" }),
+  actualEnd: timestamp("actual_end", { withTimezone: true, mode: "date" }),
   scheduleOriginLatitude: doublePrecision("schedule_origin_latitude"),
   scheduleOriginLongitude: doublePrecision("schedule_origin_longitude"),
   scheduleOriginLabel: text("schedule_origin_label"),
@@ -123,6 +126,8 @@ export const sortieStop = pgTable(
     longitude: doublePrecision("longitude").notNull(),
     waitMinutes: integer("wait_minutes").notNull().default(0),
     passenger: boolean("passenger").notNull().default(false),
+    actualArrivedAt: timestamp("actual_arrived_at", { withTimezone: true, mode: "date" }),
+    actualDepartedAt: timestamp("actual_departed_at", { withTimezone: true, mode: "date" }),
   },
   (table) => [uniqueIndex("sortie_stop_sortie_id_position_key").on(table.sortieId, table.position)],
 );
@@ -152,6 +157,7 @@ export const locationObservation = pgTable(
     driverId: uuid("driver_id")
       .notNull()
       .references(() => driver.id),
+    sortieId: uuid("sortie_id").references(() => sortie.id),
     observedAt: timestamp("observed_at", { withTimezone: true, mode: "date" }).notNull(),
     latitude: doublePrecision("latitude").notNull(),
     longitude: doublePrecision("longitude").notNull(),

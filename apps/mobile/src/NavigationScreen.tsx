@@ -12,11 +12,13 @@ import { resolveApiUrl } from "./apiUrl";
 import {
   authorSortie,
   commenceSortie,
+  completeSortie,
   ensureCurrentDriver,
   reportLocationObservation,
   requestCalendar,
   requestTariff,
 } from "./calendarClient";
+import { setActiveSortieObservation } from "./locationObservationReporting";
 import { cancelDepartureAlerts, scheduleDepartureAlerts } from "./departureAlerts";
 import { formatCountdown, nextDeparture, type NextDeparture } from "./nextDeparture";
 import {
@@ -104,6 +106,7 @@ type NavState =
       tariff: Tariff | null;
       meter: MeterState;
       stops: SortieStop[];
+      sortieId: string | null;
     };
 
 const apiUrl = resolveApiUrl();
@@ -115,6 +118,7 @@ export function NavigationScreen({
   onSortieGuideConsumed,
   onMeterReading,
   onMeterEnded,
+  onSortieCompleted,
   endGuidanceRef,
 }: {
   token: string;
@@ -123,6 +127,7 @@ export function NavigationScreen({
   onSortieGuideConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
+  onSortieCompleted?: () => void;
   endGuidanceRef?: MutableRefObject<(() => void) | null>;
 }) {
   const { colors } = useTheme();
@@ -364,6 +369,7 @@ export function NavigationScreen({
     setNav(next);
     setRouteEpoch((epoch) => epoch + 1);
     publishMeter(started, next, origin);
+    void setActiveSortieObservation(sortieGuide.sortieId);
     onSortieGuideConsumed?.();
   }, [sortieGuide]);
 
@@ -497,6 +503,7 @@ export function NavigationScreen({
             tariff: current.tariff,
             meter: meterRef.current,
             stops: current.stops,
+            sortieId: current.sortieId,
           };
           setNav(arrived);
           publishMeter(meterRef.current, arrived, fix);
@@ -574,6 +581,7 @@ export function NavigationScreen({
         tariff: current.tariff,
         meter: meterRef.current,
         stops: current.kind === "sortie" ? current.stops : [],
+        sortieId: current.kind === "sortie" ? current.sortieId : null,
       };
       setNav(arrived);
       if (current.kind === "sortie") {
@@ -851,9 +859,31 @@ export function NavigationScreen({
     setNav(next);
     setRouteEpoch((epoch) => epoch + 1);
     publishMeter(started, next, origin);
+    void setActiveSortieObservation(commenced.id);
   }
 
   function onDismiss(): void {
+    void endGuidance();
+  }
+
+  async function endGuidance(): Promise<void> {
+    const current = navRef.current;
+    const apiUrl = resolveApiUrl();
+    if (
+      (current.mode === "guiding" || current.mode === "arrived") &&
+      current.kind === "sortie" &&
+      current.sortieId
+    ) {
+      const completed = await completeSortie(apiUrl, token, current.sortieId);
+      if (completed === "unauthorized") {
+        onUnauthorized();
+        return;
+      }
+      if (typeof completed === "object") {
+        onSortieCompleted?.();
+      }
+    }
+    await setActiveSortieObservation(null);
     routeRequest.current += 1;
     rerouteGeneration.current += 1;
     rerouteInFlight.current = false;
