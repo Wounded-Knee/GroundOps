@@ -38,6 +38,7 @@ export type DialogDraft = {
   passengerName: string;
   phone: string;
   stops: StopDraft[];
+  focusStopIndex?: number | null;
 };
 
 type PickerTarget = "arrival-date" | "arrival-time";
@@ -223,6 +224,7 @@ export function SortieDialog({
             stop={stop}
             token={token}
             canRemove={stops.length > 1}
+            autoFocus={draft.focusStopIndex === index}
             onChange={(next) => setStops((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)))}
             onRemove={() => setStops((current) => current.filter((_, itemIndex) => itemIndex !== index))}
             onUnauthorized={onUnauthorized}
@@ -247,6 +249,7 @@ function StopFieldset({
   stop,
   token,
   canRemove,
+  autoFocus = false,
   onChange,
   onRemove,
   onUnauthorized,
@@ -254,6 +257,7 @@ function StopFieldset({
   stop: StopDraft;
   token: string;
   canRemove: boolean;
+  autoFocus?: boolean;
   onChange: (stop: StopDraft) => void;
   onRemove: () => void;
   onUnauthorized: () => void;
@@ -277,6 +281,7 @@ function StopFieldset({
             appearance="field"
             query={stop.query}
             token={token}
+            autoFocus={autoFocus}
             onQueryChange={(query) => {
               const chosen = stop.chosen && stop.chosen.label === query ? stop.chosen : null;
               onChange({ query, chosen, waitMinutes: stop.waitMinutes, passenger: stop.passenger });
@@ -415,7 +420,7 @@ function toStop(draft: StopDraft): SortieStopWrite | null {
   };
 }
 
-function blankStop(): StopDraft {
+export function blankStop(): StopDraft {
   return { query: "", chosen: null, waitMinutes: 0, passenger: false };
 }
 

@@ -1,4 +1,4 @@
-import type { DrivingRoute, SortieStop, Tariff } from "@groundops/contracts";
+import type { DrivingRoute, Sortie, SortieStop, Tariff } from "@groundops/contracts";
 
 export type SortieGuideCommand = {
   sortieId: string;
@@ -6,4 +6,5 @@ export type SortieGuideCommand = {
   firstStopPosition: number;
   route: DrivingRoute;
   tariff: Tariff | null;
+  sortie: Sortie;
 };

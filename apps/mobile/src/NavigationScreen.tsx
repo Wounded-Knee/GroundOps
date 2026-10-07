@@ -10,10 +10,12 @@ import { useTheme } from "./ThemeProvider";
 import { withAlpha, type ThemeColors } from "./theme";
 import { resolveApiUrl } from "./apiUrl";
 import {
+  assertStopArrival,
   authorSortie,
   commenceSortie,
   completeSortie,
   ensureCurrentDriver,
+  extendStopWait,
   reportLocationObservation,
   requestCalendar,
   requestTariff,
@@ -68,6 +70,13 @@ import {
 import type { MeterDisplay } from "./MeterStrip";
 import { PlatformMap, type MapCamera, type MapHandle } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
+import {
+  bumpStopWaitMinutes,
+  extendWaitEndsAt,
+  hasLaterStop,
+  isFinalStop,
+  waitEndsAtFromStop,
+} from "./sortieDwell";
 import type { SortieGuideCommand } from "./sortieGuide";
 import { throb } from "./VisualAlert";
 
@@ -82,6 +91,7 @@ type NavState =
       sortieId: string;
       stops: SortieStop[];
       tariff: Tariff | null;
+      sortie: Sortie;
     }
   | {
       mode: "guiding";
@@ -96,6 +106,7 @@ type NavState =
       stops: SortieStop[];
       firstStopPosition: number;
       tariff: Tariff | null;
+      sortie: Sortie | null;
     }
   | {
       mode: "arrived";
@@ -107,6 +118,11 @@ type NavState =
       meter: MeterState;
       stops: SortieStop[];
       sortieId: string | null;
+      sortie: Sortie | null;
+      stopPosition: number;
+      waitEndsAt: number;
+      meterPaused: boolean;
+      pendingNextLeg: boolean;
     };
 
 const apiUrl = resolveApiUrl();
@@ -119,7 +135,13 @@ export function NavigationScreen({
   onMeterReading,
   onMeterEnded,
   onSortieCompleted,
+  onOnwardDestination,
   endGuidanceRef,
+  meterArriveRef,
+  meterPlusOneRef,
+  meterOnwardRef,
+  meterCommenceRef,
+  applySortieUpdateRef,
 }: {
   token: string;
   onUnauthorized: () => void;
@@ -128,7 +150,13 @@ export function NavigationScreen({
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
   onSortieCompleted?: () => void;
+  onOnwardDestination?: (sortie: Sortie) => void;
   endGuidanceRef?: MutableRefObject<(() => void) | null>;
+  meterArriveRef?: MutableRefObject<(() => void) | null>;
+  meterPlusOneRef?: MutableRefObject<(() => void) | null>;
+  meterOnwardRef?: MutableRefObject<(() => void) | null>;
+  meterCommenceRef?: MutableRefObject<(() => void) | null>;
+  applySortieUpdateRef?: MutableRefObject<((sortie: Sortie) => void) | null>;
 }) {
   const { colors } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
@@ -172,6 +200,7 @@ export function NavigationScreen({
   const speechGeneration = useRef(0);
   const guidedCameraRef = useRef<MapCamera | null>(null);
   const stopAdvanceInFlight = useRef(false);
+  const extendWaitInFlight = useRef(false);
   const nextDepartureRef = useRef<NextDeparture | null>(null);
 
   useEffect(() => {
@@ -305,8 +334,9 @@ export function NavigationScreen({
       onMeterReading?.(null);
       return;
     }
+    const dwelling = current.mode === "arrived";
     const remaining =
-      current.mode === "arrived"
+      dwelling
         ? 0
         : remainingDistanceMeters(at ?? current.destination, current.route, current.stepIndex);
     const step =
@@ -318,6 +348,9 @@ export function NavigationScreen({
           ? distanceToStepEnd(at, step)
           : step.distanceMeters;
     const turnBaselineMeters = step?.distanceMeters ?? 0;
+    const stopPosition = dwelling ? current.stopPosition : current.firstStopPosition;
+    const later = hasLaterStop(current.stops, stopPosition);
+    const final = dwelling && isFinalStop(current.stops, current.stopPosition);
     onMeterReading?.({
       milesTraveled: nextMeter.milesTraveled,
       waitSeconds: nextMeter.waitSeconds,
@@ -327,7 +360,194 @@ export function NavigationScreen({
       turnRemainingMeters,
       turnBaselineMeters,
       tariff: current.tariff,
+      canArrive: current.mode === "guiding",
+      dwelling,
+      waitEndsAt: dwelling ? current.waitEndsAt : null,
+      meterPaused: dwelling ? current.meterPaused : false,
+      flashFare: dwelling && current.meterPaused,
+      showOnward: Boolean(final && !current.pendingNextLeg),
+      showCommence: dwelling && (later || current.pendingNextLeg),
+      pendingNextLeg: dwelling ? current.pendingNextLeg : false,
     });
+  }
+
+  function enterStopDwell(
+    current: Extract<NavState, { mode: "guiding" }>,
+    stopPosition: number,
+    at: GeoCoordinate | null,
+  ): void {
+    if (current.kind !== "sortie") {
+      return;
+    }
+    const stop = current.stops[stopPosition];
+    if (!stop) {
+      return;
+    }
+    const now = Date.now();
+    const final = isFinalStop(current.stops, stopPosition);
+    const arrived: NavState = {
+      mode: "arrived",
+      kind: "sortie",
+      destination: placeFromStop(stop),
+      route: current.route,
+      muted: current.muted,
+      tariff: current.tariff,
+      meter: meterRef.current,
+      stops: current.stops,
+      sortieId: current.sortieId,
+      sortie: current.sortie,
+      stopPosition,
+      waitEndsAt: waitEndsAtFromStop(stop.waitMinutes, now),
+      meterPaused: final,
+      pendingNextLeg: false,
+    };
+    setNav(arrived);
+    publishMeter(meterRef.current, arrived, at);
+    if (current.sortieId && stop.actualArrivedAt === null) {
+      const sortieId = current.sortieId;
+      void (async () => {
+        const result = await assertStopArrival(apiUrl, token, sortieId, stopPosition);
+        if (result === "unauthorized") {
+          onUnauthorized();
+          return;
+        }
+        if (typeof result === "object") {
+          setNav((existing) =>
+            existing.mode === "arrived" && existing.kind === "sortie"
+              ? { ...existing, stops: result.stops, sortie: result }
+              : existing,
+          );
+        }
+      })();
+    }
+  }
+
+  async function runExtendWait(): Promise<void> {
+    const current = navRef.current;
+    if (current.mode !== "arrived" || current.kind !== "sortie" || !current.sortieId) {
+      return;
+    }
+    if (extendWaitInFlight.current) {
+      return;
+    }
+    extendWaitInFlight.current = true;
+    const now = Date.now();
+    const nextEnds = extendWaitEndsAt(current.waitEndsAt, now);
+    const optimisticStops = bumpStopWaitMinutes(current.stops, current.stopPosition);
+    const optimistic: NavState = {
+      ...current,
+      stops: optimisticStops,
+      waitEndsAt: nextEnds,
+      sortie: current.sortie
+        ? { ...current.sortie, stops: optimisticStops }
+        : current.sortie,
+    };
+    setNav(optimistic);
+    publishMeter(meterRef.current, optimistic, fixRef.current);
+    const result = await extendStopWait(apiUrl, token, current.sortieId, current.stopPosition);
+    extendWaitInFlight.current = false;
+    if (result === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (typeof result === "object") {
+      const existing = navRef.current;
+      if (existing.mode !== "arrived" || existing.kind !== "sortie") {
+        return;
+      }
+      const synced: NavState = {
+        ...existing,
+        stops: result.stops,
+        sortie: result,
+        waitEndsAt: existing.waitEndsAt,
+      };
+      setNav(synced);
+      publishMeter(meterRef.current, synced, fixRef.current);
+    }
+  }
+
+  async function startNextLeg(): Promise<void> {
+    const current = navRef.current;
+    if (current.mode !== "arrived" || current.kind !== "sortie" || !current.sortieId) {
+      return;
+    }
+    if (!hasLaterStop(current.stops, current.stopPosition) && !current.pendingNextLeg) {
+      return;
+    }
+    const nextPosition = current.stopPosition + 1;
+    if (!current.stops[nextPosition]) {
+      return;
+    }
+    if (stopAdvanceInFlight.current) {
+      return;
+    }
+    stopAdvanceInFlight.current = true;
+    const generation = ++rerouteGeneration.current;
+    const origin = fixRef.current ?? current.destination;
+    const result = await requestSortieDrivingRoute(
+      apiUrl,
+      token,
+      current.sortieId,
+      origin,
+      nextPosition,
+    );
+    if (generation !== rerouteGeneration.current) {
+      return;
+    }
+    stopAdvanceInFlight.current = false;
+    if (result === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (result === "failed") {
+      return;
+    }
+    const existing = navRef.current;
+    if (existing.mode !== "arrived" || existing.kind !== "sortie") {
+      return;
+    }
+    const nextStop = existing.stops[nextPosition];
+    if (!nextStop) {
+      return;
+    }
+    const updated: NavState = {
+      mode: "guiding",
+      kind: "sortie",
+      destination: placeFromStop(nextStop),
+      route: result,
+      stepIndex: 0,
+      muted: existing.muted,
+      offRouteSince: null,
+      rerouteMessage: null,
+      sortieId: existing.sortieId,
+      stops: existing.stops,
+      firstStopPosition: nextPosition,
+      tariff: existing.tariff,
+      sortie: existing.sortie,
+    };
+    const nextMeter = applyRouteToMeter(origin, result);
+    setNav(updated);
+    publishMeter(nextMeter, updated, origin);
+    setRouteEpoch((epoch) => epoch + 1);
+  }
+
+  function applyOnwardSortie(updated: Sortie): void {
+    const current = navRef.current;
+    if (current.mode !== "arrived" || current.kind !== "sortie") {
+      return;
+    }
+    if (updated.stops.length <= current.stopPosition) {
+      return;
+    }
+    const arrived: NavState = {
+      ...current,
+      stops: updated.stops,
+      sortie: updated,
+      meterPaused: true,
+      pendingNextLeg: hasLaterStop(updated.stops, current.stopPosition),
+    };
+    setNav(arrived);
+    publishMeter(meterRef.current, arrived, fixRef.current);
   }
 
   useEffect(() => {
@@ -365,6 +585,7 @@ export function NavigationScreen({
       stops: sortieGuide.stops,
       firstStopPosition: sortieGuide.firstStopPosition,
       tariff: sortieGuide.tariff,
+      sortie: sortieGuide.sortie,
     };
     setNav(next);
     setRouteEpoch((epoch) => epoch + 1);
@@ -471,6 +692,23 @@ export function NavigationScreen({
     return () => clearInterval(timer);
   }, [meterActive, legBillable]);
 
+  useEffect(() => {
+    if (nav.mode !== "arrived" || nav.kind !== "sortie") {
+      return;
+    }
+    const timer = setInterval(() => {
+      const current = navRef.current;
+      if (current.mode !== "arrived" || current.kind !== "sortie") {
+        return;
+      }
+      if (Date.now() < current.waitEndsAt) {
+        return;
+      }
+      void runExtendWait();
+    }, 500);
+    return () => clearInterval(timer);
+  }, [nav.mode, nav.mode === "arrived" && "kind" in nav && nav.kind === "sortie" ? nav.waitEndsAt : null]);
+
   // Prefer GPS course for the camera; only follow compass when course is absent so
   // high-rate heading ticks do not restart Android camera animations.
   const bearingInput = course !== null && course >= 0 ? course : compass;
@@ -485,77 +723,26 @@ export function NavigationScreen({
       bearingRef.current = smoothBearing(bearingRef.current, bearingInput);
     }
     sendGuidanceCamera(guidanceCameraFrom(fix));
+    if (current.mode === "arrived" && current.kind === "sortie") {
+      const stop = current.stops[current.stopPosition];
+      if (
+        stop &&
+        (hasLaterStop(current.stops, current.stopPosition) || current.pendingNextLeg) &&
+        distanceMeters(fix, stop) > arrivalMeters
+      ) {
+        void startNextLeg();
+      }
+      return;
+    }
+
     if (current.mode !== "guiding") {
       return;
     }
 
     if (current.kind === "sortie") {
       const target = current.stops[current.firstStopPosition];
-      const lastIndex = current.stops.length - 1;
       if (target && distanceMeters(fix, target) <= arrivalMeters) {
-        if (current.firstStopPosition >= lastIndex) {
-          const arrived: NavState = {
-            mode: "arrived",
-            kind: "sortie",
-            destination: current.destination,
-            route: current.route,
-            muted: current.muted,
-            tariff: current.tariff,
-            meter: meterRef.current,
-            stops: current.stops,
-            sortieId: current.sortieId,
-          };
-          setNav(arrived);
-          publishMeter(meterRef.current, arrived, fix);
-          return;
-        }
-        if (!stopAdvanceInFlight.current && current.sortieId) {
-          stopAdvanceInFlight.current = true;
-          const nextPosition = current.firstStopPosition + 1;
-          const generation = ++rerouteGeneration.current;
-          const origin = fix;
-          const sortieId = current.sortieId;
-          void (async () => {
-            const result = await requestSortieDrivingRoute(apiUrl, token, sortieId, origin, nextPosition);
-            if (generation !== rerouteGeneration.current) {
-              return;
-            }
-            stopAdvanceInFlight.current = false;
-            if (result === "unauthorized") {
-              onUnauthorized();
-              return;
-            }
-            if (result === "failed") {
-              setNav((existing) =>
-                existing.mode === "guiding" && existing.kind === "sortie"
-                  ? { ...existing, rerouteMessage: "Rerouting failed." }
-                  : existing,
-              );
-              return;
-            }
-            const existing = navRef.current;
-            if (existing.mode !== "guiding" || existing.kind !== "sortie") {
-              return;
-            }
-            const nextStop = existing.stops[nextPosition] ?? existing.stops[existing.stops.length - 1];
-            if (!nextStop) {
-              return;
-            }
-            const updated = {
-              ...existing,
-              destination: placeFromStop(nextStop),
-              route: result,
-              stepIndex: 0,
-              firstStopPosition: nextPosition,
-              offRouteSince: null,
-              rerouteMessage: null,
-            };
-            const nextMeter = applyRouteToMeter(origin, result);
-            setNav(updated);
-            publishMeter(nextMeter, updated, origin);
-            setRouteEpoch((epoch) => epoch + 1);
-          })();
-        }
+        enterStopDwell(current, current.firstStopPosition, fix);
         return;
       }
     }
@@ -572,21 +759,27 @@ export function NavigationScreen({
     });
     offRouteSinceRef.current = outcome.offRouteSince;
     if (outcome.arrived) {
+      if (current.kind === "sortie") {
+        enterStopDwell(current, current.firstStopPosition, fix);
+        return;
+      }
       const arrived: NavState = {
         mode: "arrived",
-        kind: current.kind,
+        kind: "search",
         destination: current.destination,
         route: current.route,
         muted: current.muted,
         tariff: current.tariff,
         meter: meterRef.current,
-        stops: current.kind === "sortie" ? current.stops : [],
-        sortieId: current.kind === "sortie" ? current.sortieId : null,
+        stops: [],
+        sortieId: null,
+        sortie: null,
+        stopPosition: 0,
+        waitEndsAt: Date.now(),
+        meterPaused: false,
+        pendingNextLeg: false,
       };
       setNav(arrived);
-      if (current.kind === "sortie") {
-        publishMeter(meterRef.current, arrived, fix);
-      }
       return;
     }
     if (outcome.stepIndex !== current.stepIndex) {
@@ -805,6 +998,7 @@ export function NavigationScreen({
       sortieId: authored.id,
       stops: authored.stops,
       tariff,
+      sortie: authored,
     });
     const camera = overviewCamera(result.path);
     if (camera) {
@@ -855,6 +1049,7 @@ export function NavigationScreen({
       stops: commenced.stops,
       firstStopPosition: 0,
       tariff: preview.tariff,
+      sortie: commenced,
     };
     setNav(next);
     setRouteEpoch((epoch) => epoch + 1);
@@ -914,6 +1109,37 @@ export function NavigationScreen({
 
   if (endGuidanceRef) {
     endGuidanceRef.current = onDismiss;
+  }
+  if (meterArriveRef) {
+    meterArriveRef.current = () => {
+      const current = navRef.current;
+      if (current.mode !== "guiding" || current.kind !== "sortie") {
+        return;
+      }
+      enterStopDwell(current, current.firstStopPosition, fixRef.current);
+    };
+  }
+  if (meterPlusOneRef) {
+    meterPlusOneRef.current = () => {
+      void runExtendWait();
+    };
+  }
+  if (meterOnwardRef) {
+    meterOnwardRef.current = () => {
+      const current = navRef.current;
+      if (current.mode !== "arrived" || current.kind !== "sortie" || !current.sortie) {
+        return;
+      }
+      onOnwardDestination?.(current.sortie);
+    };
+  }
+  if (meterCommenceRef) {
+    meterCommenceRef.current = () => {
+      void startNextLeg();
+    };
+  }
+  if (applySortieUpdateRef) {
+    applySortieUpdateRef.current = applyOnwardSortie;
   }
 
   const guiding = nav.mode === "guiding" ? nav : null;
@@ -1065,16 +1291,18 @@ function placeFromStop(stop: SortieStop): PlaceSuggestion {
   };
 }
 
-/** Meter accrues only while the current (or final arrived) leg has passenger on. */
+/** Meter accrues only while the current leg has passenger on and the meter is not paused. */
 function sortieLegBillable(nav: NavState): boolean {
   if ((nav.mode !== "guiding" && nav.mode !== "arrived") || nav.kind !== "sortie") {
     return false;
   }
-  if (nav.mode === "guiding") {
-    return nav.stops[nav.firstStopPosition]?.passenger === true;
+  if (nav.mode === "arrived") {
+    if (nav.meterPaused) {
+      return false;
+    }
+    return nav.stops[nav.stopPosition]?.passenger === true;
   }
-  const last = nav.stops[nav.stops.length - 1];
-  return last?.passenger === true;
+  return nav.stops[nav.firstStopPosition]?.passenger === true;
 }
 
 function Awake() {

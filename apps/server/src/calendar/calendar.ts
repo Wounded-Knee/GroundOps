@@ -36,6 +36,7 @@ const sortieScheduleComputed = "sortie.schedule_computed";
 const sortieCommenced = "sortie.commenced";
 const sortieCompleted = "sortie.completed";
 const sortieStopArrivalInferred = "sortie.stop_arrival_inferred";
+const sortieStopArrivalAsserted = "sortie.stop_arrival_asserted";
 const sortieStopDepartureInferred = "sortie.stop_departure_inferred";
 /** Matches mobile guidance arrivalMeters. */
 const stopArrivalMeters = 40;
@@ -249,19 +250,24 @@ export async function reviseSortie(
   if (!author) {
     return "not-found";
   }
-  const existing = await db
-    .select({ id: sortie.id })
+  const existingRows = await db
+    .select(sortieSelect)
     .from(sortie)
     .where(and(eq(sortie.id, sortieId), eq(sortie.authorDriverId, author.id)))
     .limit(1);
-  if (!existing[0]) {
+  const existing = existingRows[0];
+  if (!existing) {
     return "not-found";
   }
+  const previousStops = (await stopsBySortie(db, [sortieId])).get(sortieId) ?? [];
+  const inProgress = existing.actualStart !== null && existing.actualEnd === null;
+  const nextStops = mergeStopActuals(valid.stops, previousStops, inProgress);
+
   const position = await departurePosition(author.id, sortieId, valid.arrivalAt);
   if (!position) {
     return "no-location";
   }
-  const window = await computeWindow(position, valid.stops, valid.arrivalAt, deps.now(), deps.driveDuration);
+  const window = await computeWindow(position, nextStops, valid.arrivalAt, deps.now(), deps.driveDuration);
   if (window === "failed") {
     return "unavailable";
   }
@@ -274,10 +280,10 @@ export async function reviseSortie(
         label: valid.label,
         arrivalAt: window.arrivalAt,
         arrivalAuthored: valid.arrivalAt !== null,
-        scheduledStart: window.scheduledStart,
+        scheduledStart: inProgress ? existing.scheduledStart : window.scheduledStart,
         scheduledEnd: window.scheduledEnd,
-        actualStart: null,
-        actualEnd: null,
+        actualStart: inProgress ? existing.actualStart : null,
+        actualEnd: inProgress ? existing.actualEnd : null,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
         scheduleOriginLabel: departureAddress,
@@ -293,9 +299,119 @@ export async function reviseSortie(
     }
 
     await tx.delete(sortieStop).where(eq(sortieStop.sortieId, sortieId));
-    await writeStops(tx, row.id, valid.stops);
-    await writeEvent(tx, sortieRevised, row, valid.stops);
-    return toSortie(row, valid.stops);
+    await writeStops(tx, row.id, nextStops);
+    await writeEvent(tx, sortieRevised, row, nextStops);
+    return toSortie(row, nextStops);
+  });
+  if (typeof revised === "object") {
+    await alignFollowingSorties(author.id, deps);
+  }
+  return revised;
+}
+
+export async function assertStopArrival(
+  person: User,
+  sortieId: string,
+  position: number,
+  deps: ScheduleDeps = defaultScheduleDeps,
+): Promise<Sortie | "invalid" | "not-found" | "not-commenced"> {
+  if (!Number.isInteger(position) || position < 0) {
+    return "invalid";
+  }
+  const author = await findDriver(db, person.id);
+  if (!author) {
+    return "not-found";
+  }
+  const existing = await db
+    .select(sortieSelect)
+    .from(sortie)
+    .where(and(eq(sortie.id, sortieId), eq(sortie.authorDriverId, author.id)))
+    .limit(1);
+  const row = existing[0];
+  if (!row) {
+    return "not-found";
+  }
+  if (row.actualStart === null) {
+    return "not-commenced";
+  }
+  const stops = (await stopsBySortie(db, [row.id])).get(row.id) ?? [];
+  const target = stops[position];
+  if (!target) {
+    return "invalid";
+  }
+  if (target.actualArrivedAt !== null) {
+    return toSortie(row, stops);
+  }
+  const now = deps.now();
+  const nextStops = stops.map((stop, index) =>
+    index === position ? { ...stop, actualArrivedAt: now.toISOString() } : stop,
+  );
+  return db.transaction(async (tx) => {
+    await tx
+      .update(sortieStop)
+      .set({ actualArrivedAt: now })
+      .where(and(eq(sortieStop.sortieId, sortieId), eq(sortieStop.position, position)));
+    await writeEvent(tx, sortieStopArrivalAsserted, row, nextStops);
+    return toSortie(row, nextStops);
+  });
+}
+
+export async function extendStopWait(
+  person: User,
+  sortieId: string,
+  position: number,
+  deps: ScheduleDeps = defaultScheduleDeps,
+): Promise<Sortie | "invalid" | "not-found" | "no-location" | "unavailable"> {
+  if (!Number.isInteger(position) || position < 0) {
+    return "invalid";
+  }
+  const author = await findDriver(db, person.id);
+  if (!author) {
+    return "not-found";
+  }
+  const existing = await db
+    .select(sortieSelect)
+    .from(sortie)
+    .where(and(eq(sortie.id, sortieId), eq(sortie.authorDriverId, author.id)))
+    .limit(1);
+  const row = existing[0];
+  if (!row) {
+    return "not-found";
+  }
+  const stops = (await stopsBySortie(db, [row.id])).get(row.id) ?? [];
+  if (!stops[position]) {
+    return "invalid";
+  }
+  const nextStops = stops.map((stop, index) =>
+    index === position ? { ...stop, waitMinutes: stop.waitMinutes + 1 } : stop,
+  );
+  const origin = await departurePosition(author.id, sortieId, row.arrivalAuthored ? row.arrivalAt : null);
+  if (!origin) {
+    return "no-location";
+  }
+  const window = await computeWindow(origin, nextStops, row.arrivalAt, deps.now(), deps.driveDuration);
+  if (window === "failed") {
+    return "unavailable";
+  }
+
+  const revised = await db.transaction(async (tx) => {
+    await tx
+      .update(sortieStop)
+      .set({ waitMinutes: nextStops[position]!.waitMinutes })
+      .where(and(eq(sortieStop.sortieId, sortieId), eq(sortieStop.position, position)));
+    const updated = await tx
+      .update(sortie)
+      .set({
+        scheduledEnd: window.scheduledEnd,
+        scheduleFailedAt: null,
+      })
+      .where(eq(sortie.id, sortieId))
+      .returning(sortieSelect);
+    const next = updated[0];
+    if (!next) {
+      return "not-found" as const;
+    }
+    return toSortie(next, nextStops);
   });
   if (typeof revised === "object") {
     await alignFollowingSorties(author.id, deps);
@@ -702,10 +818,40 @@ async function writeStops(tx: Database, sortieId: string, stops: SortieStop[]): 
       longitude: stop.longitude,
       waitMinutes: stop.waitMinutes,
       passenger: stop.passenger,
-      actualArrivedAt: null,
-      actualDepartedAt: null,
+      actualArrivedAt: stop.actualArrivedAt ? new Date(stop.actualArrivedAt) : null,
+      actualDepartedAt: stop.actualDepartedAt ? new Date(stop.actualDepartedAt) : null,
     })),
   );
+}
+
+function mergeStopActuals(next: SortieStop[], previous: SortieStop[], inProgress: boolean): SortieStop[] {
+  if (!inProgress) {
+    return next.map((stop) => ({
+      ...stop,
+      actualArrivedAt: null,
+      actualDepartedAt: null,
+    }));
+  }
+  return next.map((stop, index) => {
+    const prior = previous[index];
+    if (
+      prior &&
+      prior.latitude === stop.latitude &&
+      prior.longitude === stop.longitude &&
+      prior.label === stop.label
+    ) {
+      return {
+        ...stop,
+        actualArrivedAt: prior.actualArrivedAt,
+        actualDepartedAt: prior.actualDepartedAt,
+      };
+    }
+    return {
+      ...stop,
+      actualArrivedAt: null,
+      actualDepartedAt: null,
+    };
+  });
 }
 
 async function resolveInProgressSortie(

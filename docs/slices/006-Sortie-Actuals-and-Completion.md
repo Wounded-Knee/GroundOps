@@ -2,7 +2,9 @@
 
 ## Status
 
-**CURRENT SLICE**
+**Previous slice**
+
+**Next slice:** 007 — Arrival Wait and Onward Destination
 
 **Previous slice:** 005 — Sortie Wait and Departure
 
@@ -176,7 +178,7 @@ This slice publishes no domain events on the bus. A second session sees actuals 
 
 # 14. Remains unimplemented
 
-- Countdown to end-of-wait mid-sortie or to arrival
+- Countdown to end-of-wait mid-sortie or to arrival (slice 007)
 - Wait ceilings and usable schedule margin UX
 - Schedule conflict warnings
 - Responsibility and acceptance
@@ -184,3 +186,4 @@ This slice publishes no domain events on the bus. A second session sees actuals 
 - Persisted meter fare totals
 - Causal attribution / adherence analytics UI
 - Server push “please complete” notifications
+

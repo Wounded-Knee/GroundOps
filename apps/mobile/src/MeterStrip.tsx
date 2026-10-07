@@ -1,5 +1,5 @@
 import type { Tariff } from "@groundops/contracts";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { formatSeconds } from "./guidance";
 import {
@@ -9,6 +9,7 @@ import {
   meterCharges,
   progressFraction,
 } from "./meter";
+import { countdownRemainingSeconds } from "./sortieDwell";
 import { useTheme } from "./ThemeProvider";
 import { withAlpha, type ThemeColors } from "./theme";
 
@@ -23,19 +24,37 @@ export type MeterDisplay = {
   turnRemainingMeters: number;
   turnBaselineMeters: number;
   tariff: Tariff | null;
+  canArrive: boolean;
+  dwelling: boolean;
+  waitEndsAt: number | null;
+  meterPaused: boolean;
+  flashFare: boolean;
+  showOnward: boolean;
+  showCommence: boolean;
+  pendingNextLeg: boolean;
 };
 
 export function MeterStrip({
   reading,
   onEndSortie,
+  onArrive,
+  onPlusOneMinute,
+  onOnwardDestination,
+  onCommenceNext,
 }: {
   reading: MeterDisplay;
   onEndSortie: () => void;
+  onArrive?: () => void;
+  onPlusOneMinute?: () => void;
+  onOnwardDestination?: () => void;
+  onCommenceNext?: () => void;
 }) {
   const { colors } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
   const styles = createStyles(colors);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [flashOn, setFlashOn] = useState(true);
   const charges = meterCharges(
     reading.tariff,
     reading.milesTraveled,
@@ -48,6 +67,25 @@ export function MeterStrip({
   const estimatedFare = charges ? formatMoney(charges.estimateCents) : "—";
   const estimatedMiles =
     reading.milesTraveled + Math.max(0, reading.remainingMeters) / metersPerMile;
+  const remainingWait =
+    reading.waitEndsAt !== null ? countdownRemainingSeconds(reading.waitEndsAt, nowMs) : null;
+
+  useEffect(() => {
+    if (!reading.dwelling || reading.waitEndsAt === null) {
+      return;
+    }
+    const timer = setInterval(() => setNowMs(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, [reading.dwelling, reading.waitEndsAt]);
+
+  useEffect(() => {
+    if (!reading.flashFare) {
+      setFlashOn(true);
+      return;
+    }
+    const timer = setInterval(() => setFlashOn((on) => !on), 500);
+    return () => clearInterval(timer);
+  }, [reading.flashFare]);
 
   return (
     <Pressable
@@ -57,9 +95,36 @@ export function MeterStrip({
     >
       {actionsOpen ? (
         <View style={styles.actionsContent}>
+          {reading.canArrive && onArrive ? (
+            <Pressable
+              accessibilityLabel="Arrived"
+              onPress={(event) => {
+                event.stopPropagation?.();
+                onArrive();
+              }}
+              style={styles.secondaryButton}
+            >
+              <Text style={styles.endButtonText}>Arrived</Text>
+            </Pressable>
+          ) : null}
+          {reading.showCommence && onCommenceNext ? (
+            <Pressable
+              accessibilityLabel="Commence"
+              onPress={(event) => {
+                event.stopPropagation?.();
+                onCommenceNext();
+              }}
+              style={styles.secondaryButton}
+            >
+              <Text style={styles.endButtonText}>Commence</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             accessibilityLabel="End Sortie"
-            onPress={onEndSortie}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              onEndSortie();
+            }}
             style={styles.endButton}
           >
             <Text style={styles.endButtonText}>End Sortie</Text>
@@ -76,13 +141,18 @@ export function MeterStrip({
             </View>
             <View style={styles.heroColumn}>
               <Text
-                style={styles.heroFare}
+                style={[styles.heroFare, reading.flashFare && !flashOn ? styles.heroFareDim : null]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.35}
               >
                 {actualFare}
               </Text>
+              {reading.dwelling && remainingWait !== null ? (
+                <Text style={styles.waitCountdown} accessibilityLabel="Wait countdown">
+                  {formatWaitCountdown(remainingWait)}
+                </Text>
+              ) : null}
             </View>
             <View style={[styles.sideColumn, styles.sideColumnRight]}>
               <Text style={[styles.sideHeading, styles.alignRight]}>Actual</Text>
@@ -99,6 +169,46 @@ export function MeterStrip({
               <SideRow align="right" label="Fare" value={actualFare} />
             </View>
           </View>
+          {reading.dwelling || reading.showOnward || reading.showCommence ? (
+            <View style={styles.dwellActions}>
+              {reading.dwelling && onPlusOneMinute ? (
+                <Pressable
+                  accessibilityLabel="Plus one minute"
+                  onPress={(event) => {
+                    event.stopPropagation?.();
+                    onPlusOneMinute();
+                  }}
+                  style={styles.dwellButton}
+                >
+                  <Text style={styles.dwellButtonText}>+1 Minute</Text>
+                </Pressable>
+              ) : null}
+              {reading.showOnward && onOnwardDestination ? (
+                <Pressable
+                  accessibilityLabel="Onward Destination"
+                  onPress={(event) => {
+                    event.stopPropagation?.();
+                    onOnwardDestination();
+                  }}
+                  style={styles.dwellButton}
+                >
+                  <Text style={styles.dwellButtonText}>Onward Destination</Text>
+                </Pressable>
+              ) : null}
+              {reading.showCommence && onCommenceNext ? (
+                <Pressable
+                  accessibilityLabel="Commence"
+                  onPress={(event) => {
+                    event.stopPropagation?.();
+                    onCommenceNext();
+                  }}
+                  style={styles.dwellButton}
+                >
+                  <Text style={styles.dwellButtonText}>Commence</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
           <View style={styles.turnTrack}>
             <View style={[styles.barFill, { width: `${turnFill * 100}%` }]} />
           </View>
@@ -109,6 +219,12 @@ export function MeterStrip({
       )}
     </Pressable>
   );
+}
+
+function formatWaitCountdown(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function SideRow({
@@ -154,11 +270,20 @@ function createStyles(colors: ThemeColors) {
       alignItems: "center",
       justifyContent: "center",
       paddingHorizontal: 16,
+      gap: 12,
     },
     endButton: {
       backgroundColor: colors.accent,
       borderRadius: 12,
       paddingVertical: 18,
+      paddingHorizontal: 28,
+      minWidth: "70%",
+      alignItems: "center",
+    },
+    secondaryButton: {
+      backgroundColor: colors.accentSoft,
+      borderRadius: 12,
+      paddingVertical: 14,
       paddingHorizontal: 28,
       minWidth: "70%",
       alignItems: "center",
@@ -217,6 +342,34 @@ function createStyles(colors: ThemeColors) {
       textAlign: "center",
       textAlignVertical: "center",
       width: "100%",
+    },
+    heroFareDim: {
+      opacity: 0.25,
+    },
+    waitCountdown: {
+      fontSize: 22,
+      fontWeight: "700",
+      color: colors.text,
+      marginBottom: 4,
+    },
+    dwellActions: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "center",
+      gap: 8,
+      paddingHorizontal: 10,
+      paddingBottom: 6,
+    },
+    dwellButton: {
+      backgroundColor: colors.accent,
+      borderRadius: 10,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+    },
+    dwellButtonText: {
+      color: "#fff",
+      fontSize: 14,
+      fontWeight: "700",
     },
     turnTrack: {
       height: 8,

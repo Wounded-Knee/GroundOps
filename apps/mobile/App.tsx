@@ -1,4 +1,4 @@
-import type { SortieWriteRequest, User } from "@groundops/contracts";
+import type { Sortie, SortieWriteRequest, User } from "@groundops/contracts";
 import * as AuthSession from "expo-auth-session";
 import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
@@ -11,12 +11,19 @@ import { BottomNav, type SignedInDestination } from "./src/BottomNav";
 import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
-import { authorSortie, ensureCurrentDriver } from "./src/calendarClient";
+import { authorSortie, ensureCurrentDriver, reviseSortie } from "./src/calendarClient";
+import { formatUsPhone } from "./src/calendarTime";
 import { MeterStrip, type MeterDisplay } from "./src/MeterStrip";
 import { NavigationScreen } from "./src/NavigationScreen";
 import type { SortieGuideCommand } from "./src/sortieGuide";
 import { SettingsScreen } from "./src/SettingsScreen";
-import { SortieDialog, emptyPlaces, type DialogDraft } from "./src/SortieDialog";
+import {
+  SortieDialog,
+  blankStop,
+  emptyPlaces,
+  placesFromSortie,
+  type DialogDraft,
+} from "./src/SortieDialog";
 import {
   createSession,
   openAuthenticatedSocket,
@@ -90,6 +97,11 @@ function AppContent() {
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
   const endGuidanceRef = useRef<(() => void) | null>(null);
+  const meterArriveRef = useRef<(() => void) | null>(null);
+  const meterPlusOneRef = useRef<(() => void) | null>(null);
+  const meterOnwardRef = useRef<(() => void) | null>(null);
+  const meterCommenceRef = useRef<(() => void) | null>(null);
+  const applySortieUpdateRef = useRef<((sortie: Sortie) => void) | null>(null);
   const generation = useRef(0);
   const composeSaving = useRef(false);
 
@@ -367,6 +379,20 @@ function AppContent() {
     setDestination(next);
   }
 
+  function openOnwardDialog(sortie: Sortie): void {
+    const stops = [...placesFromSortie(sortie.stops).stops, blankStop()];
+    setComposeMessage(null);
+    setCompose({
+      sortieId: sortie.id,
+      label: sortie.label,
+      arrival: sortie.arrivalAuthored ? new Date(sortie.arrivalAt) : null,
+      passengerName: sortie.passengerName ?? "",
+      phone: formatUsPhone(sortie.passengerPhone ?? ""),
+      stops,
+      focusStopIndex: stops.length - 1,
+    });
+  }
+
   async function saveCompose(token: string, body: SortieWriteRequest | "invalid"): Promise<void> {
     if (body === "invalid") {
       setComposeMessage(notSaved);
@@ -387,7 +413,10 @@ function AppContent() {
       setComposeMessage(notSaved);
       return;
     }
-    const saved = await authorSortie(apiUrl, token, body);
+    const revising = compose?.sortieId ?? null;
+    const saved = revising
+      ? await reviseSortie(apiUrl, token, revising, body)
+      : await authorSortie(apiUrl, token, body);
     composeSaving.current = false;
     if (saved === "unauthorized") {
       await onSessionRejected();
@@ -400,6 +429,9 @@ function AppContent() {
     if (typeof saved === "string") {
       setComposeMessage(notSaved);
       return;
+    }
+    if (revising) {
+      applySortieUpdateRef.current?.(saved);
     }
     setCompose(null);
     setComposeMessage(null);
@@ -415,6 +447,10 @@ function AppContent() {
         onEndSortie={() => {
           endGuidanceRef.current?.();
         }}
+        onArrive={() => meterArriveRef.current?.()}
+        onPlusOneMinute={() => meterPlusOneRef.current?.()}
+        onOnwardDestination={() => meterOnwardRef.current?.()}
+        onCommenceNext={() => meterCommenceRef.current?.()}
       />
     ) : null;
   const overlay = (
@@ -451,7 +487,13 @@ function AppContent() {
                   onSortieCompleted={() => {
                     setCalendarReload((current) => current + 1);
                   }}
+                  onOnwardDestination={openOnwardDialog}
                   endGuidanceRef={endGuidanceRef}
+                  meterArriveRef={meterArriveRef}
+                  meterPlusOneRef={meterPlusOneRef}
+                  meterOnwardRef={meterOnwardRef}
+                  meterCommenceRef={meterCommenceRef}
+                  applySortieUpdateRef={applySortieUpdateRef}
                 />
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (

@@ -3,11 +3,13 @@ import { z } from "zod";
 import { findActiveSession } from "../identity/sessions.js";
 import { readBearer } from "../identity/tokens.js";
 import {
+  assertStopArrival,
   authorSortie,
   commenceSortie,
   completeSortie,
   defaultScheduleDeps,
   ensureDriver,
+  extendStopWait,
   readCalendar,
   recordObservation,
   reviseSortie,
@@ -49,6 +51,11 @@ const rangeQuery = z.object({
 
 const sortieParams = z.object({
   id: z.uuid(),
+});
+
+const stopPositionParams = z.object({
+  id: z.uuid(),
+  position: z.coerce.number().int().nonnegative(),
 });
 
 const coordinateSchema = z.object({
@@ -224,6 +231,53 @@ export function registerCalendarRoutes(
     }
     if (result === "not-commenced") {
       return reply.code(409).send({ error: "not commenced" });
+    }
+    return reply.send(result);
+  });
+
+  app.post("/sorties/:id/stops/:position/arrive", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const params = stopPositionParams.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const result = await assertStopArrival(active.user, params.data.id, params.data.position, deps);
+    if (result === "invalid") {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    if (result === "not-found") {
+      return reply.code(404).send({ error: "not found" });
+    }
+    if (result === "not-commenced") {
+      return reply.code(409).send({ error: "not commenced" });
+    }
+    return reply.send(result);
+  });
+
+  app.post("/sorties/:id/stops/:position/extend-wait", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const params = stopPositionParams.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const result = await extendStopWait(active.user, params.data.id, params.data.position, deps);
+    if (result === "invalid") {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    if (result === "not-found") {
+      return reply.code(404).send({ error: "not found" });
+    }
+    if (result === "no-location") {
+      return reply.code(409).send({ error: "no location" });
+    }
+    if (result === "unavailable") {
+      return reply.code(503).send({ error: "schedule unavailable" });
     }
     return reply.send(result);
   });

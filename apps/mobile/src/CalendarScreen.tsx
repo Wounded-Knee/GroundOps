@@ -467,6 +467,7 @@ export function CalendarScreen({
       firstStopPosition: 0,
       route,
       tariff,
+      sortie: commenced,
     });
   }
 

@@ -15,6 +15,7 @@ export function AddressPicker({
   token,
   bias = null,
   appearance,
+  autoFocus = false,
   onQueryChange,
   onSelect,
   onUnauthorized,
@@ -26,6 +27,7 @@ export function AddressPicker({
   token: string;
   bias?: GeoCoordinate | null;
   appearance: "field" | "search";
+  autoFocus?: boolean;
   onQueryChange: (query: string) => void;
   onSelect: (suggestion: PlaceSuggestion) => void;
   onUnauthorized: () => void;
@@ -43,6 +45,16 @@ export function AddressPicker({
   const onSearchFailedRef = useRef(onSearchFailed);
   onSearchFailedRef.current = onSearchFailed;
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+
+  useEffect(() => {
+    if (!autoFocus) {
+      return;
+    }
+    inputRef.current?.focus();
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  }, [autoFocus]);
 
   useEffect(() => {
     const trimmed = query.trim();

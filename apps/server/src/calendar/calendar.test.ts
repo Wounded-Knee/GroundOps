@@ -19,10 +19,12 @@ import {
   userCredential,
 } from "../schema.js";
 import {
+  assertStopArrival,
   authorSortie,
   commenceSortie,
   completeSortie,
   ensureDriver,
+  extendStopWait,
   readCalendar,
   recordObservation,
   reviseSortie,
@@ -1059,7 +1061,7 @@ describe("calendar", () => {
     assert.equal(window.scheduledEnd.toISOString(), "2026-09-02T16:30:00.000Z");
   });
 
-  it("seals actualStart on commence and clears it on revise", async () => {
+  it("seals actualStart on commence and preserves it on in-progress revise", async () => {
     const person = await createSession({
       sub: `calendar-commence-${crypto.randomUUID()}`,
       displayName: "Commence",
@@ -1109,7 +1111,7 @@ describe("calendar", () => {
       if (typeof revised !== "object") {
         return;
       }
-      assert.equal(revised.actualStart, null);
+      assert.equal(revised.actualStart, commenceNow.toISOString());
 
       const events = await eventsFor(authored.id);
       assert.ok(events.some((event) => event.type === "sortie.commenced"));
@@ -1281,6 +1283,78 @@ describe("calendar", () => {
       assert.equal(revised.actualEnd, null);
       assert.equal(revised.stops[0]?.actualArrivedAt, null);
       assert.equal(revised.stops[0]?.actualDepartedAt, null);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("asserts stop arrival and extends wait while in progress", async () => {
+    const person = await createSession({
+      sub: `calendar-dwell-${crypto.randomUUID()}`,
+      displayName: "Dwell",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id);
+      const arrival = new Date("2026-09-02T15:00:00.000Z");
+      const authored = await authorSortie(
+        person.user,
+        task("Dwell", arrival, {
+          stops: [
+            { ...originStop, waitMinutes: 5 },
+            { ...destinationStop, waitMinutes: 0 },
+          ],
+        }),
+        scheduleDeps,
+      );
+      assert.equal(typeof authored, "object");
+      if (typeof authored !== "object") {
+        return;
+      }
+      const endBefore = authored.scheduledEnd;
+
+      const commenced = await commenceSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => new Date("2026-09-02T14:20:00.000Z"),
+      });
+      assert.equal(typeof commenced, "object");
+      if (typeof commenced !== "object") {
+        return;
+      }
+
+      const arriveNow = new Date("2026-09-02T15:00:00.000Z");
+      const arrived = await assertStopArrival(person.user, authored.id, 0, {
+        ...scheduleDeps,
+        now: () => arriveNow,
+      });
+      assert.equal(typeof arrived, "object");
+      if (typeof arrived !== "object") {
+        return;
+      }
+      assert.equal(arrived.stops[0]?.actualArrivedAt, arriveNow.toISOString());
+
+      const again = await assertStopArrival(person.user, authored.id, 0, {
+        ...scheduleDeps,
+        now: () => new Date("2026-09-02T15:01:00.000Z"),
+      });
+      assert.equal(typeof again, "object");
+      if (typeof again !== "object") {
+        return;
+      }
+      assert.equal(again.stops[0]?.actualArrivedAt, arriveNow.toISOString());
+
+      const extended = await extendStopWait(person.user, authored.id, 0, scheduleDeps);
+      assert.equal(typeof extended, "object");
+      if (typeof extended !== "object") {
+        return;
+      }
+      assert.equal(extended.stops[0]?.waitMinutes, 6);
+      assert.ok(new Date(extended.scheduledEnd).getTime() > new Date(endBefore).getTime());
+
+      const events = await eventsFor(authored.id);
+      assert.ok(events.some((event) => event.type === "sortie.stop_arrival_asserted"));
     } finally {
       await removeUser(person.user.id);
     }

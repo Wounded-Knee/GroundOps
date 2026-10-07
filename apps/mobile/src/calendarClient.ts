@@ -132,6 +132,73 @@ export async function completeSortie(
   }
 }
 
+export async function assertStopArrival(
+  apiUrl: string,
+  token: string,
+  sortieId: string,
+  position: number,
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
+  return postStopAction(apiUrl, token, sortieId, position, "arrive");
+}
+
+export async function extendStopWait(
+  apiUrl: string,
+  token: string,
+  sortieId: string,
+  position: number,
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+  try {
+    const response = await fetch(`${apiUrl}/sorties/${sortieId}/stops/${position}/extend-wait`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 409 && (await readError(response)) === "no location") {
+      return "no-location";
+    }
+    if (response.status === 400 || response.status === 404 || response.status === 409 || response.status === 503) {
+      return "rejected";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const parsed: unknown = await response.json();
+    return isSortie(parsed) ? parsed : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+async function postStopAction(
+  apiUrl: string,
+  token: string,
+  sortieId: string,
+  position: number,
+  action: "arrive",
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
+  try {
+    const response = await fetch(`${apiUrl}/sorties/${sortieId}/stops/${position}/${action}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 400 || response.status === 404 || response.status === 409) {
+      return "rejected";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const parsed: unknown = await response.json();
+    return isSortie(parsed) ? parsed : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
 async function writeSortie(
   apiUrl: string,
   token: string,
