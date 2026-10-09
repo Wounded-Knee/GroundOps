@@ -32,6 +32,7 @@ import { displayWaitMinutes } from "./sortieWait";
 import {
   blockOnDay,
   calendarDayDelta,
+  type LanePlacement,
   clampHourHeight,
   dayDeltaFromPixels,
   formatUsPhone,
@@ -45,6 +46,7 @@ import {
   monthGridDays,
   nowLineTop,
   periodLabel,
+  placeLanes,
   sameLocalDay,
   shiftAnchor,
   shiftArrival,
@@ -670,7 +672,16 @@ export function CalendarScreen({
                       </Text>
                     ))}
                   </View>
-                  {days.map((day) => (
+                  {days.map((day) => {
+                    const lanes = placeLanes(
+                      ready.sorties.map((sortie) => ({
+                        id: sortie.id,
+                        start: coalescedStartDate(sortie),
+                        end: coalescedEndDate(sortie),
+                      })),
+                      day,
+                    );
+                    return (
                     <View
                       key={day.toDateString()}
                       style={[styles.dayColumn, { height: 24 * hourPx }]}
@@ -692,7 +703,8 @@ export function CalendarScreen({
                         const start = coalescedStartDate(sortie);
                         const end = coalescedEndDate(sortie);
                         const block = blockOnDay(start, end, day, hourPx);
-                        if (!block) {
+                        const lane = lanes.get(sortie.id);
+                        if (!block || !lane) {
                           return null;
                         }
                         return (
@@ -701,6 +713,7 @@ export function CalendarScreen({
                             label={sortieTitle(sortie)}
                             top={block.top}
                             height={block.height}
+                            lane={lane}
                             hourPx={hourPx}
                             enabled={ready.live && !ready.dialog && !ready.summary}
                             allowDayShift={ready.scope === "week"}
@@ -722,7 +735,8 @@ export function CalendarScreen({
                         </View>
                       ) : null}
                     </View>
-                  ))}
+                    );
+                  })}
                 </View>
               </ScrollView>
             </View>
@@ -1008,6 +1022,7 @@ function HourBlock({
   label,
   top,
   height,
+  lane,
   hourPx,
   enabled,
   allowDayShift,
@@ -1018,6 +1033,7 @@ function HourBlock({
   label: string;
   top: number;
   height: number;
+  lane: LanePlacement;
   hourPx: number;
   enabled: boolean;
   allowDayShift: boolean;
@@ -1068,7 +1084,13 @@ function HourBlock({
     <View
       style={[
         styles.block,
-        { top, height, transform: [{ translateX: shift.x }, { translateY: shift.y }] },
+        {
+          top,
+          height,
+          left: `${(lane.column / lane.columns) * 100}%`,
+          width: `${(lane.span / lane.columns) * 100}%`,
+          transform: [{ translateX: shift.x }, { translateY: shift.y }],
+        },
       ]}
     >
       <View {...moveResponder.panHandlers} style={styles.blockBody}>
@@ -1242,16 +1264,16 @@ function createStyles(colors: ThemeColors) {
     },
     block: {
       position: "absolute",
-      left: 2,
-      right: 2,
-      backgroundColor: colors.primary,
-      borderRadius: 4,
+      paddingHorizontal: 1,
       overflow: "hidden",
     },
     blockBody: {
       flex: 1,
       paddingHorizontal: 4,
       paddingVertical: 2,
+      backgroundColor: colors.primary,
+      borderRadius: 4,
+      overflow: "hidden",
     },
     blockText: {
       color: colors.primaryText,

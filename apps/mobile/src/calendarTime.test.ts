@@ -14,6 +14,7 @@ import {
   moveInterval,
   nowLineTop,
   phoneDigits,
+  placeLanes,
   resizeEnd,
   resizeStart,
   setCalendarTimeZoneOverride,
@@ -81,6 +82,57 @@ describe("calendar time", () => {
     assert.equal(zoomed?.height, 128);
     const short = blockOnDay(new Date(2026, 8, 28, 9, 0), new Date(2026, 8, 28, 9, 15), new Date(2026, 8, 28, 12));
     assert.equal(short?.height, 16);
+  });
+
+  it("places overlapping sorties side by side and keeps abutting ones full width", () => {
+    const day = new Date(2026, 8, 28, 12);
+    const overlapping = placeLanes(
+      [
+        { id: "b", start: new Date(2026, 8, 28, 10, 0), end: new Date(2026, 8, 28, 12, 0) },
+        { id: "a", start: new Date(2026, 8, 28, 9, 0), end: new Date(2026, 8, 28, 11, 0) },
+      ],
+      day,
+    );
+    assert.deepEqual(overlapping.get("a"), { column: 0, span: 1, columns: 2 });
+    assert.deepEqual(overlapping.get("b"), { column: 1, span: 1, columns: 2 });
+
+    const sameStart = placeLanes(
+      [
+        { id: "b", start: new Date(2026, 8, 28, 9, 0), end: new Date(2026, 8, 28, 11, 0) },
+        { id: "a", start: new Date(2026, 8, 28, 9, 0), end: new Date(2026, 8, 28, 11, 0) },
+      ],
+      day,
+    );
+    assert.equal(sameStart.get("a")?.column, 0);
+    assert.equal(sameStart.get("b")?.column, 1);
+
+    const abutting = placeLanes(
+      [
+        { id: "early", start: new Date(2026, 8, 28, 9, 0), end: new Date(2026, 8, 28, 10, 0) },
+        { id: "later", start: new Date(2026, 8, 28, 10, 0), end: new Date(2026, 8, 28, 11, 0) },
+      ],
+      day,
+    );
+    assert.deepEqual(abutting.get("early"), { column: 0, span: 1, columns: 1 });
+    assert.deepEqual(abutting.get("later"), { column: 0, span: 1, columns: 1 });
+    assert.equal(placeLanes([{ id: "gone", start: new Date(2026, 8, 27, 9, 0), end: new Date(2026, 8, 27, 10, 0) }], day).size, 0);
+  });
+
+  it("expands a block into empty lanes on its right", () => {
+    const day = new Date(2026, 8, 28, 12);
+    const lanes = placeLanes(
+      [
+        { id: "a", start: new Date(2026, 8, 28, 8, 0), end: new Date(2026, 8, 28, 12, 0) },
+        { id: "b", start: new Date(2026, 8, 28, 8, 0), end: new Date(2026, 8, 28, 9, 0) },
+        { id: "c", start: new Date(2026, 8, 28, 8, 0), end: new Date(2026, 8, 28, 9, 0) },
+        { id: "d", start: new Date(2026, 8, 28, 10, 0), end: new Date(2026, 8, 28, 11, 0) },
+      ],
+      day,
+    );
+    assert.deepEqual(lanes.get("a"), { column: 0, span: 1, columns: 3 });
+    assert.deepEqual(lanes.get("b"), { column: 1, span: 1, columns: 3 });
+    assert.deepEqual(lanes.get("c"), { column: 2, span: 1, columns: 3 });
+    assert.deepEqual(lanes.get("d"), { column: 1, span: 2, columns: 3 });
   });
 
   it("clamps the hour scale used for pinch zoom", () => {

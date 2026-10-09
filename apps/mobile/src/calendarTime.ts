@@ -284,6 +284,91 @@ export function blockOnDay(
   return { top, height };
 }
 
+export type LanePlacement = { column: number; span: number; columns: number };
+
+type LaneInterval = { id: string; start: number; end: number };
+
+function clipToDay(start: Date, end: Date, day: Date): { start: number; end: number } | null {
+  const dayStart = startOfDay(day).getTime();
+  const dayEnd = addDays(startOfDay(day), 1).getTime();
+  const visibleStart = Math.max(start.getTime(), dayStart);
+  const visibleEnd = Math.min(end.getTime(), dayEnd);
+  if (visibleEnd <= visibleStart) {
+    return null;
+  }
+  return { start: visibleStart, end: visibleEnd };
+}
+
+function overlaps(left: LaneInterval, right: LaneInterval): boolean {
+  return left.start < right.end && right.start < left.end;
+}
+
+/** Side-by-side lanes for sorties visible on one day. Ranges are half-open. */
+export function placeLanes(
+  items: { id: string; start: Date; end: Date }[],
+  day: Date,
+): Map<string, LanePlacement> {
+  const clipped: LaneInterval[] = [];
+  for (const item of items) {
+    const range = clipToDay(item.start, item.end, day);
+    if (range) {
+      clipped.push({ id: item.id, start: range.start, end: range.end });
+    }
+  }
+  const placed = new Map<string, LanePlacement>();
+  const byStart = [...clipped].sort((left, right) => left.start - right.start || left.id.localeCompare(right.id));
+  const clusters: LaneInterval[][] = [];
+  let cluster: LaneInterval[] = [];
+  let clusterEnd = Number.NEGATIVE_INFINITY;
+  for (const item of byStart) {
+    if (cluster.length > 0 && item.start < clusterEnd) {
+      cluster.push(item);
+      clusterEnd = Math.max(clusterEnd, item.end);
+    } else {
+      if (cluster.length > 0) {
+        clusters.push(cluster);
+      }
+      cluster = [item];
+      clusterEnd = item.end;
+    }
+  }
+  if (cluster.length > 0) {
+    clusters.push(cluster);
+  }
+
+  for (const group of clusters) {
+    const laneEnds: number[] = [];
+    const columnOf = new Map<string, number>();
+    for (const item of group) {
+      let lane = laneEnds.findIndex((end) => end <= item.start);
+      if (lane < 0) {
+        lane = laneEnds.length;
+        laneEnds.push(item.end);
+      } else {
+        laneEnds[lane] = item.end;
+      }
+      columnOf.set(item.id, lane);
+    }
+    const columns = laneEnds.length;
+    for (const item of group) {
+      const column = columnOf.get(item.id) ?? 0;
+      let span = 1;
+      while (column + span < columns) {
+        const nextLane = column + span;
+        const blocked = group.some(
+          (other) => columnOf.get(other.id) === nextLane && overlaps(item, other),
+        );
+        if (blocked) {
+          break;
+        }
+        span += 1;
+      }
+      placed.set(item.id, { column, span, columns });
+    }
+  }
+  return placed;
+}
+
 export function startsOnDay(start: Date, day: Date): boolean {
   return sameLocalDay(start, day);
 }
