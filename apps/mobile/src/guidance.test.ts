@@ -3,13 +3,18 @@ import { describe, it } from "node:test";
 import type { DrivingRoute, GeoCoordinate, RouteStep } from "@groundops/contracts";
 import {
   applyLocationFix,
+  bearingAlongPath,
+  bearingDeltaDegrees,
   distanceMeters,
   distanceToUpcomingManeuver,
   formatMeters,
   formatSeconds,
   guidanceLookAheadMeters,
+  noteRouteFix,
   offsetAlongBearing,
   pathLengthMeters,
+  pointAlongPath,
+  poseAt,
   projectOntoPath,
   remainingDistanceMeters,
   remainingDurationSeconds,
@@ -18,6 +23,7 @@ import {
   stepAdvanceMeters,
   upcomingStep,
   upcomingStepIndex,
+  type RouteMotion,
 } from "./guidance.js";
 
 const origin: GeoCoordinate = { latitude: 0, longitude: 0 };
@@ -213,6 +219,89 @@ describe("guidance", () => {
     assert.ok(Math.abs(eastTarget.latitude - origin.latitude) < 1e-9);
   });
 
+  it("places a point and its travel bearing along a bent path", () => {
+    const corner = north(origin, 100);
+    const end = east(corner, 100);
+    const path = [origin, corner, end];
+    const midway = pointAlongPath(path, 50);
+    assert.ok(midway);
+    assert.ok(Math.abs(distanceMeters(midway, north(origin, 50))) < 2);
+    assert.ok(Math.abs((bearingAlongPath(path, 50) ?? -1) - 0) < 1);
+    const pastCorner = pointAlongPath(path, 140);
+    assert.ok(pastCorner);
+    assert.ok(Math.abs(distanceMeters(pastCorner, east(corner, 40))) < 3);
+    assert.ok(Math.abs((bearingAlongPath(path, 140) ?? -1) - 90) < 1);
+    const clamped = pointAlongPath(path, 10_000);
+    assert.ok(clamped);
+    assert.ok(distanceMeters(clamped, end) < 1);
+  });
+
+  it("eases toward a new fix instead of teleporting the displayed pose", () => {
+    const path = [origin, north(origin, 1_000)];
+    let motion = noteRouteFix(null, { at: origin, speedMps: 0, bearing: 0, timeMs: 0, path });
+    motion = noteRouteFix(motion, { at: north(origin, 100), speedMps: 0, bearing: 0, timeMs: 0, path });
+    const immediate = poseAt(motion, 0);
+    assert.ok(distanceMeters(immediate.pose, origin) < 1);
+    const stepped = poseAt(immediate.motion, 50);
+    const moved = distanceMeters(stepped.pose, origin);
+    assert.ok(moved > 1);
+    assert.ok(moved < 30);
+  });
+
+  it("keeps forecasting along the route between fixes and caps a stale lead", () => {
+    const path = [origin, north(origin, 2_000)];
+    const motion = noteRouteFix(null, { at: origin, speedMps: 10, bearing: 0, timeMs: 0, path });
+    const atOneSecond = stepMotion(motion, 0, 1_000);
+    const atLeadCap = stepMotion(atOneSecond.motion, 1_050, 1_500);
+    assert.ok(distanceMeters(atLeadCap.pose, origin) > distanceMeters(atOneSecond.pose, origin));
+    const stale = stepMotion(atLeadCap.motion, 1_550, 10_000);
+    const lead = distanceMeters(stale.pose, origin);
+    assert.ok(lead > 12 && lead < 18);
+  });
+
+  it("derives speed from successive fixes when the platform omits it", () => {
+    const path = [origin, north(origin, 2_000)];
+    let motion = noteRouteFix(null, { at: origin, speedMps: null, bearing: 0, timeMs: 0, path });
+    motion = noteRouteFix(motion, { at: north(origin, 10), speedMps: null, bearing: 0, timeMs: 1_000, path });
+    const forecast = stepMotion(motion, 1_000, 2_500);
+    const fromSecondFix = distanceMeters(forecast.pose, north(origin, 10));
+    assert.ok(fromSecondFix > 8);
+  });
+
+  it("follows the route around a corner instead of a straight chord", () => {
+    const corner = north(origin, 100);
+    const end = east(corner, 100);
+    const path = [origin, corner, end];
+    const start = north(origin, 90);
+    const motion = noteRouteFix(null, { at: start, speedMps: 20, bearing: 0, timeMs: 0, path });
+    const rounded = stepMotion(motion, 0, 2_000);
+    assert.ok(rounded.pose.longitude > 10 / 111_320);
+    assert.ok(Math.abs(distanceMeters(rounded.pose, corner) - 20) < 12);
+    assert.ok(rounded.pose.bearing > 40);
+  });
+
+  it("holds a stopped vehicle instead of creeping or spinning on a new course", () => {
+    const path = [origin, north(origin, 500)];
+    let motion = noteRouteFix(null, { at: origin, speedMps: 10, bearing: 90, timeMs: 0, path });
+    assert.ok(Math.abs(bearingDeltaDegrees(motion.bearing, 0)) < 1);
+    motion = noteRouteFix(motion, { at: origin, speedMps: 0, bearing: 180, timeMs: 1_000, path });
+    const held = stepMotion(motion, 1_000, 4_000);
+    assert.ok(distanceMeters(held.pose, origin) < 2);
+    assert.ok(Math.abs(bearingDeltaDegrees(held.pose.bearing, 0)) < 5);
+    const creeping = noteRouteFix(null, { at: origin, speedMps: 0.4, bearing: 0, timeMs: 0, path });
+    const still = stepMotion(creeping, 0, 5_000);
+    assert.ok(distanceMeters(still.pose, origin) < 1);
+  });
+
+  it("turns heading across north on the short arc", () => {
+    let motion = noteRouteFix(null, { at: origin, speedMps: 0, bearing: 350, timeMs: 0, path: [] });
+    motion = noteRouteFix(motion, { at: origin, speedMps: 5, bearing: 10, timeMs: 0, path: [] });
+    const turned = poseAt(motion, 200);
+    const delta = Math.abs(bearingDeltaDegrees(350, turned.pose.bearing));
+    assert.ok(delta > 0 && delta < 15);
+    assert.ok(Math.abs(bearingDeltaDegrees(turned.pose.bearing, 180)) > 90);
+  });
+
   it("smooths oscillating course so the camera bearing does not whip back and forth", () => {
     assert.equal(smoothBearing(null, 200), 200);
     const first = smoothBearing(200, 220);
@@ -244,6 +333,17 @@ function step(start: GeoCoordinate, end: GeoCoordinate, distance: number, durati
     durationSeconds: duration,
     path: [start, end],
   };
+}
+
+function stepMotion(motion: RouteMotion, fromMs: number, toMs: number): { motion: RouteMotion; pose: RouteMotion["displayed"] & { bearing: number } } {
+  let current = motion;
+  let pose = { ...current.displayed, bearing: current.displayedBearing };
+  for (let time = fromMs; time <= toMs; time += 50) {
+    const sampled = poseAt(current, time);
+    current = sampled.motion;
+    pose = sampled.pose;
+  }
+  return { motion: current, pose };
 }
 
 function north(from: GeoCoordinate, meters: number): GeoCoordinate {

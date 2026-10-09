@@ -37,6 +37,7 @@ import { formatCountdown, nextDeparture, type NextDeparture } from "./nextDepart
 import {
   applyLocationFix,
   arrivalMeters,
+  bearingDeltaDegrees,
   distanceMeters,
   distanceToStepEnd,
   distanceToUpcomingManeuver,
@@ -46,13 +47,16 @@ import {
   maneuverLabel,
   offsetAlongBearing,
   overviewCamera,
+  noteRouteBearing,
+  noteRouteFix,
   pathLengthMeters,
+  poseAt,
   projectOntoPath,
   remainingDistanceMeters,
   shouldAnnounceUpcoming,
-  smoothBearing,
-  travelBearing,
   upcomingStep,
+  type MotionPose,
+  type RouteMotion,
   upcomingStepIndex,
 } from "./guidance";
 import {
@@ -141,6 +145,18 @@ type NavState =
     };
 
 const apiUrl = resolveApiUrl();
+const poseEpsilonMeters = 0.25;
+const poseEpsilonDegrees = 0.2;
+
+function displayedPoseMoved(previous: MotionPose | null, next: MotionPose): boolean {
+  if (!previous) {
+    return true;
+  }
+  if (Math.abs(bearingDeltaDegrees(previous.bearing, next.bearing)) >= poseEpsilonDegrees) {
+    return true;
+  }
+  return distanceMeters(previous, next) >= poseEpsilonMeters;
+}
 
 export function NavigationScreen({
   token,
@@ -188,8 +204,6 @@ export function NavigationScreen({
   const [finding, setFinding] = useState(false);
   const [permission, setPermission] = useState<"unknown" | "granted" | "denied">("unknown");
   const [fix, setFix] = useState<GeoCoordinate | null>(null);
-  const [course, setCourse] = useState<number | null>(null);
-  const [compass, setCompass] = useState<number | null>(null);
   const [routeEpoch, setRouteEpoch] = useState(0);
   const [meter, setMeter] = useState<MeterState>(emptyMeter());
   const [upcomingSorties, setUpcomingSorties] = useState<Sortie[]>([]);
@@ -211,7 +225,11 @@ export function NavigationScreen({
   const meterRef = useRef(meter);
   meterRef.current = meter;
   const baselineRemainingRef = useRef(0);
-  const bearingRef = useRef<number | null>(null);
+  const courseRef = useRef<number | null>(null);
+  const compassRef = useRef<number | null>(null);
+  const speedRef = useRef<number | null>(null);
+  const motionRef = useRef<RouteMotion | null>(null);
+  const displayedPoseRef = useRef<MotionPose | null>(null);
   const centered = useRef(false);
   const routeRequest = useRef(0);
   const rerouteInFlight = useRef(false);
@@ -219,7 +237,6 @@ export function NavigationScreen({
   const rerouteGeneration = useRef(0);
   const spokenKey = useRef<string | null>(null);
   const speechGeneration = useRef(0);
-  const guidedCameraRef = useRef<MapCamera | null>(null);
   const stopAdvanceInFlight = useRef(false);
   const extendWaitInFlight = useRef(false);
   const endingSortieRef = useRef(false);
@@ -303,24 +320,7 @@ export function NavigationScreen({
     void scheduleDepartureAlerts(upcoming, new Date());
   }, [upcoming?.sortieId, upcomingDepartAt]);
 
-  function sendGuidanceCamera(camera: MapCamera): void {
-    const previous = guidedCameraRef.current;
-    const unchanged =
-      previous !== null &&
-      previous.latitude === camera.latitude &&
-      previous.longitude === camera.longitude &&
-      previous.zoom === camera.zoom &&
-      previous.tilt === camera.tilt &&
-      previous.bearing === camera.bearing;
-    if (unchanged) {
-      return;
-    }
-    guidedCameraRef.current = camera;
-    mapRef.current?.setCamera(camera);
-  }
-
-  function guidanceCameraFrom(at: GeoCoordinate): MapCamera {
-    const bearing = bearingRef.current ?? 0;
+  function guidanceCameraFrom(at: GeoCoordinate, bearing: number): MapCamera {
     // Look-ahead keeps the fix near bottom-center on a heading-up camera.
     const target = offsetAlongBearing(at, bearing, guidanceLookAheadMeters);
     return {
@@ -329,6 +329,7 @@ export function NavigationScreen({
       zoom: cameraPrefs.zoom,
       tilt: cameraPrefs.tilt,
       bearing,
+      duration: 0,
     };
   }
 
@@ -678,14 +679,10 @@ export function NavigationScreen({
     const started = emptyMeter();
     setMeter(started);
     meterRef.current = started;
-    bearingRef.current = travelBearing(course, compass);
     rerouteInFlight.current = false;
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     const origin = fixRef.current;
-    if (origin) {
-      sendGuidanceCamera(guidanceCameraFrom(origin));
-    }
     snapshotProgressBaseline(origin, sortieGuide.route);
     const next: NavState = {
       mode: "guiding",
@@ -759,9 +756,17 @@ export function NavigationScreen({
           setFix(sampleFix);
           const heading = location.coords.heading;
           const nextCourse = typeof heading === "number" && heading >= 0 ? heading : null;
-          setCourse(nextCourse);
+          courseRef.current = nextCourse;
+          speedRef.current = typeof location.coords.speed === "number" ? location.coords.speed : null;
           const currentNav = navRef.current;
           if (currentNav.mode === "guiding" || currentNav.mode === "arrived") {
+            motionRef.current = noteRouteFix(motionRef.current, {
+              at: sampleFix,
+              speedMps: speedRef.current,
+              bearing: nextCourse ?? compassRef.current,
+              timeMs: Date.now(),
+              path: currentNav.route.path,
+            });
             if (currentNav.kind === "sortie" && sortieLegBillable(currentNav)) {
               const advanced = advanceMeterAlongRoute(meterRef.current, {
                 fix: sampleFix,
@@ -782,7 +787,11 @@ export function NavigationScreen({
       }
       headingSub = await Location.watchHeadingAsync((heading) => {
         const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
-        setCompass(value >= 0 ? value : null);
+        compassRef.current = value >= 0 ? value : null;
+        const motion = motionRef.current;
+        if (motion && courseRef.current === null) {
+          motionRef.current = noteRouteBearing(motion, compassRef.current);
+        }
       });
       if (cancelled) {
         headingSub.remove();
@@ -846,20 +855,11 @@ export function NavigationScreen({
     return () => clearInterval(timer);
   }, [nav.mode, nav.mode === "arrived" && "kind" in nav && nav.kind === "sortie" ? nav.waitEndsAt : null]);
 
-  // Prefer GPS course for the camera; only follow compass when course is absent so
-  // high-rate heading ticks do not restart Android camera animations.
-  const bearingInput = course !== null && course >= 0 ? course : compass;
-
   useEffect(() => {
     const current = navRef.current;
     if (!fix || (current.mode !== "guiding" && current.mode !== "arrived")) {
-      guidedCameraRef.current = null;
       return;
     }
-    if (bearingInput !== null) {
-      bearingRef.current = smoothBearing(bearingRef.current, bearingInput);
-    }
-    sendGuidanceCamera(guidanceCameraFrom(fix));
     if (current.mode === "arrived" && current.kind === "sortie") {
       const stop = current.stops[current.stopPosition];
       const outsideGeofence = stop ? distanceMeters(fix, stop) > arrivalMeters : false;
@@ -975,14 +975,61 @@ export function NavigationScreen({
     })();
   }, [
     fix,
-    bearingInput,
     nav.mode,
     token,
     onUnauthorized,
-    cameraPrefs.zoom,
-    cameraPrefs.tilt,
     timingPrefs.stepAdvanceMeters,
   ]);
+
+  const guidancePath = nav.mode === "guiding" || nav.mode === "arrived" ? nav.route.path : null;
+  useEffect(() => {
+    const at = fixRef.current;
+    if (!guidancePath || !at) {
+      return;
+    }
+    motionRef.current = noteRouteFix(motionRef.current, {
+      at,
+      speedMps: speedRef.current,
+      bearing: courseRef.current ?? compassRef.current,
+      timeMs: Date.now(),
+      path: guidancePath,
+    });
+  }, [guidancePath]);
+
+  useEffect(() => {
+    if (nav.mode !== "guiding" && nav.mode !== "arrived") {
+      motionRef.current = null;
+      displayedPoseRef.current = null;
+      mapRef.current?.setDisplayedUser(null);
+      return;
+    }
+    let frame = 0;
+    let stopped = false;
+    const tick = () => {
+      if (stopped) {
+        return;
+      }
+      const motion = motionRef.current;
+      if (motion) {
+        const sampled = poseAt(motion, Date.now());
+        motionRef.current = sampled.motion;
+        const pose = sampled.pose;
+        if (displayedPoseMoved(displayedPoseRef.current, pose)) {
+          displayedPoseRef.current = pose;
+          const at = { latitude: pose.latitude, longitude: pose.longitude };
+          mapRef.current?.setCamera(guidanceCameraFrom(at, pose.bearing));
+          mapRef.current?.setDisplayedUser(at);
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(frame);
+      displayedPoseRef.current = null;
+    };
+  }, [nav.mode, cameraPrefs.zoom, cameraPrefs.tilt]);
 
   useEffect(() => {
     void ensureGuidanceCameraPrefsLoaded();
@@ -1168,14 +1215,10 @@ export function NavigationScreen({
       });
       return;
     }
-    bearingRef.current = travelBearing(course, compass);
     rerouteInFlight.current = false;
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     const origin = fixRef.current;
-    if (origin) {
-      sendGuidanceCamera(guidanceCameraFrom(origin));
-    }
     const started = emptyMeter();
     setMeter(started);
     meterRef.current = started;

@@ -1,8 +1,8 @@
 diff --git a/android/src/main/java/expo/modules/maps/GoogleMapsView.kt b/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
-index 82450b6ab008ef190cbc499d987ffbc774309c82..1cbd67b8fda10c9dc7d46a856ec996dd60548584 100644
+index 82450b6ab008ef190cbc499d987ffbc774309c82..780fa331b06622af298bb576867e9e46bf62cb4a 100644
 --- a/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
 +++ b/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
-@@ -277,13 +277,14 @@ class GoogleMapsView(context: Context, appContext: AppContext) :
+@@ -277,12 +277,13 @@ class GoogleMapsView(context: Context, appContext: AppContext) :
      val locationSource = remember(coordinates) {
        CustomLocationSource()
      }
@@ -18,13 +18,15 @@ index 82450b6ab008ef190cbc499d987ffbc774309c82..1cbd67b8fda10c9dc7d46a856ec996dd
          // Update camera position when location changes and manualCameraControl is disabled.
          cameraState.animate(CameraUpdateFactory.newLatLng(coordinates.toLatLng()))
        }
-     }
-@@ -369,8 +370,14 @@ class GoogleMapsView(context: Context, appContext: AppContext) :
+@@ -369,11 +370,23 @@ class GoogleMapsView(context: Context, appContext: AppContext) :
        ?: props.userLocation.value.coordinates?.toLatLng()
        ?: return
  
 -    val cameraUpdate = config?.zoom?.let { CameraUpdateFactory.newLatLngZoom(coordinates, it) }
 -      ?: CameraUpdateFactory.newLatLng(coordinates)
+-
+-    // When Int.MAX_VALUE is provided as durationMs, the default animation duration will be used.
+-    cameraState.animate(cameraUpdate, config?.duration ?: Int.MAX_VALUE)
 +    val current = cameraState.position
 +    val cameraPosition = CameraPosition.Builder()
 +      .target(coordinates)
@@ -33,9 +35,18 @@ index 82450b6ab008ef190cbc499d987ffbc774309c82..1cbd67b8fda10c9dc7d46a856ec996dd
 +      .tilt((config?.tilt ?: current.tilt).coerceIn(0f, 90f))
 +      .build()
 +    val cameraUpdate = CameraUpdateFactory.newCameraPosition(cameraPosition)
++
++    val duration = config?.duration
++    if (duration != null && duration <= 0) {
++      // A JS tween already eased this pose. move() applies it without a second animation.
++      cameraState.move(cameraUpdate)
++    } else {
++      // When Int.MAX_VALUE is provided as durationMs, the default animation duration will be used.
++      cameraState.animate(cameraUpdate, duration ?: Int.MAX_VALUE)
++    }
  
-     // When Int.MAX_VALUE is provided as durationMs, the default animation duration will be used.
-     cameraState.animate(cameraUpdate, config?.duration ?: Int.MAX_VALUE)
+     // If centering on the user's location, stop manual camera control.
+     if (config?.coordinates == null) {
 diff --git a/android/src/main/java/expo/modules/maps/Records.kt b/android/src/main/java/expo/modules/maps/Records.kt
 index 15854606398ea84a49d9eef55750eab4102aa174..5aac14f7b02e2afd6da843911f9a955f8a91e364 100644
 --- a/android/src/main/java/expo/modules/maps/Records.kt
@@ -56,10 +67,10 @@ index 15854606398ea84a49d9eef55750eab4102aa174..5aac14f7b02e2afd6da843911f9a955f
  
  @OptimizedRecord
 diff --git a/build/shared.types.d.ts b/build/shared.types.d.ts
-index 3a32344e3ef9b4c174c2878f01773fa912a61beb..001fd4b17059b7d6a86e7bfbf16d270c6296b44a 100644
+index 3a32344e3ef9b4c174c2878f01773fa912a61beb..18f917c1f8af4e5dad189ed6a0cdf79cf45377ba 100644
 --- a/build/shared.types.d.ts
 +++ b/build/shared.types.d.ts
-@@ -14,6 +14,16 @@ export type CameraPosition = {
+@@ -14,11 +14,26 @@ export type CameraPosition = {
       * The middle point of the camera.
       */
      coordinates?: Coordinates;
@@ -76,21 +87,85 @@ index 3a32344e3ef9b4c174c2878f01773fa912a61beb..001fd4b17059b7d6a86e7bfbf16d270c
      /**
       * The zoom level of the camera.
       * For some view sizes, lower zoom levels might not be available.
+      */
+     zoom?: number;
++    /**
++     * Animation length in milliseconds.
++     * Zero applies the camera immediately. Omit it to keep the default animation.
++     */
++    duration?: number;
+ };
+ /**
+  * The event payload for the `onCameraMove` callback on `AppleMaps.View` and `GoogleMaps.View`.
+diff --git a/ios/AppleMapsViewiOS17.swift b/ios/AppleMapsViewiOS17.swift
+index 7484170287b00fc9277a03035be124bf3212d366..5971edd87418f6e56273b3011d94532366709e2e 100644
+--- a/ios/AppleMapsViewiOS17.swift
++++ b/ios/AppleMapsViewiOS17.swift
+@@ -8,9 +8,20 @@ struct AppleMapsViewiOS17: View, AppleMapsViewProtocol {
+   @ObservedObject private var state = AppleMapsViewiOS17State()
+ 
+   func setCameraPosition(config: CameraPosition?) {
+-    withAnimation {
++    let apply = {
+       state.mapCameraPosition = config.map(convertToMapCamera) ?? .userLocation(fallback: state.mapCameraPosition)
+     }
++    if config?.duration == 0 {
++      var transaction = Transaction()
++      transaction.disablesAnimations = true
++      withTransaction(transaction) {
++        apply()
++      }
++    } else {
++      withAnimation {
++        apply()
++      }
++    }
+   }
+ 
+   func openLookAround(coordinate: Coordinate) async throws {
+diff --git a/ios/AppleMapsViewiOS18.swift b/ios/AppleMapsViewiOS18.swift
+index 7be247b4592d1e77edbd6ad8ead9596801ba3abd..8cb2574785bb14c45ffb359e1c981e223da0a900 100644
+--- a/ios/AppleMapsViewiOS18.swift
++++ b/ios/AppleMapsViewiOS18.swift
+@@ -32,9 +32,20 @@ struct AppleMapsViewiOS18: View, AppleMapsViewProtocol {
+   @ObservedObject private var state = AppleMapsViewiOS18State()
+ 
+   func setCameraPosition(config: CameraPosition?) {
+-    withAnimation {
++    let apply = {
+       state.mapCameraPosition = config.map(convertToMapCamera) ?? .userLocation(fallback: state.mapCameraPosition)
+     }
++    if config?.duration == 0 {
++      var transaction = Transaction()
++      transaction.disablesAnimations = true
++      withTransaction(transaction) {
++        apply()
++      }
++    } else {
++      withAnimation {
++        apply()
++      }
++    }
+   }
+ 
+   func openLookAround(coordinate: Coordinate) async throws {
 diff --git a/ios/MapRecords.swift b/ios/MapRecords.swift
-index 7cab76612a78a83ae93f2611e727cf5529acdb55..76662ed51d3ab179e63f4976fddb27a3b5f21277 100644
+index 7cab76612a78a83ae93f2611e727cf5529acdb55..ad24ccad2469dc53f4b939319f8f07103d489f2c 100644
 --- a/ios/MapRecords.swift
 +++ b/ios/MapRecords.swift
-@@ -41,10 +41,13 @@ struct MapMarker: Identifiable, Record {
+@@ -41,10 +41,15 @@ struct MapMarker: Identifiable, Record {
  struct CameraPosition: Record, Equatable {
    @Field var coordinates: Coordinate
    @Field var zoom: Double = 1
 +  @Field var bearing: Double?
 +  @Field var tilt: Double?
++  /// Animation length in milliseconds. Zero applies the camera immediately.
++  @Field var duration: Double?
  
    static func == (lhs: CameraPosition, rhs: CameraPosition) -> Bool {
      return lhs.coordinates.latitude == rhs.coordinates.latitude
        && lhs.coordinates.longitude == rhs.coordinates.longitude && lhs.zoom == rhs.zoom
-+      && lhs.bearing == rhs.bearing && lhs.tilt == rhs.tilt
++      && lhs.bearing == rhs.bearing && lhs.tilt == rhs.tilt && lhs.duration == rhs.duration
    }
  }
  
@@ -117,11 +192,42 @@ index b1bdee1319481da0c1c13eea2ab767eb52bea86d..e05ef2339df9b41a7c1aa98803499e88
    return convertToMapCameraPosition(coordinate: coordinate, zoom: position.zoom)
  }
  
+diff --git a/src/google/GoogleMapsView.tsx b/src/google/GoogleMapsView.tsx
+index 80b2526b90841af272417583527279855d580810..8f762066e50e9553d7695f98c52384599edf3925 100644
+--- a/src/google/GoogleMapsView.tsx
++++ b/src/google/GoogleMapsView.tsx
+@@ -8,6 +8,11 @@ import type {
+   SetCameraPositionConfig,
+ } from './GoogleMaps.types';
+ 
++function isCancelledAnimation(error: unknown): boolean {
++  const message = error instanceof Error ? error.message : String(error);
++  return message.includes('Animation cancelled') || message.includes('CancellationException');
++}
++
+ let NativeView: React.ComponentType<GoogleMapsViewProps> | null = null;
+ 
+ if (Platform.OS === 'android') {
+@@ -50,7 +55,13 @@ export const GoogleMapsView = React.forwardRef<GoogleMapsViewType, GoogleMapsVie
+     const nativeRef = React.useRef<GoogleMapsViewType>(null);
+     React.useImperativeHandle(ref, () => ({
+       setCameraPosition(config?: SetCameraPositionConfig) {
+-        nativeRef.current?.setCameraPosition(config);
++        // A later camera update cancels the in-flight animation. That rejection is expected.
++        const pending = nativeRef.current?.setCameraPosition(config) as Promise<void> | undefined;
++        void Promise.resolve(pending).catch((error: unknown) => {
++          if (!isCancelledAnimation(error)) {
++            console.error(error);
++          }
++        });
+       },
+       async selectMarker(id?: string, options?: { zoom?: number; moveCamera?: boolean }) {
+         return nativeRef.current?.selectMarker(id, options);
 diff --git a/src/shared.types.ts b/src/shared.types.ts
-index ce531a92279fde5776b013f96b80cc4d257c5540..e7f421022556a565e577e33f34b13d012c612852 100644
+index ce531a92279fde5776b013f96b80cc4d257c5540..d3f9d83b9661ff9d0d9a83aed5b2e86276056b70 100644
 --- a/src/shared.types.ts
 +++ b/src/shared.types.ts
-@@ -23,6 +23,18 @@ export type CameraPosition = {
+@@ -23,6 +23,24 @@ export type CameraPosition = {
     * For some view sizes, lower zoom levels might not be available.
     */
    zoom?: number;
@@ -137,36 +243,12 @@ index ce531a92279fde5776b013f96b80cc4d257c5540..e7f421022556a565e577e33f34b13d01
 +   * Omit it to leave the current tilt unchanged.
 +   */
 +  tilt?: number;
++
++  /**
++   * Animation length in milliseconds.
++   * Zero applies the camera immediately. Omit it to keep the default animation.
++   */
++  duration?: number;
  };
  
  /**
-diff --git a/src/google/GoogleMapsView.tsx b/src/google/GoogleMapsView.tsx
---- a/src/google/GoogleMapsView.tsx
-+++ b/src/google/GoogleMapsView.tsx
-@@ -8,6 +8,11 @@
-   SetCameraPositionConfig,
- } from './GoogleMaps.types';
- 
-+function isCancelledAnimation(error: unknown): boolean {
-+  const message = error instanceof Error ? error.message : String(error);
-+  return message.includes('Animation cancelled') || message.includes('CancellationException');
-+}
-+
- let NativeView: React.ComponentType<GoogleMapsViewProps> | null = null;
- 
- if (Platform.OS === 'android') {
-@@ -50,7 +55,13 @@
-     const nativeRef = React.useRef<GoogleMapsViewType>(null);
-     React.useImperativeHandle(ref, () => ({
-       setCameraPosition(config?: SetCameraPositionConfig) {
--        nativeRef.current?.setCameraPosition(config);
-+        // A later camera update cancels the in-flight animation. That rejection is expected.
-+        const pending = nativeRef.current?.setCameraPosition(config) as Promise<void> | undefined;
-+        void Promise.resolve(pending).catch((error: unknown) => {
-+          if (!isCancelledAnimation(error)) {
-+            console.error(error);
-+          }
-+        });
-       },
-       async selectMarker(id?: string, options?: { zoom?: number; moveCamera?: boolean }) {
-         return nativeRef.current?.selectMarker(id, options);

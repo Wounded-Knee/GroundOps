@@ -270,6 +270,162 @@ export function smoothBearing(previous: number | null, next: number, alpha = 0.3
   return Math.abs(bearingDeltaDegrees(smoothed, next)) < 0.5 ? next : smoothed;
 }
 
+/** Ease time constant for the displayed vehicle position. */
+export const motionPositionTauMs = 450;
+/** Ease time constant for heading. Slower than position so the map does not whip. */
+export const motionBearingTauMs = 700;
+/** How far ahead of the last fix dead reckoning may run before it holds. */
+export const motionMaxLeadMs = 1_500;
+/** At or below this GPS speed the vehicle is treated as stopped. */
+export const motionStoppedSpeedMps = 1;
+
+export type MotionPose = {
+  latitude: number;
+  longitude: number;
+  bearing: number;
+};
+
+export type RouteFix = {
+  at: GeoCoordinate;
+  /** Meters per second. Null or negative means the platform did not report speed. */
+  speedMps: number | null;
+  /** Degrees clockwise from north. Null when neither course nor compass is known. */
+  bearing: number | null;
+  timeMs: number;
+  path: GeoCoordinate[];
+};
+
+export type RouteMotion = {
+  path: GeoCoordinate[];
+  onRoute: boolean;
+  fix: GeoCoordinate;
+  fixTimeMs: number;
+  alongMeters: number;
+  speedMps: number;
+  bearing: number;
+  displayed: GeoCoordinate;
+  displayedBearing: number;
+  sampledAtMs: number;
+};
+
+/** Coordinate `alongMeters` from the start of `path`, clamped to the polyline. */
+export function pointAlongPath(path: GeoCoordinate[], alongMeters: number): GeoCoordinate | null {
+  const located = locateAlongPath(path, alongMeters);
+  return located ? located.point : null;
+}
+
+/** Travel direction at `alongMeters`. At a vertex this is the outgoing segment. */
+export function bearingAlongPath(path: GeoCoordinate[], alongMeters: number): number | null {
+  const located = locateAlongPath(path, alongMeters);
+  if (!located) {
+    return null;
+  }
+  return segmentBearing(located.segmentStart, located.segmentEnd);
+}
+
+/**
+ * Absorb a GPS fix into the route follower.
+ * The displayed pose stays where it was; only the prediction target changes.
+ * The first fix starts the displayed pose on the matched point.
+ */
+export function noteRouteFix(motion: RouteMotion | null, input: RouteFix): RouteMotion {
+  const projection = input.path.length >= 2 ? projectOntoPath(input.at, input.path) : null;
+  const onRoute = projection !== null && projection.distanceToPathMeters <= offRouteMeters;
+  const alongMeters = onRoute && projection ? projection.alongMeters : 0;
+  const snapped =
+    onRoute && input.path.length >= 2 ? (pointAlongPath(input.path, alongMeters) ?? input.at) : input.at;
+  const speedMps = resolveSpeed(motion, input.at, input.timeMs, input.speedMps);
+  const travel = onRoute
+    ? (bearingAlongPath(input.path, alongMeters) ?? normalizeBearing(input.bearing))
+    : normalizeBearing(input.bearing);
+  const bearing =
+    speedMps > 0 && travel !== null ? travel : (motion?.bearing ?? travel ?? 0);
+
+  if (!motion) {
+    return {
+      path: input.path,
+      onRoute,
+      fix: input.at,
+      fixTimeMs: input.timeMs,
+      alongMeters,
+      speedMps,
+      bearing,
+      displayed: snapped,
+      displayedBearing: bearing,
+      sampledAtMs: input.timeMs,
+    };
+  }
+
+  return {
+    ...motion,
+    path: input.path,
+    onRoute,
+    fix: input.at,
+    fixTimeMs: input.timeMs,
+    alongMeters,
+    speedMps,
+    bearing,
+  };
+}
+
+/**
+ * Update heading from the compass when GPS course is missing.
+ * On-route heading stays on the road tangent, and a stop holds the last bearing.
+ */
+export function noteRouteBearing(motion: RouteMotion, bearing: number | null): RouteMotion {
+  if (motion.onRoute || motion.speedMps <= 0) {
+    return motion;
+  }
+  const next = normalizeBearing(bearing);
+  if (next === null) {
+    return motion;
+  }
+  return { ...motion, bearing: next };
+}
+
+/**
+ * Advance the prediction by speed along the route, then ease the displayed pose
+ * toward it. Call once per frame; the target keeps moving while the vehicle does.
+ */
+export function poseAt(motion: RouteMotion, nowMs: number): { motion: RouteMotion; pose: MotionPose } {
+  const elapsedMs = Math.max(0, nowMs - motion.fixTimeMs);
+  const leadMeters = (motion.speedMps * Math.min(elapsedMs, motionMaxLeadMs)) / 1000;
+  let target = motion.fix;
+  let targetBearing = motion.bearing;
+  if (motion.onRoute && motion.path.length >= 2) {
+    const along = Math.min(pathLengthMeters(motion.path), motion.alongMeters + leadMeters);
+    target = pointAlongPath(motion.path, along) ?? motion.displayed;
+    if (motion.speedMps > 0) {
+      targetBearing = bearingAlongPath(motion.path, along) ?? motion.bearing;
+    }
+  } else if (leadMeters > 0) {
+    target = offsetAlongBearing(motion.fix, motion.bearing, leadMeters);
+  }
+
+  const dt = Math.max(0, nowMs - motion.sampledAtMs);
+  const displayed = easeCoordinate(motion.displayed, target, easeAlpha(dt, motionPositionTauMs));
+  const displayedBearing = easeBearing(
+    motion.displayedBearing,
+    targetBearing,
+    easeAlpha(dt, motionBearingTauMs),
+  );
+  const next: RouteMotion = {
+    ...motion,
+    bearing: motion.speedMps > 0 ? targetBearing : motion.bearing,
+    displayed,
+    displayedBearing,
+    sampledAtMs: nowMs,
+  };
+  return {
+    motion: next,
+    pose: {
+      latitude: displayed.latitude,
+      longitude: displayed.longitude,
+      bearing: displayedBearing,
+    },
+  };
+}
+
 /** Move `meters` along `bearingDegrees` (clockwise from north) from `from`. */
 export function offsetAlongBearing(
   from: GeoCoordinate,
@@ -379,4 +535,92 @@ function toMeters(origin: GeoCoordinate, point: GeoCoordinate): { x: number; y: 
 
 function radians(degrees: number): number {
   return (degrees * Math.PI) / 180;
+}
+
+function easeAlpha(dtMs: number, tauMs: number): number {
+  if (dtMs <= 0 || tauMs <= 0) {
+    return 0;
+  }
+  return 1 - Math.exp(-dtMs / tauMs);
+}
+
+function easeCoordinate(from: GeoCoordinate, to: GeoCoordinate, alpha: number): GeoCoordinate {
+  return {
+    latitude: from.latitude + (to.latitude - from.latitude) * alpha,
+    longitude: from.longitude + (to.longitude - from.longitude) * alpha,
+  };
+}
+
+function easeBearing(from: number, to: number, alpha: number): number {
+  const next = (from + alpha * bearingDeltaDegrees(from, to) + 360) % 360;
+  return Math.abs(bearingDeltaDegrees(next, to)) < 0.05 ? to : next;
+}
+
+function normalizeBearing(bearing: number | null): number | null {
+  if (bearing === null || !Number.isFinite(bearing) || bearing < 0) {
+    return null;
+  }
+  return ((bearing % 360) + 360) % 360;
+}
+
+function resolveSpeed(
+  previous: RouteMotion | null,
+  at: GeoCoordinate,
+  timeMs: number,
+  reported: number | null,
+): number {
+  const usable = reported !== null && Number.isFinite(reported) && reported >= 0 ? reported : null;
+  const raw =
+    usable !== null
+      ? usable
+      : previous && timeMs > previous.fixTimeMs
+        ? distanceMeters(previous.fix, at) / ((timeMs - previous.fixTimeMs) / 1000)
+        : 0;
+  return raw < motionStoppedSpeedMps ? 0 : raw;
+}
+
+function segmentBearing(from: GeoCoordinate, to: GeoCoordinate): number | null {
+  const north = (to.latitude - from.latitude) * 111_320;
+  const east = (to.longitude - from.longitude) * 111_320 * Math.cos(radians(from.latitude));
+  if (north === 0 && east === 0) {
+    return null;
+  }
+  return ((Math.atan2(east, north) * 180) / Math.PI + 360) % 360;
+}
+
+function locateAlongPath(
+  path: GeoCoordinate[],
+  alongMeters: number,
+): { point: GeoCoordinate; segmentStart: GeoCoordinate; segmentEnd: GeoCoordinate } | null {
+  const first = path[0];
+  if (!first) {
+    return null;
+  }
+  const last = path[path.length - 1] ?? first;
+  if (path.length === 1) {
+    return { point: first, segmentStart: first, segmentEnd: first };
+  }
+  let remaining = Math.max(0, alongMeters);
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const start = path[index];
+    const end = path[index + 1];
+    if (!start || !end) {
+      continue;
+    }
+    const length = distanceMeters(start, end);
+    const atEndOfPath = index === path.length - 2;
+    if (remaining < length || atEndOfPath) {
+      const fraction = length === 0 ? 0 : Math.min(1, remaining / length);
+      return {
+        point: {
+          latitude: start.latitude + (end.latitude - start.latitude) * fraction,
+          longitude: start.longitude + (end.longitude - start.longitude) * fraction,
+        },
+        segmentStart: start,
+        segmentEnd: end,
+      };
+    }
+    remaining -= length;
+  }
+  return { point: last, segmentStart: first, segmentEnd: last };
 }
