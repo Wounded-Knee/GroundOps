@@ -1,7 +1,10 @@
 import type {
+  ActivityResponse,
   CalendarResponse,
   Driver,
   LocationObservationRequest,
+  MeterReading,
+  ReplaceMeterReadingRequest,
   Sortie,
   SortieStop,
   SortieWriteRequest,
@@ -357,6 +360,81 @@ export async function saveTariff(
   }
 }
 
+export async function readActivity(
+  apiUrl: string,
+  token: string,
+): Promise<ActivityResponse | "unauthorized" | "unreachable"> {
+  try {
+    const response = await fetch(`${apiUrl}/activity`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const body: unknown = await response.json();
+    return isActivity(body) ? body : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+export async function replaceMeterReading(
+  apiUrl: string,
+  token: string,
+  body: ReplaceMeterReadingRequest,
+): Promise<MeterReading | "unauthorized" | "unreachable" | "rejected"> {
+  try {
+    const response = await fetch(`${apiUrl}/meter-reading`, {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 400 || response.status === 409) {
+      return "rejected";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const parsed: unknown = await response.json();
+    return isMeterReading(parsed) ? parsed : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+export async function clearMeterReading(
+  apiUrl: string,
+  token: string,
+): Promise<"ok" | "unauthorized" | "unreachable" | "rejected"> {
+  try {
+    const response = await fetch(`${apiUrl}/meter-reading`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 409) {
+      return "rejected";
+    }
+    if (response.status !== 204 && !response.ok) {
+      return "unreachable";
+    }
+    return "ok";
+  } catch {
+    return "unreachable";
+  }
+}
+
 function isTariff(value: unknown): value is Tariff {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -382,6 +460,59 @@ async function readError(response: Response): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function isActivity(value: unknown): value is ActivityResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.asOf !== "string") {
+    return false;
+  }
+  const locationOk = record.location === null || isLocationFix(record.location);
+  const sortieOk = record.sortie === null || isSortie(record.sortie);
+  const meterOk = record.meter === null || isMeterReading(record.meter);
+  return locationOk && sortieOk && meterOk;
+}
+
+function isLocationFix(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.latitude === "number" &&
+    typeof record.longitude === "number" &&
+    (record.accuracyMeters === null || typeof record.accuracyMeters === "number") &&
+    typeof record.observedAt === "string"
+  );
+}
+
+function isMeterReading(value: unknown): value is MeterReading {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.sortieId === "string" &&
+    typeof record.milesTraveled === "number" &&
+    typeof record.waitSeconds === "number" &&
+    typeof record.totalCents === "number" &&
+    typeof record.estimateCents === "number" &&
+    typeof record.remainingMeters === "number" &&
+    typeof record.updatedAt === "string" &&
+    Array.isArray(record.overviewPath) &&
+    record.overviewPath.every(isCoordinate)
+  );
+}
+
+function isCoordinate(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.latitude === "number" && typeof record.longitude === "number";
 }
 
 function isStop(value: unknown): value is SortieStop {

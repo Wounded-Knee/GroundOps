@@ -77,6 +77,29 @@ fi
 export ANDROID_SERIAL="$target"
 echo "Using adb device ${ANDROID_SERIAL}" >&2
 
+# #region agent log
+python3 - "$root" "$ANDROID_SERIAL" <<'PY'
+import json, subprocess, sys, time
+root, serial = sys.argv[1], sys.argv[2]
+try:
+    devices = subprocess.check_output(["adb", "devices", "-l"], text=True, stderr=subprocess.STDOUT)
+except subprocess.CalledProcessError as error:
+    devices = error.stdout or str(error)
+payload = {
+    "sessionId": "4db1de",
+    "runId": "pre-fix",
+    "hypothesisId": "A",
+    "location": "scripts/android.sh:device-selection",
+    "message": "selected adb device before expo",
+    "data": {"androidSerial": serial, "devices": devices},
+    "timestamp": int(time.time() * 1000),
+}
+with open(f"{root}/.cursor/debug-4db1de.log", "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+PY
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require ${root}/scripts/debug-adb-install-hook.cjs"
+# #endregion
+
 # The phone is the hotspot, so its localhost is not this computer. Forward
 # Metro through adb, and advertise this computer's address on that network.
 adb -s "$ANDROID_SERIAL" reverse tcp:8081 tcp:8081 >/dev/null
@@ -95,15 +118,36 @@ if [[ -n "$gateway" ]]; then
 fi
 
 cd "$root/apps/mobile"
+set +e
 case "$mode" in
   run)
-    exec node --env-file=../../.env ./scripts/expo-with-env.mjs run:android "$@"
+    node --env-file=../../.env ./scripts/expo-with-env.mjs run:android "$@"
     ;;
   start)
-    exec node --env-file=../../.env ./scripts/expo-with-env.mjs start --android "$@"
+    node --env-file=../../.env ./scripts/expo-with-env.mjs start --android "$@"
     ;;
   *)
     usage >&2
-    exit 2
+    status=2
     ;;
 esac
+status="${status:-$?}"
+set -e
+# #region agent log
+python3 - "$root" "$status" "$mode" "$ANDROID_SERIAL" <<'PY'
+import json, sys, time
+root, status, mode, serial = sys.argv[1:]
+payload = {
+    "sessionId": "4db1de",
+    "runId": "pre-fix",
+    "hypothesisId": "E",
+    "location": "scripts/android.sh:exit",
+    "message": "android.sh finished",
+    "data": {"status": int(status), "mode": mode, "androidSerial": serial},
+    "timestamp": int(time.time() * 1000),
+}
+with open(f"{root}/.cursor/debug-4db1de.log", "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+PY
+# #endregion
+exit "$status"

@@ -1,3 +1,4 @@
+import type { GeoCoordinate } from "@groundops/contracts";
 import {
   boolean,
   doublePrecision,
@@ -166,6 +167,25 @@ export const locationObservation = pgTable(
   (table) => [index("location_observation_driver_id_observed_at_idx").on(table.driverId, table.observedAt)],
 );
 
+/** Latest meter snapshot for one driver. The navigating phone replaces this row. */
+export const driverMeterReading = pgTable("driver_meter_reading", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  driverId: uuid("driver_id")
+    .notNull()
+    .unique()
+    .references(() => driver.id),
+  sortieId: uuid("sortie_id")
+    .notNull()
+    .references(() => sortie.id),
+  milesTraveled: doublePrecision("miles_traveled").notNull(),
+  waitSeconds: doublePrecision("wait_seconds").notNull(),
+  totalCents: integer("total_cents").notNull(),
+  estimateCents: integer("estimate_cents").notNull(),
+  remainingMeters: doublePrecision("remaining_meters").notNull(),
+  overviewPath: jsonb("overview_path").$type<GeoCoordinate[]>().notNull().default([]),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
 /** Programmable meter rates for one driver. Money is integer US cents. */
 export const driverTariff = pgTable("driver_tariff", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -189,5 +209,6 @@ export const schema = {
   sortieStop,
   operationalEvent,
   locationObservation,
+  driverMeterReading,
   driverTariff,
 };

@@ -85,7 +85,7 @@ The author may revise the label, the arrival, the passenger fields, and the stop
 
 Dragging a sortie revises that same sortie's arrival and marks the arrival authored. It does not create a second record, and it does not set the duration. On drop, the client sends the new arrival together with the sortie's existing label, passenger fields, and stops. The server recomputes the cached start and end and appends `sortie.revised` in the same transaction. The client then reads the calendar again. There is no resize handle.
 
-- On week and day, dragging the block moves the arrival by the same day and minute delta. Times snap to 15 minutes.
+- On week and day, dragging the hour grid scrolls it. A long-press on the block gives haptic feedback, and the drag that follows moves the arrival by the same day and minute delta. Times snap to 15 minutes. The block stays on the snapped slot through confirmation and the save, and returns to its previous time if the move is cancelled or the save fails.
 - On month, dragging a chip to another day shifts the arrival by whole days and keeps the clock time. The day delta is measured from the cached start day.
 
 A failed revise leaves the sortie and the cache unchanged. The block returns to the times from the last successful read. The screen says the sortie was not saved, or that location is required when the driver has no stored fix. When the server cannot be reached, drag is refused. When the app returns to the foreground, the open calendar reads again, so a window recomputed from a later fix can appear.
@@ -185,7 +185,7 @@ A rejected session creates no driver and no sortie. No stops, a stop with no coo
 
 **Where to?** On iOS and Android, choosing a suggestion in the navigation search authors a sortie before route preview. The body is an empty label, no arrival, no passenger name or phone, and one stop for that suggestion with passenger on. The client ensures the signed-in user is a driver and reports the current fix first. Preview and guidance follow only after that write succeeds. A failure stays on the map and does not start guidance. Dismissing the preview leaves the sortie. Choosing another place authors another sortie.
 
-**Move.** On week and day, dragging the block shifts the arrival. Dropped times snap to 15 minutes. The duration is not edited. On month, dragging a chip to another day shifts the arrival by whole days and keeps the clock time.
+**Move.** On week and day, dragging the hour grid scrolls it. Moving a block starts with a long-press, which gives haptic feedback, followed by a drag. Dropped times snap to 15 minutes. The block stays where it was dropped until the person confirms, and through the save; it returns if they cancel or the save fails. The duration is not edited. On month, dragging a chip to another day shifts the arrival by whole days and keeps the clock time.
 
 When the server cannot be reached and a range is cached, month, week, day, previous, next, and today stay available. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are unavailable. A period that was never fetched is empty.
 

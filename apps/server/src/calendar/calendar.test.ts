@@ -9,6 +9,7 @@ import {
   company,
   driver,
   driverCompany,
+  driverMeterReading,
   driverTariff,
   locationObservation,
   operationalEvent,
@@ -1647,6 +1648,7 @@ async function placeDriver(
 async function removeUser(userId: string): Promise<void> {
   const drivers = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId));
   for (const row of drivers) {
+    await db.delete(driverMeterReading).where(eq(driverMeterReading.driverId, row.id));
     await db.delete(locationObservation).where(eq(locationObservation.driverId, row.id));
     const sorties = await db.select({ id: sortie.id }).from(sortie).where(eq(sortie.authorDriverId, row.id));
     for (const item of sorties) {

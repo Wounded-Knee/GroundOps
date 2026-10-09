@@ -1,6 +1,7 @@
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
-import { connectBus } from "./bus.js";
+import { connectBus, publishEnvelope } from "./bus.js";
+import { setRealtimePublisher } from "./realtime.js";
 import { closeDatabase, pingDatabase } from "./db.js";
 import { registerGateway } from "./gateway.js";
 import { migrateDatabase } from "./migrate.js";
@@ -17,6 +18,14 @@ const host = "0.0.0.0";
 
 const app = Fastify({ logger: true });
 const bus = await connectBus();
+setRealtimePublisher(
+  (envelope) => {
+    publishEnvelope(bus.connection, envelope);
+  },
+  (error) => {
+    app.log.error({ err: error }, "realtime publish failed");
+  },
+);
 
 await migrateDatabase();
 registerLocalCors(app);

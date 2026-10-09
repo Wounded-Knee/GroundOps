@@ -1,14 +1,18 @@
 import {
   taskSortieType,
+  type ActivityResponse,
   type Driver,
   type GeoCoordinate,
+  type LocationFix,
   type Sortie,
   type SortieStop,
   type User,
 } from "@groundops/contracts";
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../db.js";
+import { locationUpdated, publishRealtime, sortieUpdated } from "../realtime.js";
 import { computeDriveDuration, lookupAddress } from "../routing/google.js";
+import { clearDriverMeter, readDriverMeter } from "./meterReading.js";
 import {
   company,
   driver,
@@ -230,7 +234,8 @@ export async function authorSortie(
     return toSortie(row, valid.stops);
   });
   if (typeof authored === "object") {
-    await alignFollowingSorties(author.id, deps);
+    await publishSortie(person.id, authored);
+    await alignFollowingSorties(author.id, person.id, deps);
   }
   return authored;
 }
@@ -304,7 +309,8 @@ export async function reviseSortie(
     return toSortie(row, nextStops);
   });
   if (typeof revised === "object") {
-    await alignFollowingSorties(author.id, deps);
+    await publishSortie(person.id, revised);
+    await alignFollowingSorties(author.id, person.id, deps);
   }
   return revised;
 }
@@ -346,7 +352,7 @@ export async function assertStopArrival(
   const nextStops = stops.map((stop, index) =>
     index === position ? { ...stop, actualArrivedAt: now.toISOString() } : stop,
   );
-  return db.transaction(async (tx) => {
+  const asserted = await db.transaction(async (tx) => {
     await tx
       .update(sortieStop)
       .set({ actualArrivedAt: now })
@@ -354,6 +360,8 @@ export async function assertStopArrival(
     await writeEvent(tx, sortieStopArrivalAsserted, row, nextStops);
     return toSortie(row, nextStops);
   });
+  await publishSortie(person.id, asserted);
+  return asserted;
 }
 
 export async function extendStopWait(
@@ -414,7 +422,8 @@ export async function extendStopWait(
     return toSortie(next, nextStops);
   });
   if (typeof revised === "object") {
-    await alignFollowingSorties(author.id, deps);
+    await publishSortie(person.id, revised);
+    await alignFollowingSorties(author.id, person.id, deps);
   }
   return revised;
 }
@@ -482,7 +491,8 @@ export async function commenceSortie(
     return toSortie(next, stops);
   });
   if (typeof commenced === "object") {
-    await alignFollowingSorties(author.id, deps);
+    await publishSortie(person.id, commenced);
+    await alignFollowingSorties(author.id, person.id, deps);
   }
   return commenced;
 }
@@ -514,7 +524,7 @@ export async function completeSortie(
   }
 
   const now = deps.now();
-  return db.transaction(async (tx) => {
+  const completed = await db.transaction(async (tx) => {
     const nextStops = [...stops];
     const openIndex = nextStops.findIndex(
       (stop) => stop.actualArrivedAt !== null && stop.actualDepartedAt === null,
@@ -541,6 +551,11 @@ export async function completeSortie(
     await writeEvent(tx, sortieCompleted, next, nextStops);
     return toSortie(next, nextStops);
   });
+  if (typeof completed === "object") {
+    await publishSortie(person.id, completed);
+    await clearDriverMeter(author.id, person.id);
+  }
+  return completed;
 }
 
 export async function recordObservation(
@@ -565,19 +580,32 @@ export async function recordObservation(
     longitude: input.longitude,
     accuracyMeters: input.accuracyMeters,
   });
+  await publishRealtime(
+    locationUpdated(person.id, {
+      latitude: input.latitude,
+      longitude: input.longitude,
+      accuracyMeters: input.accuracyMeters,
+      observedAt: input.observedAt.toISOString(),
+    }),
+  );
   if (inProgress) {
-    await inferStopActuals(inProgress, {
+    await inferStopActuals(person.id, inProgress, {
       latitude: input.latitude,
       longitude: input.longitude,
       accuracyMeters: input.accuracyMeters,
       observedAt: input.observedAt,
     });
   }
-  await recomputeOpenSorties(author.id, { latitude: input.latitude, longitude: input.longitude }, deps);
+  await recomputeOpenSorties(author.id, person.id, { latitude: input.latitude, longitude: input.longitude }, deps);
   return "ok";
 }
 
-async function recomputeOpenSorties(driverId: string, position: GeoCoordinate, deps: ScheduleDeps): Promise<void> {
+async function recomputeOpenSorties(
+  driverId: string,
+  userId: string,
+  position: GeoCoordinate,
+  deps: ScheduleDeps,
+): Promise<void> {
   const now = deps.now();
   const rows = await openSorties(driverId, now);
 
@@ -589,11 +617,11 @@ async function recomputeOpenSorties(driverId: string, position: GeoCoordinate, d
     if (approachOrigin(places, row.arrivalAt, row.id, null) !== null) {
       continue;
     }
-    await recomputeFrom(row, { ...position, label: null }, now, deps, true);
+    await recomputeFrom(userId, row, { ...position, label: null }, now, deps, true);
   }
 }
 
-async function alignFollowingSorties(driverId: string, deps: ScheduleDeps): Promise<void> {
+async function alignFollowingSorties(driverId: string, userId: string, deps: ScheduleDeps): Promise<void> {
   const now = deps.now();
   const gps = await latestObservation(db, driverId);
   const places = await driverPlaces(driverId);
@@ -606,11 +634,12 @@ async function alignFollowingSorties(driverId: string, deps: ScheduleDeps): Prom
     if (!origin) {
       continue;
     }
-    await recomputeFrom(row, origin, now, deps, false);
+    await recomputeFrom(userId, row, origin, now, deps, false);
   }
 }
 
 async function recomputeFrom(
+  userId: string,
   row: OpenSortie,
   position: ApproachOrigin,
   now: Date,
@@ -679,6 +708,19 @@ async function recomputeFrom(
       stops,
     );
   });
+  await publishSortie(
+    userId,
+    toSortie(
+      {
+        ...row,
+        arrivalAt: window.arrivalAt,
+        scheduledStart: window.scheduledStart,
+        scheduledEnd: window.scheduledEnd,
+        scheduleOriginLabel: address,
+      },
+      stops,
+    ),
+  );
 }
 
 async function insertDriver(person: User): Promise<Driver> {
@@ -887,6 +929,7 @@ async function resolveInProgressSortie(
 }
 
 async function inferStopActuals(
+  userId: string,
   inProgress: StoredSortie,
   fix: { latitude: number; longitude: number; accuracyMeters: number | null; observedAt: Date },
 ): Promise<void> {
@@ -936,6 +979,7 @@ async function inferStopActuals(
             .where(and(eq(sortieStop.sortieId, inProgress.id), eq(sortieStop.position, index)));
           await writeEvent(tx, sortieStopArrivalInferred, inProgress, nextStops);
         });
+        await publishSortie(userId, toSortie(inProgress, nextStops));
       }
       return;
     }
@@ -952,6 +996,7 @@ async function inferStopActuals(
             .where(and(eq(sortieStop.sortieId, inProgress.id), eq(sortieStop.position, index)));
           await writeEvent(tx, sortieStopDepartureInferred, inProgress, nextStops);
         });
+        await publishSortie(userId, toSortie(inProgress, nextStops));
       }
       return;
     }
@@ -1133,6 +1178,51 @@ async function findCompanyId(tx: Database, driverId: string): Promise<string | n
     .where(eq(driverCompany.driverId, driverId))
     .limit(1);
   return rows[0]?.companyId ?? null;
+}
+
+export async function readActivity(person: User): Promise<ActivityResponse> {
+  const asOf = new Date().toISOString();
+  const author = await findDriver(db, person.id);
+  if (!author) {
+    return { asOf, location: null, sortie: null, meter: null };
+  }
+  const location = await latestFix(author.id);
+  const inProgress = await resolveInProgressSortie(author.id, null);
+  const stops = inProgress ? ((await stopsBySortie(db, [inProgress.id])).get(inProgress.id) ?? []) : [];
+  return {
+    asOf,
+    location,
+    sortie: inProgress ? toSortie(inProgress, stops) : null,
+    meter: await readDriverMeter(author.id),
+  };
+}
+
+async function latestFix(driverId: string): Promise<LocationFix | null> {
+  const rows = await db
+    .select({
+      latitude: locationObservation.latitude,
+      longitude: locationObservation.longitude,
+      accuracyMeters: locationObservation.accuracyMeters,
+      observedAt: locationObservation.observedAt,
+    })
+    .from(locationObservation)
+    .where(eq(locationObservation.driverId, driverId))
+    .orderBy(desc(locationObservation.observedAt))
+    .limit(1);
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    latitude: row.latitude,
+    longitude: row.longitude,
+    accuracyMeters: row.accuracyMeters,
+    observedAt: row.observedAt.toISOString(),
+  };
+}
+
+async function publishSortie(userId: string, sortie: Sortie): Promise<void> {
+  await publishRealtime(sortieUpdated(userId, sortie));
 }
 
 function toSortie(row: StoredSortie, stops: SortieStop[]): Sortie {

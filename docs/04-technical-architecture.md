@@ -52,7 +52,7 @@ Domain rules are plain TypeScript modules. The HTTP framework does not own them.
 
 Commands, queries, and observations are **HTTP JSON**.
 
-A location observation is one of those HTTP writes. The schedule computation that turns an arrival and that position into a cached sortie window also runs on the server, in the request that needs it. The routing call is provider-replaceable. Its result is stored on the sortie row, including the address of the place the start drive used. Precise location is not published on the bus.
+A location observation is one of those HTTP writes. The schedule computation that turns an arrival and that position into a cached sortie window also runs on the server, in the request that needs it. The routing call is provider-replaceable. Its result is stored on the sortie row, including the address of the place the start drive used. A location fix is published on the bus addressed to that user. The gateway delivers it only to that user's sessions.
 
 The server commits authoritative state, then publishes the resulting domain event. Connected clients hear that event through the server's WebSocket gateway.
 
@@ -114,7 +114,7 @@ JetStream, Kafka, and Redis are not part of the stack.
 
 **Background work.** The first implementation runs in-process. A job queue is added only when in-process work is insufficient.
 
-**Routing.** Routing calls go through a server-side provider interface. The first provider is Google. Domain types do not use Google representations. The on-device map toolkit is `expo-maps`, chosen in the navigation slice (`docs/slices/002-Navigation.md`): Google Maps on Android and Apple Maps on iOS. The client draws driving guidance over that map and does not call the routing provider itself.
+**Routing.** Routing calls go through a server-side provider interface. The first provider is Google. Domain types do not use Google representations. The on-device map toolkit is `expo-maps`, chosen in the navigation slice (`docs/slices/002-Navigation.md`): Google Maps on Android and Apple Maps on iOS. The client draws driving guidance over that map and does not call the routing provider itself. The web account overview uses the Maps JavaScript API for tiles, stop markers, the stored route, and the vehicle marker. That view stays north-up and untilted. It does not call Places or Routes.
 
 **Deployment.** When a slice requires a deployed environment, the shape is one API service, managed PostgreSQL, NATS, and HTTPS. The cloud vendor is not chosen here. Kubernetes and Terraform are not part of this decision.
 

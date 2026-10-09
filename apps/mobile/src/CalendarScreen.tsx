@@ -1,5 +1,6 @@
 import type { Sortie, SortieWriteRequest } from "@groundops/contracts";
 import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -69,6 +70,7 @@ const routeFailed = "The route failed.";
 const departureFailed = "The departure could not be recorded.";
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hours = Array.from({ length: 24 }, (_, hour) => hour);
+const longPressMs = 500;
 
 const apiUrl = resolveApiUrl();
 
@@ -104,6 +106,12 @@ type GridBox = {
   days: Date[];
 };
 
+type HeldMove = {
+  sortieId: string;
+  x: number;
+  y: number;
+};
+
 export function CalendarScreen({
   userId,
   token,
@@ -124,6 +132,8 @@ export function CalendarScreen({
   const [screen, setScreen] = useState<Ready>(() => emptyCalendar(new Date()));
   const [hourPx, setHourPx] = useState(hourHeight);
   const [now, setNow] = useState(() => new Date());
+  const [held, setHeld] = useState<HeldMove | null>(null);
+  const [hourScrollLocked, setHourScrollLocked] = useState(false);
   const generation = useRef(0);
   const saving = useRef(false);
   const gridRef = useRef<View>(null);
@@ -334,6 +344,7 @@ export function CalendarScreen({
   }
 
   function showPeriod(scope: CalendarScope, anchor: Date): void {
+    setHeld(null);
     const current = ++generation.current;
     setScreen((currentScreen) => ({
       ...currentScreen,
@@ -348,6 +359,9 @@ export function CalendarScreen({
 
   async function commit(ready: Ready, sortieId: string | null, body: SortieWriteRequest): Promise<void> {
     if (!ready.live || saving.current) {
+      if (!saving.current) {
+        setHeld(null);
+      }
       return;
     }
     saving.current = true;
@@ -357,17 +371,21 @@ export function CalendarScreen({
       : await authorSortie(apiUrl, token, body);
     saving.current = false;
     if (generation.current !== current) {
+      setHeld(null);
       return;
     }
     if (saved === "unauthorized") {
+      setHeld(null);
       onUnauthorized();
       return;
     }
     if (saved === "no-location") {
+      setHeld(null);
       setScreen({ ...ready, message: locationRequired });
       return;
     }
     if (typeof saved === "string") {
+      setHeld(null);
       setScreen({ ...ready, message: notSaved });
       return;
     }
@@ -375,13 +393,16 @@ export function CalendarScreen({
     const range = visibleRange(ready.scope, ready.anchor);
     const calendar = await requestCalendar(apiUrl, token, range.from.toISOString(), range.to.toISOString());
     if (generation.current !== current) {
+      setHeld(null);
       return;
     }
     if (calendar === "unauthorized") {
+      setHeld(null);
       onUnauthorized();
       return;
     }
     if (typeof calendar === "string") {
+      setHeld(null);
       setScreen({ ...ready, dialog: null, live: false, message: couldNotRefresh });
       return;
     }
@@ -391,6 +412,7 @@ export function CalendarScreen({
       to: range.to.toISOString(),
       sorties: calendar.sorties,
     });
+    setHeld(null);
     setScreen({
       ...ready,
       sorties: calendar.sorties,
@@ -506,7 +528,7 @@ export function CalendarScreen({
     showPeriod(nextCalendarScope(screen.scope), screen.anchor);
   }, [scopeCycleToken]);
 
-  function confirmArrivalChange(readyState: Ready, sortie: Sortie, arrival: Date): void {
+  function confirmArrivalChange(readyState: Ready, sortie: Sortie, arrival: Date, onCancel?: () => void): void {
     const whenLabel = formatCalendarDateTime(arrival, {
       weekday: "short",
       month: "short",
@@ -515,9 +537,13 @@ export function CalendarScreen({
       minute: "2-digit",
     });
     const message = `Move “${sortieTitle(sortie)}” to ${whenLabel}?`;
-    confirmChange(message, () => {
-      void commit(readyState, sortie.id, writeFrom(sortie, arrival));
-    });
+    confirmChange(
+      message,
+      () => {
+        void commit(readyState, sortie.id, writeFrom(sortie, arrival));
+      },
+      onCancel,
+    );
   }
 
   return (
@@ -654,6 +680,7 @@ export function CalendarScreen({
               </View>
               <ScrollView
                 ref={hourScroll}
+                scrollEnabled={!hourScrollLocked}
                 style={styles.gridScroll}
                 onLayout={(event) => {
                   hourScrollViewportH.current = event.nativeEvent.layout.height;
@@ -718,12 +745,21 @@ export function CalendarScreen({
                             enabled={ready.live && !ready.dialog && !ready.summary}
                             allowDayShift={ready.scope === "week"}
                             columnWidth={() => columnWidth.current}
+                            heldOffset={held?.sortieId === sortie.id ? { x: held.x, y: held.y } : null}
+                            onLift={setHourScrollLocked}
                             onOpen={() => openSummary(ready, sortie)}
                             onMove={(dayDelta, minuteDelta) => {
                               const arrival = shiftArrival(new Date(sortie.arrivalAt), dayDelta, minuteDelta);
-                              if (arrival) {
-                                confirmArrivalChange(ready, sortie, arrival);
+                              if (!arrival) {
+                                setHeld((current) => (current?.sortieId === sortie.id ? null : current));
+                                return;
                               }
+                              setHeld({
+                                sortieId: sortie.id,
+                                x: dayDelta * columnWidth.current,
+                                y: (minuteDelta / 60) * hourPx,
+                              });
+                              confirmArrivalChange(ready, sortie, arrival, () => setHeld(null));
                             }}
                           />
                         );
@@ -877,17 +913,49 @@ function touchDistance(touches: GestureResponderEvent["nativeEvent"]["touches"])
   return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
 }
 
-function confirmChange(message: string, onConfirm: () => void): void {
+function confirmChange(message: string, onConfirm: () => void, onCancel?: () => void): void {
+  let settled = false;
+  const confirm = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    onConfirm();
+  };
+  const cancel = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    onCancel?.();
+  };
   if (Platform.OS === "web") {
     if (typeof globalThis.confirm === "function" && globalThis.confirm(message)) {
-      onConfirm();
+      confirm();
+    } else {
+      cancel();
     }
     return;
   }
-  Alert.alert("Confirm change", message, [
-    { text: "Cancel", style: "cancel" },
-    { text: "Confirm", onPress: onConfirm },
-  ]);
+  Alert.alert(
+    "Confirm change",
+    message,
+    [
+      { text: "Cancel", style: "cancel", onPress: cancel },
+      { text: "Confirm", onPress: confirm },
+    ],
+    { cancelable: true, onDismiss: cancel },
+  );
+}
+
+function liftHaptic(): void {
+  if (Platform.OS === "android") {
+    void Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Long_Press);
+    return;
+  }
+  if (Platform.OS === "ios") {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  }
 }
 
 function webPinchWheelProps(onZoom: (deltaY: number) => void): Record<string, unknown> {
@@ -1027,6 +1095,8 @@ function HourBlock({
   enabled,
   allowDayShift,
   columnWidth,
+  heldOffset,
+  onLift,
   onOpen,
   onMove,
 }: {
@@ -1038,47 +1108,111 @@ function HourBlock({
   enabled: boolean;
   allowDayShift: boolean;
   columnWidth: () => number;
+  heldOffset: { x: number; y: number } | null;
+  onLift: (lifted: boolean) => void;
   onOpen: () => void;
   onMove: (dayDelta: number, minuteDelta: number) => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
-  const [shift, setShift] = useState({ x: 0, y: 0 });
+  const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
   const grant = useRef({ x: 0, y: 0 });
-  const latest = useRef({ enabled, allowDayShift, columnWidth, onOpen, onMove, hourPx });
-  latest.current = { enabled, allowDayShift, columnWidth, onOpen, onMove, hourPx };
+  const armed = useRef(false);
+  const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latest = useRef({ enabled, allowDayShift, columnWidth, onLift, onOpen, onMove, hourPx });
+  latest.current = { enabled, allowDayShift, columnWidth, onLift, onOpen, onMove, hourPx };
+
+  useEffect(() => {
+    return () => {
+      if (armTimer.current) {
+        clearTimeout(armTimer.current);
+        armTimer.current = null;
+      }
+      if (armed.current) {
+        armed.current = false;
+        latest.current.onLift(false);
+      }
+    };
+  }, []);
 
   const moveResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => latest.current.enabled,
-      onMoveShouldSetPanResponder: () => latest.current.enabled,
+      onMoveShouldSetPanResponder: () => false,
+      onPanResponderTerminationRequest: () => !armed.current,
+      // Read at touch-down, while the drag is still unarmed, so the native hour scroller is not blocked.
+      onShouldBlockNativeResponder: () => armed.current,
       onPanResponderGrant: (event) => {
+        armed.current = false;
         grant.current = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY };
+        if (armTimer.current) {
+          clearTimeout(armTimer.current);
+        }
+        armTimer.current = setTimeout(() => {
+          armTimer.current = null;
+          if (!latest.current.enabled) {
+            return;
+          }
+          armed.current = true;
+          latest.current.onLift(true);
+          liftHaptic();
+        }, longPressMs);
       },
       onPanResponderMove: (event) => {
         const dx = event.nativeEvent.pageX - grant.current.x;
         const dy = event.nativeEvent.pageY - grant.current.y;
+        if (!armed.current) {
+          if (Math.hypot(dx, dy) > 10 && armTimer.current) {
+            clearTimeout(armTimer.current);
+            armTimer.current = null;
+          }
+          return;
+        }
         const dayDelta = latest.current.allowDayShift ? dayDeltaFromPixels(dx, latest.current.columnWidth()) : 0;
         const minuteDelta = minuteDeltaFromPixels(dy, latest.current.hourPx);
-        setShift({
+        setDrag({
           x: dayDelta * latest.current.columnWidth(),
           y: (minuteDelta / 60) * latest.current.hourPx,
         });
       },
       onPanResponderRelease: (event) => {
+        if (armTimer.current) {
+          clearTimeout(armTimer.current);
+          armTimer.current = null;
+        }
+        const wasArmed = armed.current;
+        if (wasArmed) {
+          armed.current = false;
+          latest.current.onLift(false);
+        }
         const dx = event.nativeEvent.pageX - grant.current.x;
         const dy = event.nativeEvent.pageY - grant.current.y;
-        setShift({ x: 0, y: 0 });
-        if (Math.abs(dx) <= 4 && Math.abs(dy) <= 4) {
-          latest.current.onOpen();
+        setDrag(null);
+        if (!wasArmed) {
+          if (Math.abs(dx) <= 4 && Math.abs(dy) <= 4) {
+            latest.current.onOpen();
+          }
           return;
         }
         const dayDelta = latest.current.allowDayShift ? dayDeltaFromPixels(dx, latest.current.columnWidth()) : 0;
-        latest.current.onMove(dayDelta, minuteDeltaFromPixels(dy, latest.current.hourPx));
+        const minuteDelta = minuteDeltaFromPixels(dy, latest.current.hourPx);
+        latest.current.onMove(dayDelta, minuteDelta);
       },
-      onPanResponderTerminate: () => setShift({ x: 0, y: 0 }),
+      onPanResponderTerminate: () => {
+        if (armTimer.current) {
+          clearTimeout(armTimer.current);
+          armTimer.current = null;
+        }
+        if (armed.current) {
+          armed.current = false;
+          latest.current.onLift(false);
+        }
+        setDrag(null);
+      },
     }),
   ).current;
+
+  const offset = drag ?? heldOffset ?? { x: 0, y: 0 };
 
   return (
     <View
@@ -1089,7 +1223,8 @@ function HourBlock({
           height,
           left: `${(lane.column / lane.columns) * 100}%`,
           width: `${(lane.span / lane.columns) * 100}%`,
-          transform: [{ translateX: shift.x }, { translateY: shift.y }],
+          zIndex: drag || heldOffset ? 3 : 0,
+          transform: [{ translateX: offset.x }, { translateY: offset.y }],
         },
       ]}
     >

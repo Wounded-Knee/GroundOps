@@ -10,6 +10,7 @@ import {
   defaultScheduleDeps,
   ensureDriver,
   extendStopWait,
+  readActivity,
   readCalendar,
   recordObservation,
   reviseSortie,
@@ -18,6 +19,7 @@ import {
   type SortieInput,
 } from "./calendar.js";
 import { defaultSortieRouteDeps, computeSortieDrivingRoute, type SortieRouteDeps } from "./sortieRoute.js";
+import { clearMeterReading, replaceMeterReading } from "./meterReading.js";
 import { readTariff, replaceTariff } from "./tariff.js";
 
 const stopBody = z.object({
@@ -74,6 +76,16 @@ const tariffBody = z.object({
   perWaitMinuteCents: z.number().int().nonnegative(),
 });
 
+const meterBody = z.object({
+  sortieId: z.uuid(),
+  milesTraveled: z.number(),
+  waitSeconds: z.number(),
+  totalCents: z.number(),
+  estimateCents: z.number(),
+  remainingMeters: z.number(),
+  overviewPath: z.array(coordinateSchema).optional(),
+});
+
 export function registerCalendarRoutes(
   app: FastifyInstance,
   deps: ScheduleDeps = defaultScheduleDeps,
@@ -117,6 +129,52 @@ export function registerCalendarRoutes(
       return reply.code(400).send({ error: "invalid request" });
     }
     return reply.send(result);
+  });
+
+  app.get("/activity", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    return reply.send(await readActivity(active.user));
+  });
+
+  app.put("/meter-reading", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const parsed = meterBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const { overviewPath, ...reading } = parsed.data;
+    const result = await replaceMeterReading(
+      active.user,
+      overviewPath === undefined ? reading : { ...reading, overviewPath },
+    );
+    if (result === "invalid") {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    if (result === "no-driver") {
+      return reply.code(409).send({ error: "no driver" });
+    }
+    if (result === "not-in-progress") {
+      return reply.code(409).send({ error: "not in progress" });
+    }
+    return reply.send(result);
+  });
+
+  app.delete("/meter-reading", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const result = await clearMeterReading(active.user);
+    if (result === "no-driver") {
+      return reply.code(409).send({ error: "no driver" });
+    }
+    return reply.code(204).send();
   });
 
   app.get("/calendar", async (request, reply) => {

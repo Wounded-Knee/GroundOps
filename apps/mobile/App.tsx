@@ -1,4 +1,4 @@
-import type { Sortie, SortieWriteRequest, User } from "@groundops/contracts";
+import type { RealtimeEnvelope, Sortie, SortieWriteRequest, User } from "@groundops/contracts";
 import * as AuthSession from "expo-auth-session";
 import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
@@ -11,7 +11,8 @@ import { BottomNav, type SignedInDestination } from "./src/BottomNav";
 import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
-import { authorSortie, ensureCurrentDriver, reviseSortie } from "./src/calendarClient";
+import { authorSortie, ensureCurrentDriver, readActivity, reviseSortie } from "./src/calendarClient";
+import { applyEnvelope, applySnapshot, emptyActivity, readRealtimeEnvelope, type AccountActivity } from "./src/liveActivity";
 import { formatUsPhone } from "./src/calendarTime";
 import { MeterStrip, type MeterDisplay } from "./src/MeterStrip";
 import { NavigationScreen } from "./src/NavigationScreen";
@@ -92,6 +93,7 @@ function AppContent() {
   const [compose, setCompose] = useState<DialogDraft | null>(null);
   const [composeMessage, setComposeMessage] = useState<string | null>(null);
   const [calendarReload, setCalendarReload] = useState(0);
+  const [activity, setActivity] = useState<AccountActivity>(emptyActivity);
   const [calendarScopeCycle, setCalendarScopeCycle] = useState(0);
   const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
@@ -189,30 +191,122 @@ function AppContent() {
     }
 
     const token = sessionToken;
-    const currentGeneration = generation.current;
-    const socket = openAuthenticatedSocket(apiUrl, token);
+    const effectGeneration = generation.current;
+    let cancelled = false;
+    let connection = 0;
+    let socket: WebSocket | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    let ready = false;
+    let buffer: RealtimeEnvelope[] = [];
+    let state = emptyActivity;
 
-    socket.onopen = () => {
-      if (generation.current !== currentGeneration) {
+    const connect = () => {
+      if (cancelled || generation.current !== effectGeneration) {
         return;
       }
-      setPhase((current) =>
-        current.status === "signed-in" && current.token === token
-          ? { ...current, live: "authenticated" }
-          : current,
+      const connectionId = ++connection;
+      ready = false;
+      buffer = [];
+      socket = openAuthenticatedSocket(apiUrl, token);
+
+      socket.onopen = () => {
+        if (cancelled || connectionId !== connection || generation.current !== effectGeneration) {
+          return;
+        }
+        attempt = 0;
+        setPhase((current) =>
+          current.status === "signed-in" && current.token === token
+            ? { ...current, live: "authenticated" }
+            : current,
+        );
+        void loadSnapshot(connectionId);
+      };
+
+      socket.onmessage = (event) => {
+        if (cancelled || connectionId !== connection || generation.current !== effectGeneration) {
+          return;
+        }
+        const envelope = readRealtimeEnvelope(readJson(typeof event.data === "string" ? event.data : ""));
+        if (!envelope) {
+          return;
+        }
+        if (!ready) {
+          buffer.push(envelope);
+          return;
+        }
+        const applied = applyEnvelope(state, envelope);
+        state = applied.state;
+        setActivity(state);
+        if (applied.calendarChanged) {
+          setCalendarReload((current) => current + 1);
+        }
+      };
+
+      socket.onclose = () => {
+        if (cancelled || connectionId !== connection || generation.current !== effectGeneration) {
+          return;
+        }
+        void handleClose();
+      };
+    };
+
+    async function loadSnapshot(connectionId: number): Promise<void> {
+      const snapshot = await readActivity(apiUrl, token);
+      if (cancelled || connectionId !== connection || generation.current !== effectGeneration) {
+        return;
+      }
+      if (snapshot === "unauthorized") {
+        await onSessionRejected();
+        return;
+      }
+      if (snapshot !== "unreachable") {
+        state = applySnapshot(snapshot);
+      }
+      ready = true;
+      let calendarChanged = false;
+      for (const envelope of buffer) {
+        const applied = applyEnvelope(state, envelope);
+        state = applied.state;
+        calendarChanged = calendarChanged || applied.calendarChanged;
+      }
+      buffer = [];
+      setActivity(state);
+      if (calendarChanged) {
+        setCalendarReload((current) => current + 1);
+      }
+    }
+
+    async function handleClose(): Promise<void> {
+      const current = await readCurrentUser(apiUrl, token);
+      if (cancelled || generation.current !== effectGeneration) {
+        return;
+      }
+      if (current === "unauthorized") {
+        await onSessionRejected();
+        return;
+      }
+      setPhase((existing) =>
+        existing.status === "signed-in" && existing.token === token
+          ? { ...existing, live: "closed" }
+          : existing,
       );
-    };
+      const delay = Math.min(15000, 1000 * 2 ** attempt);
+      attempt += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        connect();
+      }, delay);
+    }
 
-    socket.onclose = () => {
-      if (generation.current !== currentGeneration) {
-        return;
-      }
-      void classifyClosedSocket(token, currentGeneration);
-    };
-
+    connect();
     return () => {
+      cancelled = true;
       generation.current += 1;
-      socket.close();
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+      socket?.close();
     };
   }, [sessionToken]);
 
@@ -222,28 +316,7 @@ function AppContent() {
     setComposeMessage(null);
     setSortieGuide(null);
     setMeterReading(null);
-  }
-
-  async function classifyClosedSocket(token: string, currentGeneration: number): Promise<void> {
-    const current = await readCurrentUser(apiUrl, token);
-    if (generation.current !== currentGeneration) {
-      return;
-    }
-    if (current === "unauthorized") {
-      await deleteStoredSession();
-      await forgetCalendarCache();
-      if (generation.current !== currentGeneration) {
-        return;
-      }
-      resetChrome();
-      setPhase({ status: "signed-out", message: null });
-      return;
-    }
-    setPhase((existing) =>
-      existing.status === "signed-in" && existing.token === token
-        ? { ...existing, live: "closed" }
-        : existing,
-    );
+    setActivity(emptyActivity);
   }
 
   async function onSignIn(): Promise<void> {
@@ -494,11 +567,16 @@ function AppContent() {
                   meterOnwardRef={meterOnwardRef}
                   meterCommenceRef={meterCommenceRef}
                   applySortieUpdateRef={applySortieUpdateRef}
+                  accountView={{ user: phase.user, live: phase.live, activity }}
                 />
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (
-                <View style={styles.webIdentity}>
-                  <SignedInIdentity user={phase.user} live={phase.live} />
+                <View style={styles.cover}>
+                  <NavigationScreen
+                    token={phase.token}
+                    onUnauthorized={() => void onSessionRejected()}
+                    accountView={{ user: phase.user, live: phase.live, activity }}
+                  />
                 </View>
               ) : null}
               {destination === "calendar" ? (
@@ -581,27 +659,6 @@ function SignIn({
   );
 }
 
-function SignedInIdentity({
-  user,
-  live,
-}: {
-  user: User;
-  live: "authenticated" | "closed";
-}) {
-  const { colors } = useTheme();
-  const styles = createStyles(colors);
-  return (
-    <>
-      <Text style={styles.identity}>{identityLabel(user)}</Text>
-      <Text style={styles.message}>
-        {live === "authenticated"
-          ? "Live connection authenticated"
-          : "Live connection not authenticated"}
-      </Text>
-    </>
-  );
-}
-
 async function forgetCalendarCache(): Promise<void> {
   try {
     await clearCalendarCache();
@@ -623,11 +680,12 @@ function Offline({ message, onRetry }: { message: string; onRetry: () => void })
   );
 }
 
-function identityLabel(user: User): string {
-  if (user.displayName && user.email) {
-    return `${user.displayName} (${user.email})`;
+function readJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
   }
-  return user.displayName ?? user.email ?? "Signed in";
 }
 
 async function readIdToken(
@@ -711,12 +769,6 @@ function createStyles(colors: ThemeColors) {
     content: {
       flex: 1,
     },
-    webIdentity: {
-      flex: 1,
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 24,
-    },
     cover: {
       position: "absolute",
       top: 0,
@@ -731,12 +783,6 @@ function createStyles(colors: ThemeColors) {
       right: 0,
       bottom: 0,
       zIndex: 5,
-    },
-    identity: {
-      fontSize: 20,
-      marginBottom: 12,
-      textAlign: "center",
-      color: colors.text,
     },
     message: {
       marginTop: 16,

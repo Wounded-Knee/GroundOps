@@ -13,16 +13,37 @@ type ClientSocket = {
 
 type AuthenticatedSocket = {
   sessionId: string;
+  userId: string;
   socket: ClientSocket;
 };
 
-const socketOpen = 1;
+export const socketOpen = 1;
 const sockets = new Set<AuthenticatedSocket>();
 
 const realtimeEnvelope = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   type: z.string().min(1),
+  userId: z.uuid(),
+  recordedAt: z.string().min(1),
 });
+
+/** A socket is kept only for an unrevoked session that is still open. */
+export function sessionMayHoldSocket<T>(active: T | null, readyState: number): active is T {
+  return active !== null && readyState === socketOpen;
+}
+
+/** Sends one envelope only to open sockets for that user. */
+export function deliverEnvelope(
+  entries: Iterable<{ userId: string; readyState: number; send: (data: string) => void }>,
+  envelope: { userId: string },
+  text: string,
+): void {
+  for (const entry of entries) {
+    if (entry.userId === envelope.userId && entry.readyState === socketOpen) {
+      entry.send(text);
+    }
+  }
+}
 
 /** Closes every socket held by one session. Other sessions stay connected. */
 export function closeSessionSockets(sessionId: string): void {
@@ -51,14 +72,14 @@ async function acceptSocket(socket: ClientSocket, authorization: string | undefi
   try {
     const token = readBearer(authorization);
     const active = token ? await findActiveSession(token) : null;
-    if (!active || socket.readyState !== socketOpen) {
+    if (!sessionMayHoldSocket(active, socket.readyState)) {
       if (socket.readyState === socketOpen) {
         socket.close();
       }
       return;
     }
 
-    const entry: AuthenticatedSocket = { sessionId: active.sessionId, socket };
+    const entry: AuthenticatedSocket = { sessionId: active.sessionId, userId: active.user.id, socket };
     sockets.add(entry);
     socket.on("close", () => {
       sockets.delete(entry);
@@ -78,12 +99,17 @@ async function forward(app: FastifyInstance, subscription: Subscription): Promis
       continue;
     }
 
-    const text = JSON.stringify(parsed.data);
-    for (const entry of sockets) {
-      if (entry.socket.readyState === socketOpen) {
-        entry.socket.send(text);
-      }
-    }
+    deliverEnvelope(
+      [...sockets].map((entry) => ({
+        userId: entry.userId,
+        readyState: entry.socket.readyState,
+        send: (data) => {
+          entry.socket.send(data);
+        },
+      })),
+      parsed.data,
+      message.string(),
+    );
   }
 }
 

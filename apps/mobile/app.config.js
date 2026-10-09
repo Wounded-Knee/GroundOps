@@ -53,6 +53,17 @@ module.exports = () => {
           },
         },
       },
+      extra: {
+        ...(appJson.expo.extra ?? {}),
+        googleMapsWebApiKey: process.env.GOOGLE_MAPS_WEB_API_KEY ?? "",
+      },
+      web: {
+        ...(appJson.expo.web ?? {}),
+        config: {
+          ...(appJson.expo.web?.config ?? {}),
+          googleMapsApiKey: process.env.GOOGLE_MAPS_WEB_API_KEY ?? "",
+        },
+      },
       plugins: [
         ...(appJson.expo.plugins ?? []),
         "expo-sqlite",

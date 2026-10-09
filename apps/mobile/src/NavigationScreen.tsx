@@ -1,4 +1,13 @@
-import type { DrivingRoute, GeoCoordinate, PlaceSuggestion, Sortie, SortieStop, Tariff } from "@groundops/contracts";
+import type {
+  DrivingRoute,
+  GeoCoordinate,
+  PlaceSuggestion,
+  ReplaceMeterReadingRequest,
+  Sortie,
+  SortieStop,
+  Tariff,
+  User,
+} from "@groundops/contracts";
 import { Ionicons } from "@expo/vector-icons";
 import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
@@ -13,9 +22,11 @@ import {
   assertStopArrival,
   authorSortie,
   commenceSortie,
+  clearMeterReading,
   completeSortie,
   ensureCurrentDriver,
   extendStopWait,
+  replaceMeterReading,
   reportLocationObservation,
   requestCalendar,
   requestTariff,
@@ -63,10 +74,13 @@ import {
   advanceMeterAlongRoute,
   emptyMeter,
   formatTripEstimate,
+  meterCharges,
   resetMeterRouteProgress,
   tickMeterWait,
   type MeterState,
 } from "./meter";
+import type { AccountActivity } from "./liveActivity";
+import { overviewPathForUpload, reportDelayMs, stopListKey } from "./liveActivity";
 import type { MeterDisplay } from "./MeterStrip";
 import { PlatformMap, type MapCamera, type MapHandle } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
@@ -143,6 +157,7 @@ export function NavigationScreen({
   meterOnwardRef,
   meterCommenceRef,
   applySortieUpdateRef,
+  accountView = null,
 }: {
   token: string;
   onUnauthorized: () => void;
@@ -158,6 +173,11 @@ export function NavigationScreen({
   meterOnwardRef?: MutableRefObject<(() => void) | null>;
   meterCommenceRef?: MutableRefObject<(() => void) | null>;
   applySortieUpdateRef?: MutableRefObject<((sortie: Sortie) => void) | null>;
+  accountView?: {
+    user: User;
+    live: "authenticated" | "closed";
+    activity: AccountActivity;
+  } | null;
 }) {
   const { colors } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
@@ -204,6 +224,9 @@ export function NavigationScreen({
   const extendWaitInFlight = useRef(false);
   const endingSortieRef = useRef(false);
   const nextDepartureRef = useRef<NextDeparture | null>(null);
+  const pendingMeterRef = useRef<ReplaceMeterReadingRequest | null>(null);
+  const meterSentAtRef = useRef<number | null>(null);
+  const meterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (Platform.OS === "web" || nav.mode !== "browse") {
@@ -327,7 +350,49 @@ export function NavigationScreen({
     return next;
   }
 
-  function publishMeter(nextMeter: MeterState, current: NavState, at: GeoCoordinate | null): void {
+  function queueMeterReport(report: ReplaceMeterReadingRequest, immediate: boolean): void {
+    const previous = pendingMeterRef.current;
+    pendingMeterRef.current = {
+      ...report,
+      ...(report.overviewPath === undefined && previous?.overviewPath ? { overviewPath: previous.overviewPath } : {}),
+    };
+    const delay = reportDelayMs(meterSentAtRef.current, Date.now(), immediate);
+    if (meterTimerRef.current) {
+      if (!immediate) {
+        return;
+      }
+      clearTimeout(meterTimerRef.current);
+      meterTimerRef.current = null;
+    }
+    if (delay === 0) {
+      void flushMeterReport();
+      return;
+    }
+    meterTimerRef.current = setTimeout(() => {
+      meterTimerRef.current = null;
+      void flushMeterReport();
+    }, delay);
+  }
+
+  async function flushMeterReport(): Promise<void> {
+    const report = pendingMeterRef.current;
+    pendingMeterRef.current = null;
+    if (!report) {
+      return;
+    }
+    meterSentAtRef.current = Date.now();
+    const result = await replaceMeterReading(apiUrl, token, report);
+    if (result === "unauthorized") {
+      onUnauthorized();
+    }
+  }
+
+  function publishMeter(
+    nextMeter: MeterState,
+    current: NavState,
+    at: GeoCoordinate | null,
+    options?: { immediate?: boolean; overviewPath?: GeoCoordinate[] },
+  ): void {
     if (current.mode !== "guiding" && current.mode !== "arrived") {
       onMeterReading?.(null);
       return;
@@ -371,6 +436,22 @@ export function NavigationScreen({
       showCommence: dwelling && (later || current.pendingNextLeg),
       pendingNextLeg: dwelling ? current.pendingNextLeg : false,
     });
+    if (!current.sortieId) {
+      return;
+    }
+    const charges = meterCharges(current.tariff, nextMeter.milesTraveled, nextMeter.waitSeconds, remaining);
+    queueMeterReport(
+      {
+        sortieId: current.sortieId,
+        milesTraveled: nextMeter.milesTraveled,
+        waitSeconds: nextMeter.waitSeconds,
+        totalCents: charges?.totalCents ?? 0,
+        estimateCents: charges?.estimateCents ?? 0,
+        remainingMeters: remaining,
+        ...(options?.overviewPath ? { overviewPath: options.overviewPath } : {}),
+      },
+      options?.immediate === true,
+    );
   }
 
   function enterStopDwell(
@@ -556,6 +637,32 @@ export function NavigationScreen({
     };
     setNav(arrived);
     publishMeter(meterRef.current, arrived, fixRef.current);
+    void uploadRevisedOverview(updated.id);
+  }
+
+  async function uploadRevisedOverview(sortieId: string): Promise<void> {
+    const origin = fixRef.current;
+    if (!origin) {
+      return;
+    }
+    const result = await requestSortieDrivingRoute(apiUrl, token, sortieId, origin, 0);
+    if (result === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (typeof result !== "object") {
+      return;
+    }
+    const path = overviewPathForUpload("stops-revised", 0, result.path);
+    const current = navRef.current;
+    if (
+      (current.mode !== "guiding" && current.mode !== "arrived") ||
+      current.kind !== "sortie" ||
+      current.sortieId !== sortieId
+    ) {
+      return;
+    }
+    publishMeter(meterRef.current, current, origin, { immediate: true, overviewPath: path });
   }
 
   useEffect(() => {
@@ -597,10 +704,32 @@ export function NavigationScreen({
     };
     setNav(next);
     setRouteEpoch((epoch) => epoch + 1);
-    publishMeter(started, next, origin);
+    publishMeter(started, next, origin, {
+      immediate: true,
+      overviewPath: overviewPathForUpload("guidance-start", next.firstStopPosition, next.route.path),
+    });
     void setActiveSortieObservation(sortieGuide.sortieId);
     onSortieGuideConsumed?.();
   }, [sortieGuide]);
+
+  const accountSortie = accountView?.activity.sortie ?? null;
+  const accountStops = accountSortie ? stopListKey(accountSortie.stops) : "";
+  useEffect(() => {
+    if (!accountSortie) {
+      return;
+    }
+    const current = navRef.current;
+    if ((current.mode !== "guiding" && current.mode !== "arrived") || current.kind !== "sortie") {
+      return;
+    }
+    if (current.sortieId !== accountSortie.id) {
+      return;
+    }
+    if (stopListKey(current.stops) === accountStops) {
+      return;
+    }
+    void uploadRevisedOverview(accountSortie.id);
+  }, [accountSortie, accountStops]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1068,7 +1197,10 @@ export function NavigationScreen({
     };
     setNav(next);
     setRouteEpoch((epoch) => epoch + 1);
-    publishMeter(started, next, origin);
+    publishMeter(started, next, origin, {
+      immediate: true,
+      overviewPath: overviewPathForUpload("guidance-start", next.firstStopPosition, next.route.path),
+    });
     void setActiveSortieObservation(commenced.id);
   }
 
@@ -1109,6 +1241,24 @@ export function NavigationScreen({
     setMeter(emptyMeter());
     meterRef.current = emptyMeter();
     baselineRemainingRef.current = 0;
+    if (meterTimerRef.current) {
+      clearTimeout(meterTimerRef.current);
+      meterTimerRef.current = null;
+    }
+    pendingMeterRef.current = null;
+    meterSentAtRef.current = null;
+    if (
+      (current.mode === "guiding" || current.mode === "arrived") &&
+      current.kind === "sortie" &&
+      current.sortieId
+    ) {
+      const cleared = await clearMeterReading(apiUrl, token);
+      if (cleared === "unauthorized") {
+        endingSortieRef.current = false;
+        onUnauthorized();
+        return;
+      }
+    }
     setNav({ mode: "browse", destination: null, message: null });
     endingSortieRef.current = false;
     onMeterReading?.(null);
