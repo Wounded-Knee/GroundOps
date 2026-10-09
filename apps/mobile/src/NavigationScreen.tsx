@@ -75,6 +75,7 @@ import {
   extendWaitEndsAt,
   hasLaterStop,
   isFinalStop,
+  shouldCompleteOnLeave,
   waitEndsAtFromStop,
 } from "./sortieDwell";
 import type { SortieGuideCommand } from "./sortieGuide";
@@ -201,6 +202,7 @@ export function NavigationScreen({
   const guidedCameraRef = useRef<MapCamera | null>(null);
   const stopAdvanceInFlight = useRef(false);
   const extendWaitInFlight = useRef(false);
+  const endingSortieRef = useRef(false);
   const nextDepartureRef = useRef<NextDeparture | null>(null);
 
   useEffect(() => {
@@ -424,6 +426,9 @@ export function NavigationScreen({
 
   async function runExtendWait(): Promise<void> {
     const current = navRef.current;
+    if (endingSortieRef.current) {
+      return;
+    }
     if (current.mode !== "arrived" || current.kind !== "sortie" || !current.sortieId) {
       return;
     }
@@ -446,13 +451,16 @@ export function NavigationScreen({
     publishMeter(meterRef.current, optimistic, fixRef.current);
     const result = await extendStopWait(apiUrl, token, current.sortieId, current.stopPosition);
     extendWaitInFlight.current = false;
+    if (endingSortieRef.current) {
+      return;
+    }
     if (result === "unauthorized") {
       onUnauthorized();
       return;
     }
     if (typeof result === "object") {
       const existing = navRef.current;
-      if (existing.mode !== "arrived" || existing.kind !== "sortie") {
+      if (endingSortieRef.current || existing.mode !== "arrived" || existing.kind !== "sortie") {
         return;
       }
       const synced: NavState = {
@@ -725,12 +733,19 @@ export function NavigationScreen({
     sendGuidanceCamera(guidanceCameraFrom(fix));
     if (current.mode === "arrived" && current.kind === "sortie") {
       const stop = current.stops[current.stopPosition];
-      if (
-        stop &&
-        (hasLaterStop(current.stops, current.stopPosition) || current.pendingNextLeg) &&
-        distanceMeters(fix, stop) > arrivalMeters
-      ) {
+      const outsideGeofence = stop ? distanceMeters(fix, stop) > arrivalMeters : false;
+      const later = hasLaterStop(current.stops, current.stopPosition);
+      if (stop && (later || current.pendingNextLeg) && outsideGeofence) {
         void startNextLeg();
+      } else if (
+        shouldCompleteOnLeave({
+          isFinal: isFinalStop(current.stops, current.stopPosition),
+          hasLaterStop: later,
+          pendingNextLeg: current.pendingNextLeg,
+          outsideGeofence,
+        })
+      ) {
+        void endGuidance();
       }
       return;
     }
@@ -1062,6 +1077,10 @@ export function NavigationScreen({
   }
 
   async function endGuidance(): Promise<void> {
+    if (endingSortieRef.current) {
+      return;
+    }
+    endingSortieRef.current = true;
     const current = navRef.current;
     const apiUrl = resolveApiUrl();
     if (
@@ -1071,6 +1090,7 @@ export function NavigationScreen({
     ) {
       const completed = await completeSortie(apiUrl, token, current.sortieId);
       if (completed === "unauthorized") {
+        endingSortieRef.current = false;
         onUnauthorized();
         return;
       }
@@ -1090,6 +1110,7 @@ export function NavigationScreen({
     meterRef.current = emptyMeter();
     baselineRemainingRef.current = 0;
     setNav({ mode: "browse", destination: null, message: null });
+    endingSortieRef.current = false;
     onMeterReading?.(null);
     onMeterEnded?.();
   }

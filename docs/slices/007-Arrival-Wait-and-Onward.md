@@ -8,9 +8,9 @@
 
 **Derived from:** Development Methodology (`docs/02-development-methodology.md`) section 6, schedule adherence and driver interaction in Architectural Specification (`docs/01-architecture..md`) sections 8, 11, and 12, the sortie and driver calendar in `docs/03-domain-model.md`, and slices 004–006.
 
-**Purpose:** While guiding a commenced sortie, arrival at the current stop (GPS or manual Arrived) starts an authored-wait countdown on the meter; +1 Minute extends that wait and the schedule; countdown expiry auto-extends the same way rather than advancing; the next leg starts only on GPS leave or Commence. At the final stop the meter pauses with a flashing fare and Onward Destination opens revise with a new stop focused.
+**Purpose:** While guiding a commenced sortie, arrival at the current stop (GPS or manual Arrived) starts an authored-wait countdown on the meter; +1 Minute extends that wait and the schedule; countdown expiry auto-extends the same way rather than advancing; the next leg starts only on GPS leave or Commence. At the final stop the meter pauses with a flashing fare and Onward Destination opens revise with a new stop focused. Leaving that final stop, when no onward stop was added, completes the sortie and returns to browse.
 
-This document is the implementation boundary. Wait ceilings, schedule conflict warnings, auto-complete from GPS, and persisted meter fare totals stay outside.
+This document is the implementation boundary. Wait ceilings, schedule conflict warnings, and persisted meter fare totals stay outside. Leaving the final stop is the only GPS completion.
 
 ---
 
@@ -67,7 +67,9 @@ At an intermediate stop after arrival, and after Onward Destination has added a 
 
 Server departure inference from slice 006 continues via location observations.
 
-End Sortie still completes the sortie as slice 006 defines. GPS alone never completes.
+Leaving the final stop after arrival, when there is no later stop and no pending onward destination, does the same as End Sortie: the wait countdown stops, `POST /sorties/:id/complete` sets `actualEnd`, and Navigation returns to browse. The leave threshold is the same 40 meter arrival geofence. End Sortie remains available before that leave.
+
+At an intermediate stop, or after Onward Destination has added a later stop, GPS leave starts the next leg instead of completing the sortie. Slice 006’s rule that GPS alone does not complete still holds for every other case.
 
 ---
 
@@ -105,6 +107,7 @@ After a successful onward save during guidance, the client updates stops, sets `
 | Dwell (final) | Final paused | Meter paused, fare flashes, Onward Destination |
 | Final paused | Onward paused | Revise adds stop; meter stays paused |
 | Onward paused | Guiding | GPS leave or Commence → new stop route |
+| Final paused | Browse | GPS leave outside the arrival geofence, with no onward stop → complete; countdown stops |
 | Guiding / dwell / paused | Browse | End Sortie → complete |
 
 ---
@@ -153,7 +156,7 @@ This slice publishes no domain events on the bus. A second session sees wait and
 4. Final arrival pauses the meter, flashes the fare, and shows Onward Destination.
 5. Onward revise opens with a new blank stop focused; after save the meter stays paused until GPS leave or Commence.
 6. In-progress revise preserves `actualStart` and unchanged prefix stop actuals; revise when not in progress clears actuals.
-7. Assert arrive is idempotent; End Sortie still completes as slice 006.
+7. Assert arrive is idempotent; End Sortie still completes as slice 006. Leaving the final stop with no onward stop also completes, stops the countdown, and returns to browse.
 8. The flow runs with `pnpm dev:server` and `pnpm dev:mobile` on web (dialog/calendar), and with the local development build on iOS and Android (guidance and meter).
 
 ---
@@ -163,7 +166,7 @@ This slice publishes no domain events on the bus. A second session sees wait and
 - Wait ceilings and usable schedule margin UX
 - Schedule conflict warnings
 - Responsibility and acceptance
-- Auto-complete from GPS
+- Auto-complete from GPS except leaving the final stop with no onward destination
 - Persisted meter fare totals
 - Causal attribution / adherence analytics UI
 - Server push “please complete” notifications

@@ -25,6 +25,19 @@ export function hasLaterStop(stops: SortieStop[], stopPosition: number): boolean
   return stopPosition < stops.length - 1;
 }
 
+/** Leaving the final stop with no onward destination completes the sortie. */
+export function shouldCompleteOnLeave(input: {
+  isFinal: boolean;
+  hasLaterStop: boolean;
+  pendingNextLeg: boolean;
+  outsideGeofence: boolean;
+}): boolean {
+  if (!input.outsideGeofence || input.hasLaterStop || input.pendingNextLeg) {
+    return false;
+  }
+  return input.isFinal;
+}
+
 export function bumpStopWaitMinutes(stops: SortieStop[], stopPosition: number): SortieStop[] {
   return stops.map((stop, index) =>
     index === stopPosition ? { ...stop, waitMinutes: stop.waitMinutes + 1 } : stop,

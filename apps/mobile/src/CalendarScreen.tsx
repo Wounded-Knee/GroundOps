@@ -715,14 +715,14 @@ export function CalendarScreen({
                           />
                         );
                       })}
+                      {sameLocalDay(day, now) ? (
+                        <View pointerEvents="none" style={[styles.nowLine, { top: nowLineTop(now, hourPx) - nowLineHalf }]}>
+                          <View style={styles.nowDot} />
+                          <View style={styles.nowStroke} />
+                        </View>
+                      ) : null}
                     </View>
                   ))}
-                  {days.some((day) => sameLocalDay(day, now)) ? (
-                    <View pointerEvents="none" style={[styles.nowLine, { top: nowLineTop(now, hourPx) - nowLineHalf }]}>
-                      <View style={styles.nowDot} />
-                      <View style={styles.nowStroke} />
-                    </View>
-                  ) : null}
                 </View>
               </ScrollView>
             </View>
@@ -1198,7 +1198,7 @@ function createStyles(colors: ThemeColors) {
     },
     nowLine: {
       position: "absolute",
-      left: 44,
+      left: 0,
       right: 0,
       flexDirection: "row",
       alignItems: "center",

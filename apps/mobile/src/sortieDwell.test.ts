@@ -7,6 +7,7 @@ import {
   extendWaitEndsAt,
   hasLaterStop,
   isFinalStop,
+  shouldCompleteOnLeave,
   waitEndsAtFromStop,
   waitExtendMs,
 } from "./sortieDwell";
@@ -43,5 +44,44 @@ describe("sortieDwell", () => {
     assert.equal(hasLaterStop(stops, 0), true);
     assert.equal(isFinalStop(stops, 0), false);
     assert.equal(isFinalStop(stops, 1), true);
+  });
+
+  it("completes only when leaving the final stop with no onward destination", () => {
+    assert.equal(
+      shouldCompleteOnLeave({
+        isFinal: true,
+        hasLaterStop: false,
+        pendingNextLeg: false,
+        outsideGeofence: true,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldCompleteOnLeave({
+        isFinal: true,
+        hasLaterStop: false,
+        pendingNextLeg: false,
+        outsideGeofence: false,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldCompleteOnLeave({
+        isFinal: false,
+        hasLaterStop: true,
+        pendingNextLeg: false,
+        outsideGeofence: true,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldCompleteOnLeave({
+        isFinal: true,
+        hasLaterStop: true,
+        pendingNextLeg: true,
+        outsideGeofence: true,
+      }),
+      false,
+    );
   });
 });
