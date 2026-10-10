@@ -28,3 +28,7 @@ pnpm dev:mobile
 Server health: `http://localhost:3000/health`
 
 The mobile app reads that endpoint using `EXPO_PUBLIC_API_URL` (default `http://localhost:3000`).
+
+## Cloud
+
+The API can run on AWS. GitHub Actions tests this repo and deploys `main`. Setup, secrets, and the health URL are in [docs/cloud.md](docs/cloud.md).
