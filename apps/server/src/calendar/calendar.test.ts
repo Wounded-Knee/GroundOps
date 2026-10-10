@@ -935,6 +935,84 @@ describe("calendar", () => {
     }
   });
 
+  it("recomputes a future C-to-D start when the vehicle moves to A and then B", async () => {
+    const person = await createSession({
+      sub: `calendar-line-cdb-${crypto.randomUUID()}`,
+      displayName: "Line CDB",
+      email: null,
+    });
+    const calls: DriveCall[] = [];
+    const startAtC = new Date(lineT.getTime() - hopSeconds * 1000).toISOString();
+    const startAtA = new Date(lineT.getTime() - 3 * hopSeconds * 1000).toISOString();
+    const startAtB = new Date(lineT.getTime() - 2 * hopSeconds * 1000).toISOString();
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointC);
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        lookupAddress: async () => "Driver location",
+        driveDuration: lineDriveDuration(calls),
+      };
+      const authored = await authorSortie(
+        person.user,
+        {
+          label: "C to D",
+          arrivalAt: lineT,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointD, "D", true)],
+        },
+        deps,
+      );
+      assert.equal(typeof authored, "object");
+      if (typeof authored !== "object") {
+        return;
+      }
+      assert.equal(authored.scheduledStart, startAtC);
+
+      const movedToA = await recordObservation(
+        person.user,
+        {
+          observedAt: new Date("2026-09-01T13:00:00.000Z"),
+          latitude: pointA.latitude,
+          longitude: pointA.longitude,
+          accuracyMeters: 10,
+        },
+        deps,
+      );
+      assert.equal(movedToA, "ok");
+      const atA = await readCalendar(person.user, scheduleNow, new Date("2026-10-01T00:00:00.000Z"));
+      assert.equal(Array.isArray(atA), true);
+      if (!Array.isArray(atA)) {
+        return;
+      }
+      assert.equal(atA[0]?.scheduledStart, startAtA);
+      assert.ok(Date.parse(startAtA) < Date.parse(startAtC));
+
+      const movedToB = await recordObservation(
+        person.user,
+        {
+          observedAt: new Date("2026-09-01T14:00:00.000Z"),
+          latitude: pointB.latitude,
+          longitude: pointB.longitude,
+          accuracyMeters: 10,
+        },
+        deps,
+      );
+      assert.equal(movedToB, "ok");
+      const atB = await readCalendar(person.user, scheduleNow, new Date("2026-10-01T00:00:00.000Z"));
+      assert.equal(Array.isArray(atB), true);
+      if (!Array.isArray(atB)) {
+        return;
+      }
+      assert.equal(atB[0]?.scheduledStart, startAtB);
+      assert.equal(Date.parse(startAtB) - Date.parse(startAtA), hopSeconds * 1000);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
   it("recomputes Stan's approach from Brittany's destination D on the A–E line", async () => {
     const person = await createSession({
       sub: `calendar-line-stan-${crypto.randomUUID()}`,
