@@ -48,3 +48,12 @@ export function meterUpdated(userId: string, meter: MeterReading, recordedAt = n
 export function meterCleared(userId: string, recordedAt = new Date().toISOString()): RealtimeEnvelope {
   return { id: crypto.randomUUID(), type: "meter.cleared", userId, recordedAt };
 }
+
+export function availabilityUpdated(
+  userId: string,
+  available: boolean,
+  current: boolean,
+  recordedAt = new Date().toISOString(),
+): RealtimeEnvelope {
+  return { id: crypto.randomUUID(), type: "availability.updated", userId, recordedAt, available, current };
+}

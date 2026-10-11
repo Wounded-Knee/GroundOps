@@ -42,11 +42,24 @@ type RealtimeBase = {
   recordedAt: string;
 };
 
+export type AvailabilityResponse = {
+  asOf: string;
+  /** The driver's choice. */
+  available: boolean;
+  /** True when the choice is available and the check-in is at most five minutes old. */
+  current: boolean;
+};
+
+export type SetAvailabilityRequest = {
+  available: boolean;
+};
+
 export type RealtimeEnvelope =
   | (RealtimeBase & { type: "sortie.updated"; sortie: Sortie })
   | (RealtimeBase & { type: "location.updated"; location: LocationFix })
   | (RealtimeBase & { type: "meter.updated"; meter: MeterReading })
-  | (RealtimeBase & { type: "meter.cleared" });
+  | (RealtimeBase & { type: "meter.cleared" })
+  | (RealtimeBase & { type: "availability.updated"; available: boolean; current: boolean });
 
 export type User = {
   id: string;

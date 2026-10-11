@@ -13,6 +13,8 @@ import { registerCalendarRoutes } from "./calendar/http.js";
 import { registerLocalCors } from "./cors.js";
 import { registerPlatformRoutes } from "./platform/http.js";
 import { registerSessionRoutes } from "./routes.js";
+import { registerAvailabilityRoutes } from "./availability/http.js";
+import { startAvailabilityLapseInterval } from "./availability/availability.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const host = "0.0.0.0";
@@ -32,6 +34,7 @@ await migrateDatabase();
 registerLocalCors(app);
 await app.register(websocket);
 registerSessionRoutes(app);
+registerAvailabilityRoutes(app);
 registerPlatformRoutes(app);
 registerCalendarRoutes(app);
 registerRoutingRoutes(app, {
@@ -47,6 +50,9 @@ registerRoutingRoutes(app, {
   lookupAddress,
 });
 registerGateway(app, bus.subscription);
+const stopAvailabilityLapse = startAvailabilityLapseInterval((error) => {
+  app.log.error({ err: error }, "availability lapse failed");
+});
 
 app.get("/health", async (_request, reply) => {
   let postgres: "up" | "down" = "down";
@@ -63,6 +69,7 @@ app.get("/health", async (_request, reply) => {
 });
 
 async function shutdown(): Promise<void> {
+  stopAvailabilityLapse();
   await app.close();
   await bus.connection.drain();
   await closeDatabase();

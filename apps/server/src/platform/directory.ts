@@ -4,6 +4,7 @@ import { db } from "../db.js";
 import {
   company,
   driver,
+  driverAvailabilityEvent,
   driverCompany,
   driverMeterReading,
   driverTariff,
@@ -197,6 +198,7 @@ export async function deleteDirectoryUser(callerId: string, userId: string): Pro
       return "in-use";
     }
     if (driverRow) {
+      await tx.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, driverRow.id));
       await tx.delete(driverCompany).where(eq(driverCompany.driverId, driverRow.id));
       await tx.delete(driver).where(eq(driver.id, driverRow.id));
     }

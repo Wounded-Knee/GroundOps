@@ -15,7 +15,18 @@ import { clearCalendarCache } from "./src/calendarCache";
 import { authorSortie, ensureCurrentDriver, readActivity, reviseSortie } from "./src/calendarClient";
 import { applyEnvelope, applySnapshot, emptyActivity, readRealtimeEnvelope, type AccountActivity } from "./src/liveActivity";
 import { formatUsPhone } from "./src/calendarTime";
-import { MeterStrip, type MeterDisplay } from "./src/MeterStrip";
+import { AppWideStatus } from "./src/AppWideStatus";
+import type { MeterDisplay } from "./src/MeterStrip";
+import {
+  applyAvailabilityEnvelope,
+  applyAvailabilitySnapshot,
+  availabilityCheckInMs,
+  deliverAvailabilityEnvelope,
+  emptyAvailability,
+  subscribeAvailability,
+  type AvailabilityView,
+} from "./src/availability";
+import { checkInAvailability, putAvailability, readAvailability } from "./src/availabilityClient";
 import { NavigationScreen } from "./src/NavigationScreen";
 import type { SortieGuideCommand } from "./src/sortieGuide";
 import { SettingsScreen } from "./src/SettingsScreen";
@@ -98,6 +109,11 @@ function AppContent() {
   const [calendarScopeCycle, setCalendarScopeCycle] = useState(0);
   const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
+  const [availability, setAvailability] = useState<AvailabilityView>(emptyAvailability);
+  const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
+  const [availabilityBusy, setAvailabilityBusy] = useState(false);
+  const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
+  const toggleAvailabilityRef = useRef<() => void>(() => undefined);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
   const endGuidanceRef = useRef<(() => void) | null>(null);
   const meterArriveRef = useRef<(() => void) | null>(null);
@@ -232,6 +248,10 @@ function AppContent() {
         if (!envelope) {
           return;
         }
+        if (envelope.type === "availability.updated") {
+          deliverAvailabilityEnvelope(envelope);
+          return;
+        }
         if (!ready) {
           buffer.push(envelope);
           return;
@@ -267,6 +287,10 @@ function AppContent() {
       ready = true;
       let calendarChanged = false;
       for (const envelope of buffer) {
+        if (envelope.type === "availability.updated") {
+          deliverAvailabilityEnvelope(envelope);
+          continue;
+        }
         const applied = applyEnvelope(state, envelope);
         state = applied.state;
         calendarChanged = calendarChanged || applied.calendarChanged;
@@ -308,6 +332,133 @@ function AppContent() {
         clearTimeout(retryTimer);
       }
       socket?.close();
+    };
+  }, [sessionToken]);
+
+  useEffect(() => {
+    if (!sessionToken) {
+      setAvailability(emptyAvailability);
+      setAvailabilityLoaded(false);
+      setAvailabilityBusy(false);
+      setAvailabilityMessage(null);
+      toggleAvailabilityRef.current = () => undefined;
+      return;
+    }
+
+    const token = sessionToken;
+    let cancelled = false;
+    let loaded = false;
+    let saving = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const pending: Parameters<typeof applyAvailabilityEnvelope>[1][] = [];
+    const view = { ...emptyAvailability };
+
+    function stopPings(): void {
+      if (timer) {
+        clearInterval(timer);
+      }
+      timer = null;
+    }
+
+    function startPings(): void {
+      if (timer) {
+        return;
+      }
+      timer = setInterval(() => {
+        void ping();
+      }, availabilityCheckInMs);
+      void ping();
+    }
+
+    function remember(next: AvailabilityView): void {
+      view.asOf = next.asOf;
+      view.available = next.available;
+      view.current = next.current;
+      setAvailability({ ...view });
+      if (next.available) {
+        startPings();
+      } else {
+        stopPings();
+      }
+    }
+
+    async function ping(): Promise<void> {
+      const result = await checkInAvailability(apiUrl, token);
+      if (cancelled) {
+        return;
+      }
+      if (result === "unauthorized") {
+        stopPings();
+        await onSessionRejected();
+        return;
+      }
+      if (result === "unreachable") {
+        return;
+      }
+      remember(applyAvailabilitySnapshot(view, result));
+    }
+
+    toggleAvailabilityRef.current = () => {
+      if (!loaded || saving) {
+        return;
+      }
+      saving = true;
+      setAvailabilityBusy(true);
+      setAvailabilityMessage(null);
+      void (async () => {
+        const result = await putAvailability(apiUrl, token, !view.available);
+        if (cancelled) {
+          return;
+        }
+        saving = false;
+        setAvailabilityBusy(false);
+        if (result === "unauthorized") {
+          await onSessionRejected();
+          return;
+        }
+        if (result === "unreachable") {
+          setAvailabilityMessage("Availability was not saved.");
+          return;
+        }
+        remember(applyAvailabilitySnapshot(view, result));
+      })();
+    };
+
+    const unsubscribe = subscribeAvailability((envelope) => {
+      if (!loaded) {
+        pending.push(envelope);
+        return;
+      }
+      remember(applyAvailabilityEnvelope(view, envelope));
+    });
+
+    void (async () => {
+      const result = await readAvailability(apiUrl, token);
+      if (cancelled) {
+        return;
+      }
+      if (result === "unauthorized") {
+        await onSessionRejected();
+        return;
+      }
+      if (result === "unreachable") {
+        setAvailabilityMessage("Availability could not be loaded.");
+        return;
+      }
+      loaded = true;
+      setAvailabilityLoaded(true);
+      remember(result);
+      for (const envelope of pending) {
+        remember(applyAvailabilityEnvelope(view, envelope));
+      }
+      pending.length = 0;
+    })();
+
+    return () => {
+      cancelled = true;
+      stopPings();
+      unsubscribe();
+      toggleAvailabilityRef.current = () => undefined;
     };
   }, [sessionToken]);
 
@@ -513,20 +664,26 @@ function AppContent() {
   }
 
   const signedIn = phase.status === "signed-in";
-  const meterOverlaysMap = destination === "navigation" && compose === null;
-  const meterStrip =
-    meterReading ? (
-      <MeterStrip
-        reading={meterReading}
-        onEndSortie={() => {
-          endGuidanceRef.current?.();
-        }}
-        onArrive={() => meterArriveRef.current?.()}
-        onPlusOneMinute={() => meterPlusOneRef.current?.()}
-        onOnwardDestination={() => meterOnwardRef.current?.()}
-        onCommenceNext={() => meterCommenceRef.current?.()}
-      />
-    ) : null;
+  const statusOverlaysMap = destination === "navigation" && compose === null;
+  const appWideStatus = (
+    <AppWideStatus
+      reading={meterReading}
+      current={availability.current}
+      loaded={availabilityLoaded}
+      busy={availabilityBusy}
+      message={availabilityMessage}
+      onToggleAvailability={() => {
+        toggleAvailabilityRef.current();
+      }}
+      onEndSortie={() => {
+        endGuidanceRef.current?.();
+      }}
+      onArrive={() => meterArriveRef.current?.()}
+      onPlusOneMinute={() => meterPlusOneRef.current?.()}
+      onOnwardDestination={() => meterOnwardRef.current?.()}
+      onCommenceNext={() => meterCommenceRef.current?.()}
+    />
+  );
   const overlay = (
     <VisualAlert
       color={visualAlert.color}
@@ -623,13 +780,13 @@ function AppContent() {
                   onSave={(body) => void saveCompose(phase.token, body)}
                 />
               ) : null}
-              {meterOverlaysMap && meterStrip ? (
+              {statusOverlaysMap ? (
                 <View style={styles.meterOverlay} pointerEvents="box-none">
-                  {meterStrip}
+                  {appWideStatus}
                 </View>
               ) : null}
             </View>
-            {!meterOverlaysMap ? meterStrip : null}
+            {!statusOverlaysMap ? appWideStatus : null}
             <BottomNav
               destination={destination}
               composeOpen={compose !== null}

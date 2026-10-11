@@ -62,7 +62,22 @@ export const driver = pgTable("driver", {
     .notNull()
     .unique()
     .references(() => user.id),
+  /** The driver's choice. A missed check-in does not clear it. */
+  available: boolean("available").notNull().default(false),
+  /** Last client check-in while available. Null when the driver is not available. */
+  availabilityCheckedAt: timestamp("availability_checked_at", { withTimezone: true, mode: "date" }),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+/** Choice changes, a lapse, or a check-in that restores reachability. */
+export const driverAvailabilityEvent = pgTable("driver_availability_event", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  driverId: uuid("driver_id")
+    .notNull()
+    .references(() => driver.id),
+  available: boolean("available").notNull(),
+  current: boolean("current").notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 
 /** Company of record for sorties this driver authors. */
@@ -210,6 +225,7 @@ export const schema = {
   userCredential,
   session,
   driver,
+  driverAvailabilityEvent,
   company,
   facility,
   driverCompany,

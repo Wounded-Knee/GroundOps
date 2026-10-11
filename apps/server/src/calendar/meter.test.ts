@@ -9,6 +9,7 @@ import { createSession } from "../identity/sessions.js";
 import {
   company,
   driver,
+  driverAvailabilityEvent,
   driverCompany,
   driverMeterReading,
   driverTariff,
@@ -230,6 +231,7 @@ async function removeUser(userId: string): Promise<void> {
       .select({ companyId: driverCompany.companyId })
       .from(driverCompany)
       .where(eq(driverCompany.driverId, row.id));
+    await db.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, row.id));
     await db.delete(driverCompany).where(eq(driverCompany.driverId, row.id));
     await db.delete(driver).where(eq(driver.id, row.id));
     for (const link of links) {

@@ -18,6 +18,20 @@ describe("gateway audience", () => {
     assert.deepEqual(sent.b, []);
   });
 
+  it("delivers availability only to that driver's open sockets", () => {
+    const sent: Record<string, string[]> = { a: [], b: [] };
+    deliverEnvelope(
+      [
+        { userId: "a", readyState: socketOpen, send: (data) => sent.a?.push(data) },
+        { userId: "b", readyState: socketOpen, send: (data) => sent.b?.push(data) },
+      ],
+      { userId: "a" },
+      "{\"type\":\"availability.updated\"}",
+    );
+    assert.deepEqual(sent.a, ["{\"type\":\"availability.updated\"}"]);
+    assert.deepEqual(sent.b, []);
+  });
+
   it("does not keep a socket when the session is missing or revoked", () => {
     assert.equal(sessionMayHoldSocket(null, socketOpen), false);
     assert.equal(sessionMayHoldSocket({ sessionId: "s" }, 3), false);

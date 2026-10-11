@@ -38,6 +38,9 @@ export function applySnapshot(activity: ActivityResponse): AccountActivity {
 
 /** Drops an envelope at or before the snapshot, and advances asOf when one is applied. */
 export function applyEnvelope(state: AccountActivity, envelope: RealtimeEnvelope): EnvelopeApply {
+  if (envelope.type === "availability.updated") {
+    return { state, calendarChanged: false };
+  }
   if (envelope.recordedAt <= state.asOf) {
     return { state, calendarChanged: false };
   }
@@ -80,6 +83,20 @@ export function readRealtimeEnvelope(value: unknown): RealtimeEnvelope | null {
   const record = value as Record<string, unknown>;
   if (typeof record.id !== "string" || typeof record.userId !== "string" || typeof record.recordedAt !== "string") {
     return null;
+  }
+  if (
+    record.type === "availability.updated" &&
+    typeof record.available === "boolean" &&
+    typeof record.current === "boolean"
+  ) {
+    return {
+      id: record.id,
+      userId: record.userId,
+      recordedAt: record.recordedAt,
+      type: "availability.updated",
+      available: record.available,
+      current: record.current,
+    };
   }
   if (record.type === "meter.cleared") {
     return { id: record.id, userId: record.userId, recordedAt: record.recordedAt, type: "meter.cleared" };

@@ -7,7 +7,6 @@ import {
   formatMoney,
   formatWaitMinutes,
   meterCharges,
-  progressFraction,
 } from "./meter";
 import { countdownRemainingSeconds } from "./sortieDwell";
 import { useTheme } from "./ThemeProvider";
@@ -61,8 +60,6 @@ export function MeterStrip({
     reading.waitSeconds,
     reading.remainingMeters,
   );
-  const tripFill = progressFraction(reading.remainingMeters, reading.baselineRemainingMeters);
-  const turnFill = progressFraction(reading.turnRemainingMeters, reading.turnBaselineMeters);
   const actualFare = charges ? formatMoney(charges.totalCents) : "—";
   const estimatedFare = charges ? formatMoney(charges.estimateCents) : "—";
   const estimatedMiles =
@@ -209,12 +206,6 @@ export function MeterStrip({
               ) : null}
             </View>
           ) : null}
-          <View style={styles.turnTrack}>
-            <View style={[styles.barFill, { width: `${turnFill * 100}%` }]} />
-          </View>
-          <View style={styles.tripTrack}>
-            <View style={[styles.barFill, { width: `${tripFill * 100}%` }]} />
-          </View>
         </>
       )}
     </Pressable>
@@ -370,21 +361,6 @@ function createStyles(colors: ThemeColors) {
       color: "#fff",
       fontSize: 14,
       fontWeight: "700",
-    },
-    turnTrack: {
-      height: 8,
-      backgroundColor: colors.accentSoft,
-      overflow: "hidden",
-    },
-    tripTrack: {
-      height: 16,
-      backgroundColor: colors.accentSoft,
-      overflow: "hidden",
-    },
-    barFill: {
-      ...StyleSheet.absoluteFill,
-      backgroundColor: colors.accent,
-      width: "0%",
     },
   });
 }
