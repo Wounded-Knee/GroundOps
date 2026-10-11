@@ -82,7 +82,7 @@ The role trusts only `repo:Wounded-Knee/GroundOps:ref:refs/heads/main`.
 - `pnpm typecheck`
 - `pnpm --filter @groundops/server test`
 
-Those tests do not open Postgres or NATS.
+Those tests do not open Postgres or NATS. Sessions, directory, calendar, meter, and activity checks use the local database and run with `pnpm --filter @groundops/server test:db`.
 
 ## Deploy
 
