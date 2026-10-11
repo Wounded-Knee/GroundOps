@@ -6,6 +6,8 @@ import type {
   MeterReading,
   ReplaceMeterReadingRequest,
   Sortie,
+  SortiePreviewRequest,
+  SortiePreviewResponse,
   SortieStop,
   SortieWriteRequest,
   Tariff,
@@ -78,6 +80,46 @@ export async function reviseSortie(
   body: SortieWriteRequest,
 ): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
   return writeSortie(apiUrl, token, "PATCH", `/sorties/${sortieId}`, body);
+}
+
+export function scheduleConflictMessage(labels: string[]): string | null {
+  if (labels.length === 0) {
+    return null;
+  }
+  return `This plan conflicts with ${labels.join(", ")}.`;
+}
+
+export async function previewSortie(
+  apiUrl: string,
+  token: string,
+  body: SortiePreviewRequest,
+): Promise<SortiePreviewResponse | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+  try {
+    const response = await fetch(`${apiUrl}/sorties/preview`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.status === 401) {
+      return "unauthorized";
+    }
+    if (response.status === 409 && (await readError(response)) === "no location") {
+      return "no-location";
+    }
+    if (response.status === 400 || response.status === 409) {
+      return "rejected";
+    }
+    if (!response.ok) {
+      return "unreachable";
+    }
+    const parsed: unknown = await response.json();
+    return isPreviewResponse(parsed) ? parsed : "unreachable";
+  } catch {
+    return "unreachable";
+  }
 }
 
 export async function commenceSortie(
@@ -251,6 +293,26 @@ function isDriver(value: unknown): value is Driver {
   }
   const record = value as Record<string, unknown>;
   return typeof record.id === "string" && record.id.length > 0 && typeof record.userId === "string";
+}
+
+function isPreviewResponse(value: unknown): value is SortiePreviewResponse {
+  if (typeof value !== "object" || value === null || !("endangered" in value)) {
+    return false;
+  }
+  const endangered = value.endangered;
+  return (
+    Array.isArray(endangered) &&
+    endangered.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        "id" in item &&
+        "label" in item &&
+        typeof item.id === "string" &&
+        item.id.length > 0 &&
+        typeof item.label === "string",
+    )
+  );
 }
 
 function isSortie(value: unknown): value is Sortie {

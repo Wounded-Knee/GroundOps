@@ -5,6 +5,7 @@ import {
   type GeoCoordinate,
   type LocationFix,
   type Sortie,
+  type SortiePreviewResponse,
   type SortieStop,
   type User,
 } from "@groundops/contracts";
@@ -44,6 +45,8 @@ const sortieStopArrivalAsserted = "sortie.stop_arrival_asserted";
 const sortieStopDepartureInferred = "sortie.stop_departure_inferred";
 /** Matches mobile guidance arrivalMeters. */
 const stopArrivalMeters = 40;
+/** Sorts after any saved sortie id when two arrivals are equal. */
+const previewPlaceId = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 
 export type SortieInput = {
   label: string;
@@ -120,6 +123,17 @@ type OpenSortie = StoredSortie & {
   scheduleOriginLatitude: number | null;
   scheduleOriginLongitude: number | null;
   scheduleFailedAt: Date | null;
+};
+
+type HeldWindow = {
+  id: string;
+  label: string;
+  start: Date;
+  end: Date;
+  cachedStart: Date;
+  cachedEnd: Date;
+  changed: boolean;
+  failed: boolean;
 };
 
 /** Finds the user's driver, or creates the driver, company, and relationship together. */
@@ -238,6 +252,136 @@ export async function authorSortie(
     await alignFollowingSorties(author.id, person.id, deps);
   }
   return authored;
+}
+
+export async function previewSortie(
+  person: User,
+  input: SortieInput,
+  sortieId: string | null,
+  deps: ScheduleDeps = defaultScheduleDeps,
+): Promise<SortiePreviewResponse | "invalid" | "no-driver" | "no-location"> {
+  const valid = validSortie(input);
+  if (!valid) {
+    return "invalid";
+  }
+  const author = await findDriver(db, person.id);
+  if (!author) {
+    return "no-driver";
+  }
+
+  const now = deps.now();
+  const gps = await latestObservation(db, author.id);
+  const places = await driverPlaces(author.id);
+  const position: ApproachOrigin | null =
+    valid.arrivalAt === null
+      ? gps
+        ? { ...gps, label: null }
+        : null
+      : approachOrigin(places, valid.arrivalAt, sortieId, gps);
+  if (!position) {
+    return "no-location";
+  }
+
+  const draftWindow = await computeWindow(position, valid.stops, valid.arrivalAt, now, deps.driveDuration);
+  if (draftWindow === "failed") {
+    return { endangered: [] };
+  }
+
+  const lastStop = valid.stops[valid.stops.length - 1];
+  if (!lastStop) {
+    return { endangered: [] };
+  }
+  const draftPlace: SortiePlace = {
+    id: sortieId ?? previewPlaceId,
+    arrivalAt: draftWindow.arrivalAt,
+    destination: { latitude: lastStop.latitude, longitude: lastStop.longitude },
+    destinationLabel: lastStop.label,
+  };
+  const hypothetical = places.filter((place) => place.id !== draftPlace.id);
+  hypothetical.push(draftPlace);
+
+  const rows = (await openSorties(author.id, now)).filter((row) => row.id !== sortieId);
+  const stopLists = await stopsBySortie(
+    db,
+    rows.map((row) => row.id),
+  );
+  const held: HeldWindow[] = [];
+  for (const row of rows) {
+    const stops = stopLists.get(row.id) ?? [];
+    const cachedStart = row.scheduledStart;
+    const cachedEnd = row.scheduledEnd;
+    const base = {
+      id: row.id,
+      label: warningLabel(row.label, stops),
+      cachedStart,
+      cachedEnd,
+    };
+    if (row.actualStart !== null) {
+      held.push({ ...base, start: cachedStart, end: cachedEnd, changed: false, failed: false });
+      continue;
+    }
+    const origin = approachOrigin(hypothetical, row.arrivalAt, row.id, gps);
+    const anchor = origin ? anchorOf(row) : null;
+    const withinBackoff =
+      row.scheduleFailedAt !== null && now.getTime() - row.scheduleFailedAt.getTime() < scheduleBackoffMs;
+    if (
+      !origin ||
+      (anchor && samePlace(anchor, origin)) ||
+      withinBackoff ||
+      (origin.label !== null && !row.arrivalAuthored)
+    ) {
+      held.push({ ...base, start: cachedStart, end: cachedEnd, changed: false, failed: false });
+      continue;
+    }
+    const window = await computeWindow(
+      origin,
+      stops,
+      row.arrivalAuthored ? row.arrivalAt : null,
+      now,
+      deps.driveDuration,
+    );
+    if (window === "failed") {
+      held.push({ ...base, start: cachedStart, end: cachedEnd, changed: true, failed: true });
+      continue;
+    }
+    held.push({
+      ...base,
+      start: window.scheduledStart,
+      end: window.scheduledEnd,
+      changed:
+        window.scheduledStart.getTime() !== cachedStart.getTime() ||
+        window.scheduledEnd.getTime() !== cachedEnd.getTime(),
+      failed: false,
+    });
+  }
+
+  const endangered = new Set<string>();
+  for (const item of held) {
+    if (item.failed || windowsOverlap(item.start, item.end, draftWindow.scheduledStart, draftWindow.scheduledEnd)) {
+      endangered.add(item.id);
+    }
+  }
+  for (let leftIndex = 0; leftIndex < held.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < held.length; rightIndex += 1) {
+      const left = held[leftIndex];
+      const right = held[rightIndex];
+      if (!left || !right || left.failed || right.failed || (!left.changed && !right.changed)) {
+        continue;
+      }
+      const overlappedBefore = windowsOverlap(left.cachedStart, left.cachedEnd, right.cachedStart, right.cachedEnd);
+      if (!overlappedBefore && windowsOverlap(left.start, left.end, right.start, right.end)) {
+        endangered.add(left.id);
+        endangered.add(right.id);
+      }
+    }
+  }
+
+  return {
+    endangered: held
+      .filter((item) => endangered.has(item.id))
+      .sort((left, right) => left.start.getTime() - right.start.getTime() || left.id.localeCompare(right.id))
+      .map((item) => ({ id: item.id, label: item.label })),
+  };
 }
 
 export async function reviseSortie(
@@ -1143,6 +1287,18 @@ async function driverPlaces(driverId: string): Promise<SortiePlace[]> {
 
 function samePlace(left: GeoCoordinate, right: GeoCoordinate): boolean {
   return left.latitude === right.latitude && left.longitude === right.longitude;
+}
+
+function warningLabel(label: string, stops: SortieStop[]): string {
+  const trimmed = label.trim();
+  if (trimmed.length > 0) {
+    return trimmed;
+  }
+  return stops[0]?.label ?? "";
+}
+
+function windowsOverlap(start: Date, end: Date, otherStart: Date, otherEnd: Date): boolean {
+  return start.getTime() < otherEnd.getTime() && otherStart.getTime() < end.getTime();
 }
 
 async function latestObservation(tx: Database, driverId: string): Promise<GeoCoordinate | null> {

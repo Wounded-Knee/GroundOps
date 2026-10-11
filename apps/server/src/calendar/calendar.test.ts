@@ -26,6 +26,7 @@ import {
   completeSortie,
   ensureDriver,
   extendStopWait,
+  previewSortie,
   readCalendar,
   recordObservation,
   reviseSortie,
@@ -295,6 +296,7 @@ describe("calendar", () => {
       { method: "POST" as const, url: "/drivers/current" },
       { method: "GET" as const, url: "/calendar?from=2026-09-01T00:00:00.000Z&to=2026-10-01T00:00:00.000Z" },
       { method: "POST" as const, url: "/sorties" },
+      { method: "POST" as const, url: "/sorties/preview" },
       { method: "PATCH" as const, url: `/sorties/${crypto.randomUUID()}` },
       { method: "POST" as const, url: "/location-observations" },
     ];
@@ -1551,6 +1553,249 @@ describe("calendar", () => {
         .where(eq(sortie.id, authored.id));
       assert.equal(kept[0]?.scheduledStart.toISOString(), commenced.scheduledStart);
       assert.equal(kept[0]?.actualStart?.toISOString(), commenced.actualStart);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("lists a later sortie whose arrival no longer fits the draft", async () => {
+    const person = await createSession({
+      sub: `calendar-preview-tight-${crypto.randomUUID()}`,
+      displayName: "Preview tight",
+      email: null,
+    });
+    const calls: DriveCall[] = [];
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointA);
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        lookupAddress: async () => "Driver location",
+        driveDuration: lineDriveDuration(calls),
+      };
+      const stan = await authorSortie(
+        person.user,
+        {
+          label: "Stan",
+          arrivalAt: new Date(lineT.getTime() + 40 * 60 * 1000),
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointA, "A", false), lineStop(pointB, "B", true)],
+        },
+        deps,
+      );
+      assert.equal(typeof stan, "object");
+      if (typeof stan !== "object") {
+        return;
+      }
+      const before = await eventsFor(stan.id);
+      const preview = await previewSortie(
+        person.user,
+        {
+          label: "Brittany",
+          arrivalAt: new Date(lineT.getTime() + 20 * 60 * 1000),
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
+        },
+        null,
+        deps,
+      );
+      assert.deepEqual(preview, { endangered: [{ id: stan.id, label: "Stan" }] });
+      const after = await eventsFor(stan.id);
+      assert.deepEqual(after, before);
+      const driverId = (await ensureDriver(person.user)).id;
+      const stored = await db.select({ id: sortie.id }).from(sortie).where(eq(sortie.authorDriverId, driverId));
+      assert.deepEqual(
+        stored.map((row) => row.id),
+        [stan.id],
+      );
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("does not list a later sortie that still fits around the draft", async () => {
+    const person = await createSession({
+      sub: `calendar-preview-gap-${crypto.randomUUID()}`,
+      displayName: "Preview gap",
+      email: null,
+    });
+    const calls: DriveCall[] = [];
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointA);
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        lookupAddress: async () => "Driver location",
+        driveDuration: lineDriveDuration(calls),
+      };
+      const stan = await authorSortie(
+        person.user,
+        {
+          label: "Stan",
+          arrivalAt: new Date(lineT.getTime() + 120 * 60 * 1000),
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointA, "A", false), lineStop(pointB, "B", true)],
+        },
+        deps,
+      );
+      assert.equal(typeof stan, "object");
+      if (typeof stan !== "object") {
+        return;
+      }
+      const preview = await previewSortie(
+        person.user,
+        {
+          label: "Brittany",
+          arrivalAt: new Date(lineT.getTime() + 20 * 60 * 1000),
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
+        },
+        null,
+        deps,
+      );
+      assert.deepEqual(preview, { endangered: [] });
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("does not list the sortie being revised", async () => {
+    const person = await createSession({
+      sub: `calendar-preview-revise-${crypto.randomUUID()}`,
+      displayName: "Preview revise",
+      email: null,
+    });
+    const calls: DriveCall[] = [];
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointA);
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        lookupAddress: async () => "Driver location",
+        driveDuration: lineDriveDuration(calls),
+      };
+      const stan = await authorSortie(
+        person.user,
+        {
+          label: "",
+          arrivalAt: new Date(lineT.getTime() + 40 * 60 * 1000),
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointA, "A", false), lineStop(pointB, "B", true)],
+        },
+        deps,
+      );
+      const brittany = await authorSortie(
+        person.user,
+        {
+          label: "Brittany",
+          arrivalAt: new Date(lineT.getTime() + 20 * 60 * 1000),
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
+        },
+        deps,
+      );
+      assert.equal(typeof stan, "object");
+      assert.equal(typeof brittany, "object");
+      if (typeof stan !== "object" || typeof brittany !== "object") {
+        return;
+      }
+      const preview = await previewSortie(
+        person.user,
+        {
+          label: "Brittany",
+          arrivalAt: new Date(lineT.getTime() + 20 * 60 * 1000),
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
+        },
+        brittany.id,
+        deps,
+      );
+      assert.deepEqual(preview, { endangered: [{ id: stan.id, label: "A" }] });
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("returns no endangered sorties when the draft itself has no route", async () => {
+    const person = await createSession({
+      sub: `calendar-preview-unrouted-${crypto.randomUUID()}`,
+      displayName: "Preview unrouted",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointA);
+      const deps: ScheduleDeps = {
+        now: () => scheduleNow,
+        lookupAddress: async () => "Driver location",
+        driveDuration: async (origin, destination) => (destination.latitude === 12 ? "failed" : 600),
+      };
+      const stan = await authorSortie(
+        person.user,
+        {
+          label: "Stan",
+          arrivalAt: new Date(lineT.getTime() + 40 * 60 * 1000),
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointA, "A", false)],
+        },
+        deps,
+      );
+      assert.equal(typeof stan, "object");
+      if (typeof stan !== "object") {
+        return;
+      }
+      const preview = await previewSortie(
+        person.user,
+        {
+          label: "Nowhere",
+          arrivalAt: lineT,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop({ latitude: 12, longitude: -74 }, "Nowhere", true)],
+        },
+        null,
+        deps,
+      );
+      assert.deepEqual(preview, { endangered: [] });
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("requires a location to preview an immediate departure", async () => {
+    const person = await createSession({
+      sub: `calendar-preview-location-${crypto.randomUUID()}`,
+      displayName: "Preview location",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      const preview = await previewSortie(
+        person.user,
+        {
+          label: "",
+          arrivalAt: null,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointD, "D", true)],
+        },
+        null,
+        scheduleDeps,
+      );
+      assert.equal(preview, "no-location");
     } finally {
       await removeUser(person.user.id);
     }

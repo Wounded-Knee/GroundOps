@@ -214,6 +214,20 @@ export type SortieWriteRequest = {
   stops: SortieStopWrite[];
 };
 
+/** A draft judged against the driver's open sorties. `sortieId` is set while revising. */
+export type SortiePreviewRequest = SortieWriteRequest & {
+  sortieId: string | null;
+};
+
+export type EndangeredSortie = {
+  id: string;
+  label: string;
+};
+
+export type SortiePreviewResponse = {
+  endangered: EndangeredSortie[];
+};
+
 export type LocationObservationRequest = {
   observedAt: string;
   latitude: number;

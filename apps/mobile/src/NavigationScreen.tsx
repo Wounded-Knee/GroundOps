@@ -5,6 +5,7 @@ import type {
   ReplaceMeterReadingRequest,
   Sortie,
   SortieStop,
+  SortieWriteRequest,
   Tariff,
   User,
 } from "@groundops/contracts";
@@ -22,6 +23,8 @@ import {
   assertStopArrival,
   authorSortie,
   commenceSortie,
+  previewSortie,
+  scheduleConflictMessage,
   clearMeterReading,
   completeSortie,
   ensureCurrentDriver,
@@ -201,6 +204,7 @@ export function NavigationScreen({
   const mapRef = useRef<MapHandle>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
   const [query, setQuery] = useState("");
+  const [pendingWhereTo, setPendingWhereTo] = useState<PlaceSuggestion | null>(null);
   const [finding, setFinding] = useState(false);
   const [permission, setPermission] = useState<"unknown" | "granted" | "denied">("unknown");
   const [fix, setFix] = useState<GeoCoordinate | null>(null);
@@ -1086,6 +1090,7 @@ export function NavigationScreen({
 
   async function onSelect(suggestion: PlaceSuggestion): Promise<void> {
     setQuery(suggestion.label);
+    setPendingWhereTo(null);
     const origin = fixRef.current;
     if (permission !== "granted" || !origin) {
       setFinding(false);
@@ -1131,21 +1136,42 @@ export function NavigationScreen({
       return;
     }
 
-    const authored = await authorSortie(apiUrl, token, {
-      label: "",
-      arrivalAt: null,
-      passengerName: null,
-      passengerPhone: null,
-      stops: [
-        {
-          label: suggestion.label,
-          latitude: suggestion.latitude,
-          longitude: suggestion.longitude,
-          waitMinutes: 0,
-          passenger: true,
-        },
-      ],
-    });
+    const preview = await previewSortie(apiUrl, token, { ...whereToWrite(suggestion), sortieId: null });
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (preview === "unauthorized") {
+      setFinding(false);
+      onUnauthorized();
+      return;
+    }
+    const conflict =
+      typeof preview === "string" ? null : scheduleConflictMessage(preview.endangered.map((item) => item.label));
+    if (conflict) {
+      setFinding(false);
+      setPendingWhereTo(suggestion);
+      setNav({ mode: "browse", destination: suggestion, message: conflict });
+      return;
+    }
+
+    await authorChosen(suggestion, origin, requestId);
+  }
+
+  async function onContinueWhereTo(): Promise<void> {
+    const suggestion = pendingWhereTo;
+    const origin = fixRef.current;
+    if (!suggestion || permission !== "granted" || !origin) {
+      return;
+    }
+    const requestId = ++routeRequest.current;
+    setPendingWhereTo(null);
+    setFinding(true);
+    setNav({ mode: "browse", destination: suggestion, message: null });
+    await authorChosen(suggestion, origin, requestId);
+  }
+
+  async function authorChosen(suggestion: PlaceSuggestion, origin: GeoCoordinate, requestId: number): Promise<void> {
+    const authored = await authorSortie(apiUrl, token, whereToWrite(suggestion));
     if (requestId !== routeRequest.current) {
       return;
     }
@@ -1397,6 +1423,7 @@ export function NavigationScreen({
               onQueryChange={(text) => {
                 routeRequest.current += 1;
                 setFinding(false);
+                setPendingWhereTo(null);
                 setQuery(text);
                 setNav((current) =>
                   current.mode === "guiding" || current.mode === "arrived"
@@ -1414,6 +1441,14 @@ export function NavigationScreen({
                 );
               }}
             />
+            {pendingWhereTo && browseMessage ? (
+              <View style={styles.searchWarning}>
+                <Text style={styles.searchWarningText}>{browseMessage}</Text>
+                <Pressable style={styles.continueButton} onPress={() => void onContinueWhereTo()}>
+                  <Text style={styles.primaryText}>Continue</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         ) : null}
 
@@ -1486,13 +1521,31 @@ export function NavigationScreen({
         {showSearch ? (
           <View style={styles.footer} pointerEvents="auto">
             {finding ? <Text style={styles.message}>Finding route…</Text> : null}
-            {browseMessage ? <Text style={styles.message}>{browseMessage}</Text> : null}
+            {browseMessage && !pendingWhereTo ? <Text style={styles.message}>{browseMessage}</Text> : null}
           </View>
         ) : null}
       </View>
       {guiding || arrived ? <Awake /> : null}
     </View>
   );
+}
+
+function whereToWrite(suggestion: PlaceSuggestion): SortieWriteRequest {
+  return {
+    label: "",
+    arrivalAt: null,
+    passengerName: null,
+    passengerPhone: null,
+    stops: [
+      {
+        label: suggestion.label,
+        latitude: suggestion.latitude,
+        longitude: suggestion.longitude,
+        waitMinutes: 0,
+        passenger: true,
+      },
+    ],
+  };
 }
 
 function placeFromStop(stop: SortieStop): PlaceSuggestion {
@@ -1549,6 +1602,15 @@ function createStyles(colors: ThemeColors) {
       borderColor: colors.borderStrong,
       borderRadius: 12,
       overflow: "hidden",
+    },
+    searchWarning: {
+      paddingHorizontal: 12,
+      paddingBottom: 12,
+      gap: 8,
+    },
+    searchWarningText: {
+      fontSize: 16,
+      color: colors.text,
     },
     countdownCard: {
       marginHorizontal: 12,
@@ -1659,6 +1721,13 @@ function createStyles(colors: ThemeColors) {
       alignItems: "center",
       paddingBottom: 12,
       gap: 8,
+    },
+    continueButton: {
+      backgroundColor: colors.accent,
+      borderRadius: 10,
+      paddingVertical: 14,
+      paddingHorizontal: 24,
+      alignItems: "center",
     },
     message: {
       textAlign: "center",

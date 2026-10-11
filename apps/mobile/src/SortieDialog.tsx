@@ -5,6 +5,7 @@ import { createElement, useEffect, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { resolveApiUrl } from "./apiUrl";
+import { previewSortie, scheduleConflictMessage } from "./calendarClient";
 import {
   arrivalFromDateInput,
   arrivalFromTimeInput,
@@ -67,7 +68,44 @@ export function SortieDialog({
   const [phone, setPhone] = useState(draft.phone);
   const [stops, setStops] = useState(draft.stops.length > 0 ? draft.stops : [blankStop()]);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
+  const [conflict, setConflict] = useState<string | null>(null);
   const gpsSeeded = useRef(false);
+  const previewRequest = useRef(0);
+
+  useEffect(() => {
+    const chosen = previewStops(stops);
+    if (chosen.length === 0) {
+      previewRequest.current += 1;
+      setConflict(null);
+      return;
+    }
+    const requestId = ++previewRequest.current;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const result = await previewSortie(apiUrl, token, {
+          label: "",
+          arrivalAt: arrival ? arrival.toISOString() : null,
+          passengerName: null,
+          passengerPhone: null,
+          stops: chosen,
+          sortieId: draft.sortieId,
+        });
+        if (requestId !== previewRequest.current) {
+          return;
+        }
+        if (result === "unauthorized") {
+          onUnauthorized();
+          return;
+        }
+        if (typeof result === "string") {
+          setConflict(null);
+          return;
+        }
+        setConflict(scheduleConflictMessage(result.endangered.map((item) => item.label)));
+      })();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [arrival, draft.sortieId, onUnauthorized, stops, token]);
 
   useEffect(() => {
     if (draft.sortieId !== null || gpsSeeded.current) {
@@ -233,6 +271,7 @@ export function SortieDialog({
         <Pressable onPress={() => setStops((current) => [...current, blankStop()])} style={styles.addStop}>
           <Text style={styles.addStopText}>+</Text>
         </Pressable>
+        {conflict ? <Text style={styles.message}>{conflict}</Text> : null}
         {message ? <Text style={styles.message}>{message}</Text> : null}
         <Pressable onPress={save} style={styles.primary}>
           <Text style={styles.primaryText}>Save</Text>
@@ -390,6 +429,17 @@ function WebPicker({ mode, value, onPicked }: { mode: "date" | "time"; value: Da
     },
     style: { fontSize: 16, marginTop: 8, padding: 8 },
   });
+}
+
+function previewStops(drafts: StopDraft[]): SortieStopWrite[] {
+  const stops: SortieStopWrite[] = [];
+  for (const draft of drafts) {
+    const stop = toStop(draft);
+    if (stop) {
+      stops.push(stop);
+    }
+  }
+  return stops;
 }
 
 function chosenStops(drafts: StopDraft[]): SortieStopWrite[] | null {

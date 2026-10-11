@@ -10,6 +10,7 @@ import {
   defaultScheduleDeps,
   ensureDriver,
   extendStopWait,
+  previewSortie,
   readActivity,
   readCalendar,
   recordObservation,
@@ -36,6 +37,10 @@ const writeBody = z.object({
   passengerName: z.string().nullable(),
   passengerPhone: z.string().nullable(),
   stops: z.array(stopBody),
+});
+
+const previewBody = writeBody.extend({
+  sortieId: z.uuid().nullable(),
 });
 
 const observationBody = z.object({
@@ -225,6 +230,29 @@ export function registerCalendarRoutes(
     return reply.code(201).send(result);
   });
 
+  app.post("/sorties/preview", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+
+    const preview = readPreview(request.body);
+    if (!preview) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const result = await previewSortie(active.user, preview.input, preview.sortieId, deps);
+    if (result === "invalid") {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    if (result === "no-driver") {
+      return reply.code(409).send({ error: "no driver" });
+    }
+    if (result === "no-location") {
+      return reply.code(409).send({ error: "no location" });
+    }
+    return reply.send(result);
+  });
+
   app.patch("/sorties/:id", async (request, reply) => {
     const active = await findPresentedSession(request.headers.authorization);
     if (!active) {
@@ -412,6 +440,18 @@ function readWrite(body: unknown): SortieInput | null {
     passengerPhone: parsed.data.passengerPhone,
     stops: parsed.data.stops,
   };
+}
+
+function readPreview(body: unknown): { input: SortieInput; sortieId: string | null } | null {
+  const parsed = previewBody.safeParse(body);
+  if (!parsed.success) {
+    return null;
+  }
+  const input = readWrite(parsed.data);
+  if (!input) {
+    return null;
+  }
+  return { input, sortieId: parsed.data.sortieId };
 }
 
 function readObservation(body: unknown): ObservationInput | null {
