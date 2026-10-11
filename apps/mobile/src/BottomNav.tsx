@@ -4,16 +4,18 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
 
-export type SignedInDestination = "navigation" | "calendar" | "settings";
+export type SignedInDestination = "navigation" | "calendar" | "settings" | "directory";
 
 export function BottomNav({
   destination,
   composeOpen,
+  showDirectory,
   onNavigate,
   onCompose,
 }: {
   destination: SignedInDestination;
   composeOpen: boolean;
+  showDirectory: boolean;
   onNavigate: (destination: SignedInDestination) => void;
   onCompose: () => void;
 }) {
@@ -33,6 +35,20 @@ export function BottomNav({
           />
         )}
       />
+      {showDirectory ? (
+        <Tab
+          label="Directory"
+          active={destination === "directory" && !composeOpen}
+          onPress={() => onNavigate("directory")}
+          icon={(color) => (
+            <Ionicons
+              name={destination === "directory" && !composeOpen ? "list" : "list-outline"}
+              size={24}
+              color={color}
+            />
+          )}
+        />
+      ) : null}
       <Pressable
         accessibilityLabel="New Sortie"
         onPress={onCompose}

@@ -72,6 +72,13 @@ export const company = pgTable("company", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 
+/** External place that imposes procedures. This slice stores the name only. */
+export const facility = pgTable("facility", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
 /** Operational link between a driver and a company. The driver row stores no company id. */
 export const driverCompany = pgTable(
   "driver_company",
@@ -204,6 +211,7 @@ export const schema = {
   session,
   driver,
   company,
+  facility,
   driverCompany,
   sortie,
   sortieStop,

@@ -199,7 +199,7 @@ async function createSessionFor(email: string) {
 }
 
 async function seedObservation(userId: string, coordinate: { latitude: number; longitude: number }): Promise<void> {
-  await ensureDriver({ id: userId, displayName: null, email: null });
+  await ensureDriver({ id: userId, displayName: null, email: null, platformAdministrator: false });
   const rows = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId)).limit(1);
   const row = rows[0];
   if (!row) {

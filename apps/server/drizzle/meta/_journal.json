@@ -78,6 +78,13 @@
       "when": 1791100000000,
       "tag": "0010_driver_meter_reading",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791200000000,
+      "tag": "0011_facility",
+      "breakpoints": true
     }
   ]
 }

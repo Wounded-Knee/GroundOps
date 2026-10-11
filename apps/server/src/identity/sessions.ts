@@ -1,5 +1,6 @@
 import type { User } from "@groundops/contracts";
 import { and, eq, isNull } from "drizzle-orm";
+import { isPlatformAdministrator } from "../platform/administrator.js";
 import type { GoogleIdentity } from "./google.js";
 import { hashSessionToken, newSessionToken } from "./tokens.js";
 import { db } from "../db.js";
@@ -45,11 +46,11 @@ export async function findActiveSession(token: string): Promise<ActiveSession | 
   }
   return {
     sessionId: row.sessionId,
-    user: {
+    user: presentUser({
       id: row.userId,
       displayName: row.displayName,
       email: row.email,
-    },
+    }),
   };
 }
 
@@ -100,7 +101,7 @@ async function updateUser(
   if (!row) {
     throw new Error("user disappeared during sign-in");
   }
-  return row;
+  return presentUser(row);
 }
 
 async function createUser(
@@ -123,7 +124,16 @@ async function createUser(
     subject: identity.sub,
   });
 
-  return row;
+  return presentUser(row);
+}
+
+function presentUser(row: { id: string; displayName: string | null; email: string | null }): User {
+  return {
+    id: row.id,
+    displayName: row.displayName,
+    email: row.email,
+    platformAdministrator: isPlatformAdministrator(row.email),
+  };
 }
 
 function isUniqueViolation(error: unknown): boolean {

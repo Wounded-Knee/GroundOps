@@ -8,6 +8,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
 import { BottomNav, type SignedInDestination } from "./src/BottomNav";
+import { DirectoryScreen } from "./src/DirectoryScreen";
 import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
@@ -604,6 +605,11 @@ function AppContent() {
                   />
                 </View>
               ) : null}
+              {destination === "directory" && phase.user.platformAdministrator ? (
+                <View style={styles.cover}>
+                  <DirectoryScreen token={phase.token} onUnauthorized={() => void onSessionRejected()} />
+                </View>
+              ) : null}
               {compose ? (
                 <SortieDialog
                   draft={compose}
@@ -627,6 +633,7 @@ function AppContent() {
             <BottomNav
               destination={destination}
               composeOpen={compose !== null}
+              showDirectory={phase.user.platformAdministrator}
               onNavigate={onNavigate}
               onCompose={openCompose}
             />

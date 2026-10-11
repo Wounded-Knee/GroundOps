@@ -11,6 +11,7 @@ import { registerRoutingRoutes } from "./routing/http.js";
 import { computeDrivingRoute, lookupAddress, suggestPlaces } from "./routing/google.js";
 import { registerCalendarRoutes } from "./calendar/http.js";
 import { registerLocalCors } from "./cors.js";
+import { registerPlatformRoutes } from "./platform/http.js";
 import { registerSessionRoutes } from "./routes.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -31,6 +32,7 @@ await migrateDatabase();
 registerLocalCors(app);
 await app.register(websocket);
 registerSessionRoutes(app);
+registerPlatformRoutes(app);
 registerCalendarRoutes(app);
 registerRoutingRoutes(app, {
   findSession: async (authorization) => {

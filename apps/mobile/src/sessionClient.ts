@@ -106,7 +106,11 @@ function isUser(value: unknown): value is User {
   if (!isRecord(value) || typeof value.id !== "string" || value.id.length === 0) {
     return false;
   }
-  return isNullableString(value.displayName) && isNullableString(value.email);
+  return (
+    isNullableString(value.displayName) &&
+    isNullableString(value.email) &&
+    typeof value.platformAdministrator === "boolean"
+  );
 }
 
 function isNullableString(value: unknown): value is string | null {

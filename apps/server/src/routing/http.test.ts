@@ -7,7 +7,7 @@ import { registerRoutingRoutes, type RoutingDeps } from "./http.js";
 
 const session: ActiveSession = {
   sessionId: "session",
-  user: { id: "user", displayName: null, email: null },
+  user: { id: "user", displayName: null, email: null, platformAdministrator: false },
 };
 
 const route: DrivingRoute = {
