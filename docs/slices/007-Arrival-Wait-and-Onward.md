@@ -8,9 +8,9 @@
 
 **Derived from:** Development Methodology (`docs/02-development-methodology.md`) section 6, schedule adherence and driver interaction in Architectural Specification (`docs/01-architecture..md`) sections 8, 11, and 12, the sortie and driver calendar in `docs/03-domain-model.md`, and slices 004–006.
 
-**Purpose:** While guiding a commenced sortie, arrival at the current stop (GPS or manual Arrived) starts an authored-wait countdown on the meter; +1 Minute extends that wait and the schedule; countdown expiry auto-extends the same way rather than advancing; the next leg starts only on GPS leave or Commence. At the final stop the meter pauses with a flashing fare and Onward Destination opens revise with a new stop focused. Leaving that final stop, when no onward stop was added, completes the sortie and returns to browse.
+**Purpose:** While guiding a commenced sortie, arrival at the current stop (GPS or manual Arrived) starts an authored-wait countdown on the meter; +1 Minute extends that wait and the schedule; countdown expiry auto-extends the same way rather than advancing; the next leg starts only on GPS leave or Commence. At the final stop, GPS arrival requires a 30-second stationary stop inside the arrival geofence; a drive through that geofence stays in guidance. After that stop the meter pauses with a flashing fare and Onward Destination opens revise with a new stop focused. Leaving that final stop, when no onward stop was added, completes the sortie and returns to browse.
 
-This document is the implementation boundary. Wait ceilings, schedule conflict warnings, and persisted meter fare totals stay outside. Leaving the final stop is the only GPS completion.
+This document is the implementation boundary. Wait ceilings, schedule conflict warnings, and persisted meter fare totals stay outside. Leaving the final stop after a 30-second stationary dwell is the only GPS completion.
 
 ---
 
@@ -18,7 +18,7 @@ This document is the implementation boundary. Wait ceilings, schedule conflict w
 
 After this slice, a person who is signed in, as slice 001 defines, and who has a driver and authored sorties, as slices 003–006 define, can:
 
-1. On iOS or Android, while guiding a sortie, have arrival at the current stop detected within about 40 meters (same geofence as guidance), or tap **Arrived** on the meter actions side when GPS failed.
+1. On iOS or Android, while guiding a sortie, have arrival at an intermediate stop detected within about 40 meters (same geofence as guidance), or tap **Arrived** on the meter actions side when GPS failed. At the final stop, GPS arrival requires that same geofence and the device remaining stationary, within about 5 meters of that fix, for 30 seconds. Driving through the geofence without that stop does not arrive and does not complete the sortie. **Arrived** still enters dwell immediately.
 2. On arrival, see a countdown from that stop’s authored `waitMinutes`. Tap **+1 Minute** to add one minute to the live countdown and to that stop’s `waitMinutes`, recomputing the calendar schedule. When the countdown reaches zero, the same +1 Minute action runs automatically; guidance does not auto-continue.
 3. Start the next leg only by leaving the stop geofence (GPS progress) or tapping **Commence** on the meter.
 4. At the final stop, see the meter pause with a flashing fare and an **Onward Destination** control that opens the revise dialog with a new blank stop fieldset added and focused.
@@ -48,7 +48,9 @@ Guide, arrival dwell, meter actions, and Onward Destination run on iOS and Andro
 
 # 4. Arrival and dwell
 
-A stop is reached when the device is within 40 meters of it, or when the driver taps Arrived. Reaching a stop no longer auto-requests the next driving route.
+An intermediate stop is reached when the device is within 40 meters of it, or when the driver taps Arrived. Reaching a stop no longer auto-requests the next driving route.
+
+The final stop — the one whose later leave completes the sortie — is reached by GPS only after a fix inside that 40 meter geofence stays within about 5 meters of itself for 30 seconds. A later fix farther than about 5 meters restarts those 30 seconds. Leaving the geofence before then clears the clock, and guidance continues: no arrival card, no asserted arrival, and no meter pause. The clock also advances while the location watch is quiet, because a parked vehicle often emits no new fix. Tapping Arrived still enters dwell immediately and counts as that stop having been made.
 
 On arrival the client enters dwell at that stop position, asserts arrival on the server when that stop has no `actualArrivedAt`, and starts `waitEndsAt` from now plus authored `waitMinutes`. When authored wait is zero, the first dwell tick immediately runs +1 Minute so a live minute is always present unless the driver leaves first.
 
@@ -67,7 +69,7 @@ At an intermediate stop after arrival, and after Onward Destination has added a 
 
 Server departure inference from slice 006 continues via location observations.
 
-Leaving the final stop after arrival, when there is no later stop and no pending onward destination, does the same as End Sortie: the wait countdown stops, `POST /sorties/:id/complete` sets `actualEnd`, and Navigation returns to browse. The leave threshold is the same 40 meter arrival geofence. End Sortie remains available before that leave.
+Leaving the final stop after that stationary dwell, when there is no later stop and no pending onward destination, does the same as End Sortie: the wait countdown stops, `POST /sorties/:id/complete` sets `actualEnd`, and Navigation returns to browse. The leave threshold is the same 40 meter arrival geofence. A drive through the geofence, without the 30 seconds stationary, does not complete the sortie. End Sortie remains available before that leave, including while the vehicle is still only passing the destination.
 
 At an intermediate stop, or after Onward Destination has added a later stop, GPS leave starts the next leg instead of completing the sortie. Slice 006’s rule that GPS alone does not complete still holds for every other case.
 
@@ -101,13 +103,14 @@ After a successful onward save during guidance, the client updates stops, sets `
 
 | From | To | What happens |
 | --- | --- | --- |
-| Guiding | At stop (dwell) | GPS or Arrived; optional assert-arrive; wait countdown starts |
+| Guiding | Guiding | Final stop: inside the 40 meter geofence but not yet stationary for 30 seconds, or left before then. Guidance continues. |
+| Guiding | At stop (dwell) | Intermediate: GPS within 40 meters, or Arrived. Final: GPS stationary for 30 seconds inside the geofence, or Arrived. Optional assert-arrive; wait countdown starts |
 | Dwell | Dwell | Countdown zero or +1 Minute → extend-wait |
 | Dwell (intermediate) | Guiding | GPS leave or Commence → next-stop route |
 | Dwell (final) | Final paused | Meter paused, fare flashes, Onward Destination |
 | Final paused | Onward paused | Revise adds stop; meter stays paused |
 | Onward paused | Guiding | GPS leave or Commence → new stop route |
-| Final paused | Browse | GPS leave outside the arrival geofence, with no onward stop → complete; countdown stops |
+| Final paused | Browse | GPS leave outside the arrival geofence after the stationary dwell, with no onward stop → complete; countdown stops |
 | Guiding / dwell / paused | Browse | End Sortie → complete |
 
 ---
@@ -150,13 +153,13 @@ This slice publishes no domain events on the bus. A second session sees wait and
 
 # 13. Acceptance criteria
 
-1. GPS or Arrived enters dwell; intermediate stops do not auto-advance the route on enter, including when `waitMinutes` is 0.
+1. GPS or Arrived enters dwell at an intermediate stop; those stops do not auto-advance the route on enter, including when `waitMinutes` is 0. At the final stop, GPS dwell starts only after 30 seconds stationary inside the geofence. A pass through that geofence does not enter dwell and does not complete the sortie. Arrived still enters dwell immediately.
 2. +1 Minute and countdown-zero both increment `waitMinutes` and recompute the schedule; neither starts the next leg.
 3. Intermediate next leg starts only on GPS leave or Commence.
 4. Final arrival pauses the meter, flashes the fare, and shows Onward Destination.
 5. Onward revise opens with a new blank stop focused; after save the meter stays paused until GPS leave or Commence.
 6. In-progress revise preserves `actualStart` and unchanged prefix stop actuals; revise when not in progress clears actuals.
-7. Assert arrive is idempotent; End Sortie still completes as slice 006. Leaving the final stop with no onward stop also completes, stops the countdown, and returns to browse.
+7. Assert arrive is idempotent; End Sortie still completes as slice 006. Leaving the final stop after the 30-second stationary dwell, with no onward stop, also completes, stops the countdown, and returns to browse. Leaving before that dwell does not.
 8. The flow runs with `pnpm dev:server` and `pnpm dev:mobile` on web (dialog/calendar), and with the local development build on iOS and Android (guidance and meter).
 
 ---
@@ -166,7 +169,7 @@ This slice publishes no domain events on the bus. A second session sees wait and
 - Wait ceilings and usable schedule margin UX
 - Schedule conflict warnings
 - Responsibility and acceptance
-- Auto-complete from GPS except leaving the final stop with no onward destination
+- Auto-complete from GPS except leaving the final stop after a 30-second stationary dwell, with no onward destination
 - Persisted meter fare totals
 - Causal attribution / adherence analytics UI
 - Server push “please complete” notifications

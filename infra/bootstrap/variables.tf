@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "github_repository" {
   description = "GitHub repository allowed to assume the deploy role, as OWNER/NAME."
   type        = string
-  default     = "Wounded-Knee/GroundOps"
+  default     = "Wounded-Knee@13473249/GroundOps@1389718146"
 }
 
 variable "github_branch" {

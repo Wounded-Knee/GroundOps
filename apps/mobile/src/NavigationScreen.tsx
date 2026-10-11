@@ -83,6 +83,7 @@ import {
   formatTripEstimate,
   meterCharges,
   resetMeterRouteProgress,
+  stationaryDisplacementMeters,
   tickMeterWait,
   type MeterState,
 } from "./meter";
@@ -93,9 +94,12 @@ import { PlatformMap, type MapCamera, type MapHandle } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
 import {
   bumpStopWaitMinutes,
+  emptyArrivalDwell,
   extendWaitEndsAt,
   hasLaterStop,
   isFinalStop,
+  noteArrivalDwell,
+  settleArrivalDwell,
   shouldCompleteOnLeave,
   waitEndsAtFromStop,
 } from "./sortieDwell";
@@ -244,6 +248,8 @@ export function NavigationScreen({
   const stopAdvanceInFlight = useRef(false);
   const extendWaitInFlight = useRef(false);
   const endingSortieRef = useRef(false);
+  const arrivalDwellRef = useRef(emptyArrivalDwell());
+  const arrivalEnteredRef = useRef(false);
   const nextDepartureRef = useRef<NextDeparture | null>(null);
   const pendingMeterRef = useRef<ReplaceMeterReadingRequest | null>(null);
   const meterSentAtRef = useRef<number | null>(null);
@@ -459,18 +465,24 @@ export function NavigationScreen({
     );
   }
 
+  function resetArrivalDwell(): void {
+    arrivalDwellRef.current = emptyArrivalDwell();
+    arrivalEnteredRef.current = false;
+  }
+
   function enterStopDwell(
     current: Extract<NavState, { mode: "guiding" }>,
     stopPosition: number,
     at: GeoCoordinate | null,
   ): void {
-    if (current.kind !== "sortie") {
+    if (current.kind !== "sortie" || arrivalEnteredRef.current) {
       return;
     }
     const stop = current.stops[stopPosition];
     if (!stop) {
       return;
     }
+    arrivalEnteredRef.current = true;
     const now = Date.now();
     const final = isFinalStop(current.stops, stopPosition);
     const arrived: NavState = {
@@ -600,6 +612,7 @@ export function NavigationScreen({
     if (existing.mode !== "arrived" || existing.kind !== "sortie") {
       return;
     }
+    resetArrivalDwell();
     const nextStop = existing.stops[nextPosition];
     if (!nextStop) {
       return;
@@ -686,6 +699,7 @@ export function NavigationScreen({
     rerouteInFlight.current = false;
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
+    resetArrivalDwell();
     const origin = fixRef.current;
     snapshotProgressBaseline(origin, sortieGuide.route);
     const next: NavState = {
@@ -859,6 +873,31 @@ export function NavigationScreen({
     return () => clearInterval(timer);
   }, [nav.mode, nav.mode === "arrived" && "kind" in nav && nav.kind === "sortie" ? nav.waitEndsAt : null]);
 
+  const guidingFinalStop =
+    nav.mode === "guiding" && nav.kind === "sortie" && isFinalStop(nav.stops, nav.firstStopPosition);
+
+  useEffect(() => {
+    if (!guidingFinalStop) {
+      return;
+    }
+    const timer = setInterval(() => {
+      const current = navRef.current;
+      if (current.mode !== "guiding" || current.kind !== "sortie") {
+        return;
+      }
+      if (!isFinalStop(current.stops, current.firstStopPosition)) {
+        return;
+      }
+      const settled = settleArrivalDwell(arrivalDwellRef.current, Date.now());
+      arrivalDwellRef.current = settled;
+      if (!settled.satisfied) {
+        return;
+      }
+      enterStopDwell(current, current.firstStopPosition, fixRef.current);
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [guidingFinalStop]);
+
   useEffect(() => {
     const current = navRef.current;
     if (!fix || (current.mode !== "guiding" && current.mode !== "arrived")) {
@@ -876,6 +915,7 @@ export function NavigationScreen({
           hasLaterStop: later,
           pendingNextLeg: current.pendingNextLeg,
           outsideGeofence,
+          stationaryDwellMet: arrivalDwellRef.current.satisfied,
         })
       ) {
         void endGuidance();
@@ -889,7 +929,24 @@ export function NavigationScreen({
 
     if (current.kind === "sortie") {
       const target = current.stops[current.firstStopPosition];
-      if (target && distanceMeters(fix, target) <= arrivalMeters) {
+      const inside = Boolean(target && distanceMeters(fix, target) <= arrivalMeters);
+      const finalLeg = isFinalStop(current.stops, current.firstStopPosition);
+      if (finalLeg) {
+        const nextDwell = noteArrivalDwell(arrivalDwellRef.current, {
+          inside,
+          fix,
+          nowMs: Date.now(),
+          stationaryMeters: stationaryDisplacementMeters,
+        });
+        arrivalDwellRef.current = nextDwell;
+        if (nextDwell.satisfied) {
+          enterStopDwell(current, current.firstStopPosition, fix);
+          return;
+        }
+        if (inside) {
+          return;
+        }
+      } else if (inside) {
         enterStopDwell(current, current.firstStopPosition, fix);
         return;
       }
@@ -908,7 +965,10 @@ export function NavigationScreen({
     offRouteSinceRef.current = outcome.offRouteSince;
     if (outcome.arrived) {
       if (current.kind === "sortie") {
-        enterStopDwell(current, current.firstStopPosition, fix);
+        const finalLeg = isFinalStop(current.stops, current.firstStopPosition);
+        if (!finalLeg || arrivalDwellRef.current.satisfied) {
+          enterStopDwell(current, current.firstStopPosition, fix);
+        }
         return;
       }
       const arrived: NavState = {
@@ -1244,6 +1304,7 @@ export function NavigationScreen({
     rerouteInFlight.current = false;
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
+    resetArrivalDwell();
     const origin = fixRef.current;
     const started = emptyMeter();
     setMeter(started);
@@ -1328,6 +1389,7 @@ export function NavigationScreen({
         return;
       }
     }
+    resetArrivalDwell();
     setNav({ mode: "browse", destination: null, message: null });
     endingSortieRef.current = false;
     onMeterReading?.(null);
@@ -1356,6 +1418,11 @@ export function NavigationScreen({
       if (current.mode !== "guiding" || current.kind !== "sortie") {
         return;
       }
+      arrivalDwellRef.current = {
+        anchor: fixRef.current,
+        startedAtMs: Date.now(),
+        satisfied: true,
+      };
       enterStopDwell(current, current.firstStopPosition, fixRef.current);
     };
   }

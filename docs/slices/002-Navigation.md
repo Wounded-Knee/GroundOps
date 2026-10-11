@@ -123,7 +123,7 @@ The states below are the phone's presentation of a route result. Selecting a sug
 | Map | Route preview | The person selects a suggestion. The server authors a destination-only immediate sortie for that driver, then returns a driving route from the latest location fix. The map draws it. If the sortie is not created, the map stays and guidance does not start. |
 | Route preview | Guiding | The person starts guidance. |
 | Guiding | Guiding | The current step advances, or a reroute replaces the route and guidance continues on the new route. |
-| Guiding | Arrived | The device is within 40 meters of the destination. |
+| Guiding | Arrived | The device has been inside 40 meters of the destination and stationary there for 30 seconds, as slice 007 defines for a sortie's final stop. A drive through that radius stays in guidance. |
 | Route preview | Map | The person dismisses the preview. The route leaves the map. |
 | Guiding | Map | The person ends guidance. The route leaves the map. |
 | Arrived | Map | The person ends guidance. The route leaves the map. |
@@ -133,7 +133,7 @@ While guiding, including after arrival, the screen stays awake. It may sleep aga
 
 Guidance uses while-in-use location. This slice does not add background location.
 
-A location fix advances at most the current step, and only when the device is within the step-advance distance of that step's end (default 30 meters; Settings). Arrival takes precedence: within 40 meters of the destination, the screen shows arrival even if a step end is also inside its threshold.
+A location fix advances at most the current step, and only when the device is within the step-advance distance of that step's end (default 30 meters; Settings). Arrival takes precedence over step advance once it fires. Where to? authors a one-stop sortie, so that destination is a final stop: the screen shows arrival only after the device has been inside 40 meters and stationary, within about 5 meters of that fix, for 30 seconds, as slice 007 defines. Until then a fix inside that radius does not arrive, even if a step end is also inside its threshold.
 
 The device is off the route when it stays more than 50 meters from the route path for 5 seconds. The client then requests a new driving route from that fix to the same destination. Returning inside 50 meters before 5 seconds have passed cancels that wait. The client does not send a second reroute request while one is in flight. If the reroute request fails, the previous route stays on screen and guidance continues on it.
 
@@ -216,7 +216,7 @@ The slice works when all of the following are true on the local stack:
 6. A location fix within the step-advance distance of the current step's end advances to the next step (default 30 meters; Settings), and one fix changes at most one step. After that advance, the card shows the following upcoming maneuver immediately.
 7. Staying more than 50 meters from the route path for 5 seconds requests a new route to the same destination and shows that route. Returning inside 50 meters before 5 seconds does not request one.
 8. A failed reroute leaves the previous route on screen and says that rerouting failed.
-9. Within 40 meters of the destination, the screen shows arrival and speaks once.
+9. After 30 seconds stationary inside 40 meters of the destination, the screen shows arrival and speaks once. Driving through that radius without the stop keeps guidance running and does not speak arrival.
 10. Ending guidance, or dismissing a preview, returns to the map and clears the route.
 11. Denied location permission, or no fix, leaves the person on the map and does not start a route.
 12. A route the server rejects does not start guidance.

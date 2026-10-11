@@ -57,7 +57,7 @@ The route reuses slice 002's driving-route result and the existing guidance scre
 
 A new `POST /sorties/:id/driving-route` takes the session token, an origin coordinate, and the position of the first stop still ahead. The server loads a sortie that driver authored, uses the stored stops from that position through the last stop, and returns one driving route. A missing sortie, or a sortie another driver authored, is rejected. The position must be a stop index on that sortie. Otherwise the request is rejected.
 
-A stop is reached when the device is within 40 meters of it, the same arrival distance as slice 002. Reached stops drop out of the remaining route. Reroute calls the same endpoint with the first stop still ahead. Arrival, speech, step advance, and the off-route rule stay as slice 002 defines them. The trip arrives only at the final stop. Reaching a stop short of the last does not end guidance. The meter accrues only while the current leg’s target stop has passenger on; non-passenger legs freeze the reading without clearing it.
+An intermediate stop is reached when the device is within 40 meters of it, the same arrival distance as slice 002. Reached stops drop out of the remaining route. Reroute calls the same endpoint with the first stop still ahead. Speech, step advance, and the off-route rule stay as slice 002 defines them. The trip arrives only at the final stop, and only after the device has also been stationary there for 30 seconds, as slice 007 defines. Passing within 40 meters of the final stop without that stop does not show arrival and does not pause the meter. Reaching a stop short of the last does not end guidance. The meter accrues only while the current leg’s target stop has passenger on; non-passenger legs freeze the reading without clearing it.
 
 Leaving Navigation for Calendar, Settings, or New Sortie does not end guidance. The map stays mounted under those screens, as the signed-in shell already does. Ending guidance, or signing out, clears the route and stops the meter.
 
@@ -93,7 +93,7 @@ A **sortie driving route** is one driving route, as slice 002 defines, from the 
 | --- | --- | --- |
 | Sortie summary | Guiding a sortie | The person taps Guide with a location fix. The server returns a driving route through the remaining stops. Navigation opens in guidance. The meter starts with a tariff snapshot. Accrual runs only on passenger legs. |
 | Guiding a sortie | Guiding a sortie | A stop short of the last is reached and drops out, the current step advances, or a reroute replaces the route with the same first stop still ahead. The meter keeps its snapshot and its cumulative miles and wait; accrual pauses on non-passenger legs. |
-| Guiding a sortie | Arrived | The device is within 40 meters of the final stop. If that stop has passenger on, the meter keeps accruing until the person ends guidance; otherwise the reading stays frozen. |
+| Guiding a sortie | Arrived | The device has been within 40 meters of the final stop and stationary there for 30 seconds, as slice 007 defines. A pass through that radius stays in guidance. |
 | Guiding or arrived | Map | The person ends guidance. The route leaves the map. The meter panel disappears. |
 | No tariff saved | Tariff saved | The person saves valid rates on Settings. The server replaces that driver's tariff. |
 | Signed in | Signed out | The server revokes the session, as slice 001 defines. Guidance and the meter end. |
@@ -168,7 +168,7 @@ Guidance, the meter, and tariff reads and writes are HTTP or local. A second ope
 The slice works when all of the following are true on the local stack:
 
 1. On iOS or Android, a signed-in driver can open a sortie they authored and tap Guide. With a location fix, Navigation opens in guidance for a route from that fix through the sortie's stops.
-2. Reaching a stop short of the destination continues guidance toward the remaining stops. Within 40 meters of the final stop, the screen shows arrival.
+2. Reaching a stop short of the destination continues guidance toward the remaining stops. After 30 seconds stationary within 40 meters of the final stop, the screen shows arrival. Driving through that radius without the stop does not.
 3. While sortie guidance is in use, a meter panel about one quarter of the screen height appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie — overlaying the map on Navigation and reserving column space on the other screens — showing Estimated (full trip miles, trip duration, trip fare estimate), a large centered running fare, and Actual (miles traveled, wait minutes, fare so far, right-aligned), with a thin next-turn progress bar and a 1em destination progress bar (remaining versus the route baseline) and no text on either bar.
 4. Tapping the panel swaps its contents for End Sortie; tapping again restores the meter. End Sortie ends guidance and removes the panel.
 5. Ending guidance clears the route and removes the panel. Sign-out does the same.
