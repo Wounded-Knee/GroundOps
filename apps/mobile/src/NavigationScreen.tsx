@@ -79,6 +79,7 @@ import {
 } from "./guidanceTimingPrefs";
 import {
   advanceMeterAlongRoute,
+  baselineAfterReroute,
   emptyMeter,
   formatTripEstimate,
   meterCharges,
@@ -351,13 +352,29 @@ export function NavigationScreen({
     baselineRemainingRef.current = pathLengthMeters(route.path) || route.distanceMeters;
   }
 
-  function applyRouteToMeter(at: GeoCoordinate | null, route: DrivingRoute): MeterState {
+  function applyRouteToMeter(
+    at: GeoCoordinate | null,
+    route: DrivingRoute,
+    previousRemainingMeters?: number,
+  ): MeterState {
     const along =
       at && route.path.length >= 2 ? projectOntoPath(at, route.path).alongMeters : null;
     const next = resetMeterRouteProgress(meterRef.current, along);
     meterRef.current = next;
     setMeter(next);
-    snapshotProgressBaseline(at, route);
+    if (previousRemainingMeters === undefined) {
+      snapshotProgressBaseline(at, route);
+      return next;
+    }
+    const nextRemaining =
+      at && route.path.length >= 2
+        ? projectOntoPath(at, route.path).remainingMeters
+        : pathLengthMeters(route.path) || route.distanceMeters;
+    baselineRemainingRef.current = baselineAfterReroute(
+      baselineRemainingRef.current,
+      previousRemainingMeters,
+      nextRemaining,
+    );
     return next;
   }
 
@@ -1032,7 +1049,8 @@ export function NavigationScreen({
       };
       setNav(updated);
       if (updated.kind === "sortie") {
-        const nextMeter = applyRouteToMeter(origin, result);
+        const previousRemaining = remainingDistanceMeters(origin, existing.route, existing.stepIndex);
+        const nextMeter = applyRouteToMeter(origin, result, previousRemaining);
         publishMeter(nextMeter, updated, origin);
       }
       setRouteEpoch((epoch) => epoch + 1);

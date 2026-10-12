@@ -10,6 +10,7 @@ import {
   gpsSilenceStationarySeconds,
   isStationary,
   meterCharges,
+  baselineAfterReroute,
   progressFraction,
   resetMeterRouteProgress,
   stationaryDisplacementMeters,
@@ -173,6 +174,22 @@ describe("meter", () => {
     assert.ok(progressFraction(800, 1609.344) > 0.4);
     assert.ok(progressFraction(800, 1609.344) < 0.6);
     assert.equal(progressFraction(2000, 1609.344), 0);
+  });
+
+  it("keeps completed leg distance in the baseline after a reroute", () => {
+    const detour = baselineAfterReroute(10_000, 4_000, 5_000);
+    assert.equal(detour, 11_000);
+    const detourFill = progressFraction(5_000, detour);
+    assert.ok(detourFill > 0.5);
+    assert.ok(detourFill < 0.6);
+
+    const shortcut = baselineAfterReroute(10_000, 4_000, 2_000);
+    assert.equal(shortcut, 8_000);
+    assert.ok(progressFraction(2_000, shortcut) > progressFraction(4_000, 10_000));
+
+    const fresh = baselineAfterReroute(10_000, 10_000, 9_000);
+    assert.equal(fresh, 9_000);
+    assert.equal(progressFraction(9_000, fresh), 0);
   });
 
   it("resets along-route tracking without clearing miles or wait", () => {

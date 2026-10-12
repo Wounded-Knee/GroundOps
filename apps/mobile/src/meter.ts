@@ -184,6 +184,19 @@ export function progressFraction(remainingMeters: number, baselineRemainingMeter
   return Math.min(1, Math.max(0, 1 - Math.max(0, remainingMeters) / baselineRemainingMeters));
 }
 
+/**
+ * Baseline after an off-route reroute. Completed distance on this leg stays;
+ * the replacement route contributes only its remaining distance.
+ */
+export function baselineAfterReroute(
+  baselineRemainingMeters: number,
+  previousRemainingMeters: number,
+  nextRemainingMeters: number,
+): number {
+  const completed = Math.max(0, baselineRemainingMeters - Math.max(0, previousRemainingMeters));
+  return completed + Math.max(0, nextRemainingMeters);
+}
+
 export function formatMiles(miles: number): string {
   return miles.toFixed(1);
 }
