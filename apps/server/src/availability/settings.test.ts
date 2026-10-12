@@ -19,7 +19,7 @@ import {
   user,
   userCredential,
 } from "../schema.js";
-import { reconcileAutomaticAvailability } from "./automatic.js";
+import { applyAutomaticAvailability, applyAutomaticAvailabilityLead } from "./automatic.js";
 import { registerAvailabilityRoutes } from "./http.js";
 
 const now = new Date("2026-10-12T15:00:00.000Z");
@@ -143,7 +143,7 @@ describe("availability settings", () => {
     }
   });
 
-  it("sets a new driver available once when nothing forces unavailable", async () => {
+  it("does not set a new driver available until a sortie concludes", async () => {
     const person = await createSession({
       sub: `availability-settings-sweep-${crypto.randomUUID()}`,
       displayName: "Sweep",
@@ -156,21 +156,24 @@ describe("availability settings", () => {
         headers: { authorization: `Bearer ${person.token}` },
       });
       assert.equal(created.statusCode, 200);
-      const before = await readChoice(person.token);
-      assert.equal(before.available, false);
+      assert.equal((await readChoice(person.token)).available, false);
 
-      await reconcileAutomaticAvailability(person.user, now);
+      await applyAutomaticAvailabilityLead(now);
+      assert.equal((await readChoice(person.token)).available, false);
+      assert.equal((await eventsFor(person.user.id)).length, 0);
+
+      await applyAutomaticAvailability(person.user, "conclusion", now);
       const after = await readChoice(person.token);
       assert.equal(after.available, true);
       assert.equal(after.current, true);
-      await reconcileAutomaticAvailability(person.user, now);
+      await applyAutomaticAvailability(person.user, "conclusion", now);
       assert.equal((await eventsFor(person.user.id)).length, 1);
     } finally {
       await removeUser(person.user.id);
     }
   });
 
-  it("sets unavailable for a commenced sortie and available again after it ends", async () => {
+  it("leaves a sortie in progress unchanged and sets available when it concludes", async () => {
     const person = await createSession({
       sub: `availability-settings-progress-${crypto.randomUUID()}`,
       displayName: "Progress",
@@ -182,32 +185,38 @@ describe("availability settings", () => {
         url: "/availability/settings",
         headers: { authorization: `Bearer ${person.token}` },
       });
-      const chosen = await app.inject({
+      await app.inject({
         method: "PUT",
         url: "/availability",
         headers: { authorization: `Bearer ${person.token}` },
-        payload: { available: true },
+        payload: { available: false },
       });
-      assert.equal(chosen.json().available, true);
-
-      const sortieId = await insertSortie(person.user.id, { actualStart: now, actualEnd: null, scheduledStart: later(60) });
-      const forced = await saveDefaults(person.token);
-      assert.equal(forced.statusCode, 200);
+      await insertSortie(person.user.id, { actualStart: now, actualEnd: null, scheduledStart: later(60) });
+      await applyAutomaticAvailability(person.user, "lead", now);
       assert.equal((await readChoice(person.token)).available, false);
+      assert.equal((await eventsFor(person.user.id)).length, 0);
 
-      await db.update(sortie).set({ actualEnd: now }).where(eq(sortie.id, sortieId));
-      await saveDefaults(person.token);
+      await applyAutomaticAvailability(person.user, "commencement", now);
       assert.equal((await readChoice(person.token)).available, true);
-      assert.equal((await eventsFor(person.user.id)).length, 3);
+      await applyAutomaticAvailability(person.user, "commencement", now);
+      assert.equal((await eventsFor(person.user.id)).length, 1);
 
-      await saveDefaults(person.token);
+      await app.inject({
+        method: "PUT",
+        url: "/availability",
+        headers: { authorization: `Bearer ${person.token}` },
+        payload: { available: false },
+      });
+      await applyAutomaticAvailability(person.user, "conclusion", now);
+      assert.equal((await readChoice(person.token)).available, true);
+      await applyAutomaticAvailability(person.user, "conclusion", now);
       assert.equal((await eventsFor(person.user.id)).length, 3);
     } finally {
       await removeUser(person.user.id);
     }
   });
 
-  it("uses the threshold window and ignores an overdue start", async () => {
+  it("sets unavailable inside the lead and ignores an exact or overdue start", async () => {
     const person = await createSession({
       sub: `availability-settings-soon-${crypto.randomUUID()}`,
       displayName: "Soon",
@@ -230,23 +239,23 @@ describe("availability settings", () => {
         actualEnd: null,
         scheduledStart: later(14),
       });
-      await saveDefaults(person.token);
+      await applyAutomaticAvailabilityLead(now);
       assert.equal((await readChoice(person.token)).available, false);
 
       await db.update(sortie).set({ scheduledStart: later(15) }).where(eq(sortie.id, sortieId));
-      await saveDefaults(person.token);
-      assert.equal((await readChoice(person.token)).available, true);
+      await applyAutomaticAvailabilityLead(now);
+      assert.equal((await readChoice(person.token)).available, false);
 
       await db.update(sortie).set({ scheduledStart: later(-1) }).where(eq(sortie.id, sortieId));
-      await saveDefaults(person.token);
-      assert.equal((await readChoice(person.token)).available, true);
-      assert.equal((await eventsFor(person.user.id)).length, 3);
+      await applyAutomaticAvailabilityLead(now);
+      assert.equal((await readChoice(person.token)).available, false);
+      assert.equal((await eventsFor(person.user.id)).length, 2);
     } finally {
       await removeUser(person.user.id);
     }
   });
 
-  it("sets unavailable outside the geofence and available inside it", async () => {
+  it("does not change availability from a GPS fix", async () => {
     const person = await createSession({
       sub: `availability-settings-fence-${crypto.randomUUID()}`,
       displayName: "Fence",
@@ -258,6 +267,12 @@ describe("availability settings", () => {
         url: "/availability/settings",
         headers: { authorization: `Bearer ${person.token}` },
       });
+      await app.inject({
+        method: "PUT",
+        url: "/availability",
+        headers: { authorization: `Bearer ${person.token}` },
+        payload: { available: true },
+      });
       const saved = await app.inject({
         method: "PUT",
         url: "/availability/settings",
@@ -266,16 +281,11 @@ describe("availability settings", () => {
       });
       assert.equal(saved.statusCode, 200);
 
+      assert.equal(await observe(person.token, { latitude: 2, longitude: 2 }), 204);
+      assert.equal((await readChoice(person.token)).available, true);
       assert.equal(await observe(person.token, { latitude: 0.5, longitude: 0.5 }), 204);
       assert.equal((await readChoice(person.token)).available, true);
-      assert.equal(await observe(person.token, { latitude: 0.5, longitude: 0.6 }), 204);
       assert.equal((await eventsFor(person.user.id)).length, 1);
-
-      assert.equal(await observe(person.token, { latitude: 2, longitude: 2 }), 204);
-      assert.equal((await readChoice(person.token)).available, false);
-
-      assert.equal(await observe(person.token, { latitude: 0, longitude: 0.5 }), 204);
-      assert.equal((await readChoice(person.token)).available, true);
     } finally {
       await removeUser(person.user.id);
     }
@@ -295,41 +305,37 @@ describe("availability settings", () => {
       });
       await app.inject({
         method: "PUT",
-        url: "/availability/settings",
-        headers: { authorization: `Bearer ${person.token}` },
-        payload: { ...defaultAvailabilitySettings, geofence: square },
-      });
-      assert.equal(await observe(person.token, { latitude: 0.5, longitude: 0.5 }), 204);
-      assert.equal((await readChoice(person.token)).available, true);
-
-      const hold = await app.inject({
-        method: "PUT",
-        url: "/availability/settings",
-        headers: { authorization: `Bearer ${person.token}` },
-        payload: { ...defaultAvailabilitySettings, geofence: square, autoSetUnavailable: false },
-      });
-      assert.equal(hold.statusCode, 200);
-      assert.equal(await observe(person.token, { latitude: 2, longitude: 2 }), 204);
-      assert.equal((await readChoice(person.token)).available, true);
-
-      await app.inject({
-        method: "PUT",
         url: "/availability",
         headers: { authorization: `Bearer ${person.token}` },
-        payload: { available: false },
+        payload: { available: true },
       });
+      const sortieId = await insertSortie(person.user.id, { actualStart: null, actualEnd: null, scheduledStart: later(14) });
       await app.inject({
         method: "PUT",
         url: "/availability/settings",
         headers: { authorization: `Bearer ${person.token}` },
-        payload: {
-          ...defaultAvailabilitySettings,
-          geofence: square,
-          autoSetUnavailable: false,
-          autoSetAvailable: false,
-        },
+        payload: { ...defaultAvailabilitySettings, autoSetUnavailable: false },
       });
-      assert.equal(await observe(person.token, { latitude: 0.5, longitude: 0.5 }), 204);
+      await applyAutomaticAvailability(person.user, "lead", now);
+      assert.equal((await readChoice(person.token)).available, true);
+
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: { authorization: `Bearer ${person.token}` },
+        payload: defaultAvailabilitySettings,
+      });
+      await applyAutomaticAvailability(person.user, "lead", now);
+      assert.equal((await readChoice(person.token)).available, false);
+
+      await db.update(sortie).set({ scheduledStart: later(60) }).where(eq(sortie.id, sortieId));
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: { authorization: `Bearer ${person.token}` },
+        payload: { ...defaultAvailabilitySettings, autoSetAvailable: false },
+      });
+      await applyAutomaticAvailability(person.user, "conclusion", now);
       assert.equal((await readChoice(person.token)).available, false);
       assert.equal((await eventsFor(person.user.id)).length, 2);
     } finally {
@@ -340,10 +346,6 @@ describe("availability settings", () => {
 
 function later(minutes: number): Date {
   return new Date(now.getTime() + minutes * 60_000);
-}
-
-async function saveDefaults(token: string) {
-  return appInject("PUT", "/availability/settings", token, defaultAvailabilitySettings);
 }
 
 let observationSequence = 0;

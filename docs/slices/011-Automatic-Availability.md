@@ -6,7 +6,7 @@
 
 **Derived from:** Driver availability in `docs/03-domain-model.md` and `docs/01-architecture..md` section 15.
 
-**Purpose:** The platform sets the driver's availability choice from the sortie schedule, the latest GPS fix, and settings the driver saves. The yellow bar still shows that choice.
+**Purpose:** The platform sets the driver's availability choice at two moments: when a sortie concludes, and when a sortie is inside the lead time before it is scheduled to commence. The yellow bar still shows that choice.
 
 This document is the implementation boundary. Duty, offers, assignment, a list of who is available, and a background task that checks in while the app is suspended stay outside. Slice 010 still owns the check-in lease.
 
@@ -19,7 +19,7 @@ After this slice, a signed-in driver can:
 1. Save an availability threshold in whole minutes, from 0 through 120. The default is 15.
 2. Turn **Automatically Set Unavailable** and **Automatically Set Available** on or off. Both default on.
 3. On iOS or Android, create or edit an availability geofence. The editor opens on the device GPS when the ring is empty. Tap adds a vertex. Drag moves one. Clear removes the ring. A saved ring has at least three vertices, or it is empty. One or two vertices are not kept. The settings screen shows the vertex count when a ring is present. Web shows that count and does not edit the map. A web save sends the ring it loaded, so a fence drawn on a phone is not wiped.
-4. Have the platform set the choice without another tap. A tap still changes the choice immediately. The next evaluation overwrites that tap when the active flag disagrees.
+4. Have the platform set the choice at the events in section 4, without another tap. A tap still changes the choice immediately. A later one of those events overwrites that tap when its flag is on.
 
 The temporary geofence preview is gone.
 
@@ -38,19 +38,15 @@ One actor: a signed-in driver. Reading or saving these settings creates the driv
 Stored on the driver:
 
 - `availability_threshold_minutes` — whole minutes, default 15, allowed 0 through 120.
-- `auto_set_unavailable` — default true. When a forcing case holds, the platform sets the choice unavailable.
-- `auto_set_available` — default true. When no forcing case holds, the platform sets the choice available.
-- `availability_geofence` — a coordinate ring, default empty. Empty means there is no fence.
+- `auto_set_unavailable` — default true. The lead before commencement sets the choice unavailable.
+- `auto_set_available` — default true. Commencing or concluding a sortie sets the choice available.
+- `availability_geofence` — a coordinate ring, default empty. Empty means there is no fence. The ring is stored with the other settings. It does not change the choice.
 
 Turning a flag off stops only that direction. The other flag still applies.
 
-## 3.2 Forcing case
+## 3.2 Lead
 
-Any one of these forces unavailable:
-
-- **In progress.** This driver's sortie has `actualStart` set and `actualEnd` null.
-- **Soon.** An uncommenced sortie has `scheduledStart` at or after now and strictly less than the threshold. An overdue uncommenced sortie does not match. A start at exactly the threshold does not match. A threshold of 0 never matches this case.
-- **Outside the geofence.** The latest location observation, by observed time and then by id, lies outside a saved ring of at least three vertices. A point on the boundary counts as inside. Reported accuracy does not widen the ring. No fix, or no ring, does not match.
+An uncommenced sortie is inside the lead when `scheduledStart` is at or after now and strictly less than the threshold. An overdue uncommenced sortie is not. A start at exactly the threshold is not. A threshold of 0 never opens the lead. A sortie already in progress is not this event.
 
 ## 3.3 The choice
 
@@ -60,17 +56,17 @@ Any one of these forces unavailable:
 
 # 4. State transitions
 
-Evaluation runs for one driver after a successful settings save, a stored location observation, and a successful sortie create, revise, commence, complete, or wait extension. It also runs for every driver who has either flag on, on the same one-minute interval as the check-in lapse. Importing the module does not start that interval.
+Automatic changes happen on only three events.
 
-- Forcing case, and automatically set unavailable is on: the choice becomes false.
-- Forcing case, and that flag is off: the choice stays as it is. The available flag is not applied.
-- No forcing case, and automatically set available is on: the choice becomes true.
-- No forcing case, and that flag is off: the choice stays as it is.
-- The resulting choice equals the stored choice: no write and no publish.
+**Lead.** An uncommenced sortie is inside the lead. This is checked when a sortie is created, revised, or has its wait extended, and on the same one-minute interval as the check-in lapse for every driver whose unavailable flag is on. Importing the module does not start that interval. When the flag is on, the choice becomes false. The lead does not set the choice available, including after the window passes or a start becomes overdue.
 
-A new driver, and an existing driver once these columns exist, starts from the defaults. The next evaluation sets them available when nothing forces unavailable.
+**Commencement.** A sortie is commenced. **Conclusion.** A sortie is completed. Both run the same check. When the available flag is on and no uncommenced sortie is inside the lead, the choice becomes true. When another sortie is already inside the lead and the unavailable flag is on, the choice becomes false instead.
 
-A tap is not evaluated inside the availability write. The next trigger above applies the rule.
+A sortie that is merely in progress does not change the choice. Saving settings does not. A GPS fix does not.
+
+The same choice writes no event and publishes nothing. A new driver stays unavailable until a commencement or a conclusion, unless a lead sets them unavailable first.
+
+A tap is not one of these events. The next lead, commencement, or conclusion still applies.
 
 ---
 
@@ -94,13 +90,13 @@ Commands are HTTP JSON. Zod validates input at the boundary. Domain checks live 
 | Operation | Request | Result |
 | --- | --- | --- |
 | Read settings | `GET /availability/settings` | `{ thresholdMinutes, autoSetUnavailable, autoSetAvailable, geofence }` |
-| Save settings | `PUT /availability/settings` with that shape | The same shape, after one evaluation |
+| Save settings | `PUT /availability/settings` with that shape | The same shape |
 
-`GET` creates the driver when needed and does not change the choice. `PUT` stores the settings, then evaluates. An empty ring clears the fence.
+`GET` creates the driver when needed and does not change the choice. `PUT` stores the settings and does not change the choice. An empty ring clears the fence.
 
 A missing or revoked session is 401. A non-integer threshold, a value outside 0–120, or a ring of one or two points is 400.
 
-The decision is a pure function. The reconciler calls `setAvailability` and does not call itself again. The one-minute starter imports the lapse sweep and the reconciler from outside the availability module, because that module already imports the calendar.
+The decision is a pure function. It calls `setAvailability` and does not call itself again. The one-minute starter imports the lapse sweep and the lead check from outside the availability module, because that module already imports the calendar.
 
 ---
 
@@ -122,10 +118,10 @@ An evaluation that changes the choice publishes `availability.updated` the same 
 
 The slice works when all of the following are true:
 
-1. A new driver's settings are both flags on, threshold 15, and an empty geofence. The choice stays unavailable until an evaluation. That evaluation sets the choice available when nothing forces unavailable, and a second pass writes no event.
+1. A new driver's settings are both flags on, threshold 15, and an empty geofence. The choice stays unavailable through a lead check when no sortie is inside the lead. A conclusion sets the choice available, and a second conclusion writes no event.
 2. A missing session is rejected. A bad body is rejected, including a one- or two-point ring and a threshold outside 0–120. A saved ring is returned on the next read. One driver does not receive another's ring.
-3. With the defaults, a commenced sortie sets the choice unavailable, and ending that sortie sets it available. A start 14 minutes out does the same at a threshold of 15. A start at exactly 15 minutes, and a start already in the past, do not. Repeating an evaluation that does not change the choice writes no event.
-4. A fix outside the saved ring sets the choice unavailable. A fix inside it, including on the boundary, does not. No fix, or an empty ring, does not. Turning a flag off skips that direction.
+3. A sortie already in progress does not change the choice by itself. Commencing one, or completing one, sets the choice available when that flag is on. A start 14 minutes out sets the choice unavailable. A start at exactly 15 minutes, and a start already in the past, do not, and neither one sets the choice available. Repeating an event that does not change the choice writes no event.
+4. A GPS fix, inside or outside the saved ring, does not change the choice. Turning a flag off skips that direction.
 5. The settings screen offers the threshold, both flags, and the geofence control. Web does not offer Create or Edit.
 
 ---
@@ -136,4 +132,4 @@ The slice works when all of the following are true:
 - Offers, assignment, and candidate selection
 - A list of drivers who are available
 - A background task that checks in while the app is suspended
-- Widening the availability geofence by GPS accuracy
+- Using the availability geofence to change the choice

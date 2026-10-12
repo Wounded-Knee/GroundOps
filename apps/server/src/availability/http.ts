@@ -3,7 +3,6 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { findActiveSession } from "../identity/sessions.js";
 import { readBearer } from "../identity/tokens.js";
-import { reconcileAutomaticAvailability } from "./automatic.js";
 import { checkInAvailability, readAvailability, setAvailability } from "./availability.js";
 import { readAvailabilitySettings, replaceAvailabilitySettings } from "./settings.js";
 
@@ -81,7 +80,6 @@ export function registerAvailabilityRoutes(app: FastifyInstance, deps: Availabil
     if (saved === "invalid") {
       return reply.code(400).send({ error: "invalid request" });
     }
-    await reconcileAutomaticAvailability(active.user, deps.now());
     return reply.send(saved);
   });
 }

@@ -20,7 +20,7 @@ import {
   type SortieInput,
 } from "./calendar.js";
 import { defaultSortieRouteDeps, computeSortieDrivingRoute, type SortieRouteDeps } from "./sortieRoute.js";
-import { reconcileAutomaticAvailability } from "../availability/automatic.js";
+import { applyAutomaticAvailability } from "../availability/automatic.js";
 import { readAvailabilityIntervals } from "../availability/availability.js";
 import { clearMeterReading, replaceMeterReading } from "./meterReading.js";
 import { readTariff, replaceTariff } from "./tariff.js";
@@ -98,8 +98,12 @@ export function registerCalendarRoutes(
   deps: ScheduleDeps = defaultScheduleDeps,
   routeDeps: SortieRouteDeps = defaultSortieRouteDeps,
 ): void {
-  async function reconcile(user: Parameters<typeof reconcileAutomaticAvailability>[0]): Promise<void> {
-    await reconcileAutomaticAvailability(user, deps.now());
+  async function onLead(user: Parameters<typeof applyAutomaticAvailability>[0]): Promise<void> {
+    await applyAutomaticAvailability(user, "lead", deps.now());
+  }
+
+  async function onAvailable(user: Parameters<typeof applyAutomaticAvailability>[0], event: "commencement" | "conclusion"): Promise<void> {
+    await applyAutomaticAvailability(user, event, deps.now());
   }
 
   app.post("/drivers/current", async (request, reply) => {
@@ -234,7 +238,7 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
-    await reconcile(active.user);
+    await onLead(active.user);
     return reply.code(201).send(result);
   });
 
@@ -285,7 +289,7 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
-    await reconcile(active.user);
+    await onLead(active.user);
     return reply.send(result);
   });
 
@@ -308,7 +312,7 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
-    await reconcile(active.user);
+    await onAvailable(active.user, "commencement");
     return reply.send(result);
   });
 
@@ -328,7 +332,7 @@ export function registerCalendarRoutes(
     if (result === "not-commenced") {
       return reply.code(409).send({ error: "not commenced" });
     }
-    await reconcile(active.user);
+    await onAvailable(active.user, "conclusion");
     return reply.send(result);
   });
 
@@ -376,7 +380,7 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
-    await reconcile(active.user);
+    await onLead(active.user);
     return reply.send(result);
   });
 
@@ -432,7 +436,6 @@ export function registerCalendarRoutes(
     if (result === "no-driver") {
       return reply.code(409).send({ error: "no driver" });
     }
-    await reconcile(active.user);
     return reply.code(204).send();
   });
 }
