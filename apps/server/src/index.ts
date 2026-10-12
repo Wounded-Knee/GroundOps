@@ -14,7 +14,7 @@ import { registerLocalCors } from "./cors.js";
 import { registerPlatformRoutes } from "./platform/http.js";
 import { registerSessionRoutes } from "./routes.js";
 import { registerAvailabilityRoutes } from "./availability/http.js";
-import { startAvailabilityLapseInterval } from "./availability/availability.js";
+import { startAvailabilityMaintenance } from "./availability/maintenance.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const host = "0.0.0.0";
@@ -50,8 +50,8 @@ registerRoutingRoutes(app, {
   lookupAddress,
 });
 registerGateway(app, bus.subscription);
-const stopAvailabilityLapse = startAvailabilityLapseInterval((error) => {
-  app.log.error({ err: error }, "availability lapse failed");
+const stopAvailabilityMaintenance = startAvailabilityMaintenance((error) => {
+  app.log.error({ err: error }, "availability maintenance failed");
 });
 
 app.get("/health", async (_request, reply) => {
@@ -69,7 +69,7 @@ app.get("/health", async (_request, reply) => {
 });
 
 async function shutdown(): Promise<void> {
-  stopAvailabilityLapse();
+  stopAvailabilityMaintenance();
   await app.close();
   await bus.connection.drain();
   await closeDatabase();

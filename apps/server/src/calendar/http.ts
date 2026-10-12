@@ -20,6 +20,7 @@ import {
   type SortieInput,
 } from "./calendar.js";
 import { defaultSortieRouteDeps, computeSortieDrivingRoute, type SortieRouteDeps } from "./sortieRoute.js";
+import { reconcileAutomaticAvailability } from "../availability/automatic.js";
 import { readAvailabilityIntervals } from "../availability/availability.js";
 import { clearMeterReading, replaceMeterReading } from "./meterReading.js";
 import { readTariff, replaceTariff } from "./tariff.js";
@@ -97,6 +98,10 @@ export function registerCalendarRoutes(
   deps: ScheduleDeps = defaultScheduleDeps,
   routeDeps: SortieRouteDeps = defaultSortieRouteDeps,
 ): void {
+  async function reconcile(user: Parameters<typeof reconcileAutomaticAvailability>[0]): Promise<void> {
+    await reconcileAutomaticAvailability(user, deps.now());
+  }
+
   app.post("/drivers/current", async (request, reply) => {
     const active = await findPresentedSession(request.headers.authorization);
     if (!active) {
@@ -229,6 +234,7 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
+    await reconcile(active.user);
     return reply.code(201).send(result);
   });
 
@@ -279,6 +285,7 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
+    await reconcile(active.user);
     return reply.send(result);
   });
 
@@ -301,6 +308,7 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
+    await reconcile(active.user);
     return reply.send(result);
   });
 
@@ -320,6 +328,7 @@ export function registerCalendarRoutes(
     if (result === "not-commenced") {
       return reply.code(409).send({ error: "not commenced" });
     }
+    await reconcile(active.user);
     return reply.send(result);
   });
 
@@ -367,6 +376,7 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
+    await reconcile(active.user);
     return reply.send(result);
   });
 
@@ -422,6 +432,7 @@ export function registerCalendarRoutes(
     if (result === "no-driver") {
       return reply.code(409).send({ error: "no driver" });
     }
+    await reconcile(active.user);
     return reply.code(204).send();
   });
 }

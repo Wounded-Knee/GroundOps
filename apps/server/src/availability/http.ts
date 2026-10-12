@@ -1,11 +1,26 @@
+import { availabilityThresholdMaxMinutes } from "@groundops/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { findActiveSession } from "../identity/sessions.js";
 import { readBearer } from "../identity/tokens.js";
+import { reconcileAutomaticAvailability } from "./automatic.js";
 import { checkInAvailability, readAvailability, setAvailability } from "./availability.js";
+import { readAvailabilitySettings, replaceAvailabilitySettings } from "./settings.js";
 
 const setBody = z.object({
   available: z.boolean(),
+});
+
+const coordinateBody = z.object({
+  latitude: z.number().gte(-90).lte(90),
+  longitude: z.number().gte(-180).lte(180),
+});
+
+const settingsBody = z.object({
+  thresholdMinutes: z.number().int().min(0).max(availabilityThresholdMaxMinutes),
+  autoSetUnavailable: z.boolean(),
+  autoSetAvailable: z.boolean(),
+  geofence: z.array(coordinateBody).refine((ring) => ring.length === 0 || ring.length >= 3),
 });
 
 export type AvailabilityDeps = {
@@ -43,6 +58,31 @@ export function registerAvailabilityRoutes(app: FastifyInstance, deps: Availabil
       return reply.code(401).send({ error: "unauthorized" });
     }
     return reply.send(await checkInAvailability(active.user, deps.now()));
+  });
+
+  app.get("/availability/settings", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    return reply.send(await readAvailabilitySettings(active.user));
+  });
+
+  app.put("/availability/settings", async (request, reply) => {
+    const active = await findPresentedSession(request.headers.authorization);
+    if (!active) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const parsed = settingsBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const saved = await replaceAvailabilitySettings(active.user, parsed.data);
+    if (saved === "invalid") {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    await reconcileAutomaticAvailability(active.user, deps.now());
+    return reply.send(saved);
   });
 }
 

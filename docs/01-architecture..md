@@ -783,6 +783,8 @@ Availability is a simple Boolean.
 
 means the driver is willing to receive/accept dispatch work.
 
+The driver may also let the platform set that boolean. The platform sets the driver unavailable during a sortie in progress, inside a lead time before a scheduled start, or outside an availability geofence the driver has drawn, and may set them available when none of those apply. Those settings belong to the driver.
+
 Availability is not equivalent to duty state.
 
 The driver also has an on-duty/off-duty state.

@@ -1,8 +1,15 @@
-import type { GeoCoordinate, Tariff } from "@groundops/contracts";
+import {
+  availabilityThresholdMaxMinutes,
+  defaultAvailabilitySettings,
+  type AvailabilitySettings,
+  type GeoCoordinate,
+  type Tariff,
+} from "@groundops/contracts";
 import Slider from "@react-native-community/slider";
 import { useEffect, useState } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
+import { readAvailabilitySettings, saveAvailabilitySettings } from "./availabilityClient";
 import type { AppearancePreference } from "./appearancePrefs";
 import { ensureCurrentDriver, requestTariff, saveTariff } from "./calendarClient";
 import { GeofenceEditor } from "./GeofenceEditor";
@@ -40,9 +47,8 @@ const apiUrl = resolveApiUrl();
 const couldNotLoad = "The tariff could not be loaded.";
 const notSaved = "The tariff was not saved.";
 
-/** Temporary preview starts empty so the editor centers on GPS. */
-const sampleGeofenceRing: GeoCoordinate[] = [];
-
+const couldNotLoadAvailability = "Availability settings could not be loaded.";
+const availabilityNotSaved = "Availability settings were not saved.";
 
 const appearanceOptions: { value: AppearancePreference; label: string }[] = [
   { value: "dark", label: "Dark Mode" },
@@ -75,7 +81,12 @@ export function SettingsScreen({
   const [saving, setSaving] = useState(false);
   const [savingCamera, setSavingCamera] = useState(false);
   const [savingTiming, setSavingTiming] = useState(false);
-  const [heldGeofence, setHeldGeofence] = useState<GeoCoordinate[]>(sampleGeofenceRing);
+  const [thresholdMinutes, setThresholdMinutes] = useState(defaultAvailabilitySettings.thresholdMinutes);
+  const [autoSetUnavailable, setAutoSetUnavailable] = useState(defaultAvailabilitySettings.autoSetUnavailable);
+  const [autoSetAvailable, setAutoSetAvailable] = useState(defaultAvailabilitySettings.autoSetAvailable);
+  const [geofence, setGeofence] = useState<GeoCoordinate[]>(defaultAvailabilitySettings.geofence);
+  const [settingsEditable, setSettingsEditable] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [geofenceOpen, setGeofenceOpen] = useState(false);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
   const [hexText, setHexText] = useState(defaultVisualAlertPrefs.color);
@@ -94,6 +105,7 @@ export function SettingsScreen({
     async function load(): Promise<void> {
       setMessage(null);
       setEditable(false);
+      setSettingsEditable(false);
       const camera = await ensureGuidanceCameraPrefsLoaded();
       const timing = await ensureGuidanceTimingPrefsLoaded();
       if (!cancelled) {
@@ -113,6 +125,23 @@ export function SettingsScreen({
       if (driver === "unreachable") {
         setMessage(couldNotLoad);
         return;
+      }
+      const settings = await readAvailabilitySettings(apiUrl, token);
+      if (cancelled) {
+        return;
+      }
+      if (settings === "unauthorized") {
+        onUnauthorized();
+        return;
+      }
+      if (settings === "unreachable") {
+        setMessage(couldNotLoadAvailability);
+      } else {
+        setThresholdMinutes(settings.thresholdMinutes);
+        setAutoSetUnavailable(settings.autoSetUnavailable);
+        setAutoSetAvailable(settings.autoSetAvailable);
+        setGeofence(settings.geofence);
+        setSettingsEditable(true);
       }
       const tariff = await requestTariff(apiUrl, token);
       if (cancelled) {
@@ -192,6 +221,34 @@ export function SettingsScreen({
     setStepAdvance(saved.stepAdvanceMeters);
   }
 
+  async function onSaveAvailability(): Promise<void> {
+    if (!settingsEditable || savingSettings) {
+      return;
+    }
+    const settings: AvailabilitySettings = {
+      thresholdMinutes,
+      autoSetUnavailable,
+      autoSetAvailable,
+      geofence,
+    };
+    setSavingSettings(true);
+    setMessage(null);
+    const saved = await saveAvailabilitySettings(apiUrl, token, settings);
+    setSavingSettings(false);
+    if (saved === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (saved === "unreachable" || saved === "rejected") {
+      setMessage(availabilityNotSaved);
+      return;
+    }
+    setThresholdMinutes(saved.thresholdMinutes);
+    setAutoSetUnavailable(saved.autoSetUnavailable);
+    setAutoSetAvailable(saved.autoSetAvailable);
+    setGeofence(saved.geofence);
+  }
+
   function updateVisualAlert(patch: Partial<VisualAlertPrefs>): void {
     const next = { ...getVisualAlertPrefs(), ...patch };
     setVisualAlert(next);
@@ -223,16 +280,15 @@ export function SettingsScreen({
     return (
       <View style={styles.geofenceCover}>
         <GeofenceEditor
-          ring={heldGeofence}
+          ring={geofence}
           onCancel={() => setGeofenceOpen(false)}
           onSave={(next) => {
             if (next === "invalid") {
               setMessage("A geofence needs at least three vertices.");
               return;
             }
-            setHeldGeofence(next);
+            setGeofence(next);
             setGeofenceOpen(false);
-            setMessage(`Geofence preview saved (${next.length} vertices). Not persisted.`);
           }}
         />
       </View>
@@ -408,23 +464,89 @@ export function SettingsScreen({
       >
         <Text style={styles.saveButtonText}>Save tariff</Text>
       </Pressable>
+      <Text style={styles.section}>Availability</Text>
+      <View style={styles.row}>
+        <SliderField
+          label="Availability threshold in minutes"
+          value={thresholdMinutes}
+          minimumValue={0}
+          maximumValue={availabilityThresholdMaxMinutes}
+          step={1}
+          formatValue={formatMinutes}
+          onChange={(value) => {
+            if (settingsEditable) {
+              setThresholdMinutes(Math.round(value));
+            }
+          }}
+        />
+      </View>
+      <Text style={styles.label}>Automatically Set Unavailable</Text>
+      <OnOff value={autoSetUnavailable} enabled={settingsEditable} onChange={setAutoSetUnavailable} />
+      <Text style={styles.label}>Automatically Set Available</Text>
+      <OnOff value={autoSetAvailable} enabled={settingsEditable} onChange={setAutoSetAvailable} />
+      <Text style={styles.label}>Availability geofence</Text>
+      <Text style={styles.previewHint}>{geofence.length > 0 ? `${geofence.length} vertices` : "No geofence"}</Text>
       {Platform.OS !== "web" ? (
-        <>
-          <Text style={styles.section}>Geofence (temporary preview)</Text>
-          <Text style={styles.previewHint}>
-            Opens empty on your GPS. Tap to add points, drag dots to move them. Save returns coordinates only.
-          </Text>
-          <Pressable style={[styles.button, styles.save]} onPress={() => setGeofenceOpen(true)}>
-            <Text style={styles.saveButtonText}>Edit geofence</Text>
-          </Pressable>
-        </>
+        <Pressable
+          style={[styles.button, styles.save, !settingsEditable ? styles.disabled : null]}
+          disabled={!settingsEditable}
+          onPress={() => setGeofenceOpen(true)}
+        >
+          <Text style={styles.saveButtonText}>{geofence.length === 0 ? "Create geofence" : "Edit geofence"}</Text>
+        </Pressable>
       ) : null}
+      <Pressable
+        style={[styles.button, styles.save, !settingsEditable || savingSettings ? styles.disabled : null]}
+        disabled={!settingsEditable || savingSettings}
+        onPress={() => void onSaveAvailability()}
+      >
+        <Text style={styles.saveButtonText}>Save availability</Text>
+      </Pressable>
       {message ? <Text style={styles.message}>{message}</Text> : null}
       {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
       <Pressable style={styles.button} onPress={onSignOut}>
         <Text style={styles.buttonText}>Sign out</Text>
       </Pressable>
     </ScrollView>
+  );
+}
+
+function OnOff({
+  value,
+  enabled,
+  onChange,
+}: {
+  value: boolean;
+  enabled: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
+  return (
+    <View style={styles.appearanceRow}>
+      {(
+        [
+          { option: true, label: "On" },
+          { option: false, label: "Off" },
+        ] as const
+      ).map((choice) => {
+        const selected = value === choice.option;
+        return (
+          <Pressable
+            key={choice.label}
+            accessibilityRole="button"
+            accessibilityState={{ selected, disabled: !enabled }}
+            disabled={!enabled}
+            onPress={() => onChange(choice.option)}
+            style={[styles.appearanceOption, selected ? styles.appearanceOptionSelected : null, !enabled ? styles.disabled : null]}
+          >
+            <Text style={[styles.appearanceOptionText, selected ? styles.appearanceOptionTextSelected : null]}>
+              {choice.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -541,6 +663,10 @@ function formatPercent(value: number): string {
 
 function formatMetersSetting(value: number): string {
   return `${Math.round(value)} m`;
+}
+
+function formatMinutes(value: number): string {
+  return `${Math.round(value)}`;
 }
 
 function createStyles(colors: ThemeColors) {

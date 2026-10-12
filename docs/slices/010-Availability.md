@@ -34,7 +34,7 @@ One actor: a signed-in driver. Opening availability creates the driver, company,
 
 ## 3.1 Availability
 
-`available` is the driver's choice. It changes only when the driver taps. A missed check-in does not clear it.
+`available` is the driver's choice. In this slice it changes only when the driver taps. Slice 011 also writes it from the driver's availability settings. A missed check-in does not clear it.
 
 `availability_checked_at` is the last time a client checked in while that choice was available. It is null when the driver is not available.
 

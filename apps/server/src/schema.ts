@@ -66,6 +66,14 @@ export const driver = pgTable("driver", {
   available: boolean("available").notNull().default(false),
   /** Last client check-in while available. Null when the driver is not available. */
   availabilityCheckedAt: timestamp("availability_checked_at", { withTimezone: true, mode: "date" }),
+  /** Lead time before a scheduled start that forces unavailable when that flag is on. */
+  availabilityThresholdMinutes: integer("availability_threshold_minutes").notNull().default(15),
+  /** When on, a sortie or a fix outside the geofence sets the choice unavailable. */
+  autoSetUnavailable: boolean("auto_set_unavailable").notNull().default(true),
+  /** When on, the absence of those cases sets the choice available. */
+  autoSetAvailable: boolean("auto_set_available").notNull().default(true),
+  /** Polygon ring. Empty means no availability geofence. */
+  availabilityGeofence: jsonb("availability_geofence").$type<GeoCoordinate[]>().notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 

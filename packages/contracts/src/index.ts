@@ -54,6 +54,22 @@ export type SetAvailabilityRequest = {
   available: boolean;
 };
 
+export const availabilityThresholdMaxMinutes = 120;
+
+export type AvailabilitySettings = {
+  thresholdMinutes: number;
+  autoSetUnavailable: boolean;
+  autoSetAvailable: boolean;
+  geofence: GeoCoordinate[];
+};
+
+export const defaultAvailabilitySettings: AvailabilitySettings = {
+  thresholdMinutes: 15,
+  autoSetUnavailable: true,
+  autoSetAvailable: true,
+  geofence: [],
+};
+
 export type RealtimeEnvelope =
   | (RealtimeBase & { type: "sortie.updated"; sortie: Sortie })
   | (RealtimeBase & { type: "location.updated"; location: LocationFix })

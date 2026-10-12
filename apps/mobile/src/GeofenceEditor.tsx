@@ -162,7 +162,7 @@ export function GeofenceEditor({
   }
 
   function save(): void {
-    if (!isValidRing(state.vertices)) {
+    if (state.vertices.length > 0 && !isValidRing(state.vertices)) {
       onSave("invalid");
       return;
     }
@@ -183,7 +183,7 @@ export function GeofenceEditor({
         ]
       : [];
 
-  const canSave = isValidRing(state.vertices);
+  const canSave = state.vertices.length === 0 || isValidRing(state.vertices);
   const hint = dragging
     ? "Release to place the point."
     : state.selectedIndex !== null
