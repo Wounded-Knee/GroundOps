@@ -79,7 +79,7 @@ export function VisualAlert({
     return null;
   }
 
-  const displayIntensity = throbbing ? 1 : Math.max(0, Math.min(1, intensity));
+  const displayIntensity = throbbing ? 0.5 : Math.max(0, Math.min(1, intensity));
   const displayBrightness = throbbing ? 1 : Math.max(0, Math.min(1, brightness));
   const depth = displayIntensity * (Math.min(width, height) / 2);
   if (depth <= 0 || displayBrightness <= 0) {

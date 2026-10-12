@@ -1,6 +1,6 @@
 import type { Tariff } from "@groundops/contracts";
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type ViewStyle } from "react-native";
 import { formatSeconds } from "./guidance";
 import {
   formatMiles,
@@ -13,6 +13,13 @@ import { useTheme } from "./ThemeProvider";
 import { withAlpha, type ThemeColors } from "./theme";
 
 const metersPerMile = 1609.344;
+/** Body text size, so layout can use em the way CSS does. */
+const em = 16;
+
+/** Meter panel: a quarter of the screen, minus 2em. */
+export function meterPanelHeight(windowHeight: number): number {
+  return Math.max(0, windowHeight * 0.25 - 2 * em);
+}
 
 export type MeterDisplay = {
   milesTraveled: number;
@@ -51,6 +58,7 @@ export function MeterStrip({
   const { colors } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
   const styles = createStyles(colors);
+  const meterWash = fadeDown(withAlpha(colors.surfaceMuted, 0.5), colors.surfaceMuted);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [flashOn, setFlashOn] = useState(true);
@@ -88,7 +96,7 @@ export function MeterStrip({
     <Pressable
       accessibilityLabel={actionsOpen ? "Meter actions" : "Meter"}
       onPress={() => setActionsOpen((open) => !open)}
-      style={[styles.panel, { height: windowHeight * 0.25 }]}
+      style={[styles.panel, meterWash, { height: meterPanelHeight(windowHeight) }]}
     >
       {actionsOpen ? (
         <View style={styles.actionsContent}>
@@ -240,10 +248,18 @@ function SideRow({
   );
 }
 
+/** Theme gray, 50% at the top through solid gray at the bottom. */
+function fadeDown(top: string, bottom: string): ViewStyle {
+  const image = `linear-gradient(to bottom, ${top}, ${bottom})`;
+  if (Platform.OS === "web") {
+    return { backgroundImage: image } as ViewStyle;
+  }
+  return { experimental_backgroundImage: image };
+}
+
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     panel: {
-      backgroundColor: withAlpha(colors.surface, 0.3),
       zIndex: 5,
       overflow: "hidden",
     },

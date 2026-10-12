@@ -1,7 +1,8 @@
 import { Pressable, StyleSheet, Text } from "react-native";
-import { withAlpha } from "./theme";
 
 export const availableYellow = "#F5C400";
+/** Unavailable state. Solid, so the bar does not show the map through it. */
+export const mutedDarkYellow = "#A68B3A";
 
 export function AvailabilityStatus({
   current,
@@ -24,7 +25,7 @@ export function AvailabilityStatus({
       accessibilityState={{ disabled: !loaded || busy, selected: current }}
       disabled={!loaded || busy}
       onPress={onToggle}
-      style={[styles.bar, { backgroundColor: withAlpha(availableYellow, current ? 1 : 0.35) }]}
+      style={[styles.bar, { backgroundColor: current ? availableYellow : mutedDarkYellow }]}
     >
       <Text style={styles.label}>{label}</Text>
       {message ? <Text style={styles.message}>{message}</Text> : null}

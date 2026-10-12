@@ -44,6 +44,21 @@ export function screenToGeo(
   };
 }
 
+/**
+ * Route stroke relative to the navigation zoom.
+ * At that zoom and closer, the line keeps its design thickness.
+ * Zooming out scales it with the map: one level out is half as thick.
+ */
+export function routeStrokeScale(zoom: number, navigationZoom: number): number {
+  if (!Number.isFinite(zoom) || !Number.isFinite(navigationZoom)) {
+    return 1;
+  }
+  if (zoom >= navigationZoom) {
+    return 1;
+  }
+  return 2 ** (zoom - navigationZoom);
+}
+
 /** Approximate deltas for an initial camera before the first onCameraMove. */
 export function viewportFromCamera(
   camera: { latitude: number; longitude: number; zoom: number },

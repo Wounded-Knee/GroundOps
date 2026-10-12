@@ -46,6 +46,13 @@ export function departureAlertMarks(departAt: Date, now: Date): DepartureAlertMa
   return marks;
 }
 
+/** Navigation countdown stays hidden until the departure is this close. */
+export const departureCountdownLeadMs = 30 * 60 * 1000;
+
+export function showDepartureCountdown(remainingMs: number): boolean {
+  return remainingMs >= 0 && remainingMs <= departureCountdownLeadMs;
+}
+
 export function formatCountdown(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
   const hours = Math.floor(totalSeconds / 3600);

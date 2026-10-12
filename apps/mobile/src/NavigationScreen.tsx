@@ -16,6 +16,7 @@ import * as Speech from "expo-speech";
 import { useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { AppState, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
+import { meterPanelHeight } from "./MeterStrip";
 import { useTheme } from "./ThemeProvider";
 import { withAlpha, type ThemeColors } from "./theme";
 import { resolveApiUrl } from "./apiUrl";
@@ -36,7 +37,7 @@ import {
 } from "./calendarClient";
 import { setActiveSortieObservation } from "./locationObservationReporting";
 import { cancelDepartureAlerts, scheduleDepartureAlerts } from "./departureAlerts";
-import { formatCountdown, nextDeparture, type NextDeparture } from "./nextDeparture";
+import { formatCountdown, nextDeparture, showDepartureCountdown, type NextDeparture } from "./nextDeparture";
 import {
   applyLocationFix,
   arrivalMeters,
@@ -1481,7 +1482,9 @@ export function NavigationScreen({
         : (guiding.route.steps[guiding.stepIndex]?.distanceMeters ?? step.distanceMeters)
       : 0;
   const browseMessage = nav.mode === "browse" ? nav.message : null;
-  const meterChromeInset = meterActive ? windowHeight * 0.25 : 0;
+  const departureRemainingMs = upcoming ? upcoming.departAt.getTime() - clock : null;
+  const showCountdown = departureRemainingMs !== null && showDepartureCountdown(departureRemainingMs);
+  const meterChromeInset = meterActive ? meterPanelHeight(windowHeight) : 0;
 
   return (
     <View style={styles.screen}>
@@ -1492,6 +1495,7 @@ export function NavigationScreen({
         user={permission === "granted" ? fix : null}
         showTraffic={guiding !== null || arrived !== null}
         followUser={nav.mode === "browse" && permission === "granted"}
+        navigationZoom={cameraPrefs.zoom}
       />
       <View
         style={[StyleSheet.absoluteFill, meterChromeInset > 0 ? { paddingBottom: meterChromeInset } : null]}
@@ -1537,9 +1541,9 @@ export function NavigationScreen({
           </View>
         ) : null}
 
-        {upcoming ? (
+        {showCountdown && upcoming && departureRemainingMs !== null ? (
           <View style={styles.countdownCard} pointerEvents="none">
-            <Text style={styles.countdownTime}>{formatCountdown(upcoming.departAt.getTime() - clock)}</Text>
+            <Text style={styles.countdownTime}>{formatCountdown(departureRemainingMs)}</Text>
             <Text style={styles.countdownLabel}>Depart for {upcoming.label}</Text>
           </View>
         ) : null}
@@ -1579,7 +1583,7 @@ export function NavigationScreen({
         ) : null}
 
         {preview ? (
-          <View style={styles.sheet} pointerEvents="auto">
+          <View style={[styles.sheet, styles.startSheet]} pointerEvents="auto">
             <Text style={styles.destination}>{preview.destination.label}</Text>
             <Text style={styles.summary}>
               {formatSeconds(preview.route.durationSeconds)} · {formatMeters(preview.route.distanceMeters)}
@@ -1675,6 +1679,7 @@ async function speak(
 }
 
 function createStyles(colors: ThemeColors) {
+  const mapChrome = withAlpha(colors.surfaceMuted, 0.5);
   return StyleSheet.create({
     screen: {
       flex: 1,
@@ -1682,7 +1687,7 @@ function createStyles(colors: ThemeColors) {
     },
     searchCard: {
       margin: 12,
-      backgroundColor: colors.surface,
+      backgroundColor: mapChrome,
       borderWidth: 1,
       borderColor: colors.borderStrong,
       borderRadius: 12,
@@ -1700,7 +1705,7 @@ function createStyles(colors: ThemeColors) {
     countdownCard: {
       marginHorizontal: 12,
       marginTop: 4,
-      backgroundColor: withAlpha(colors.surface, 0.92),
+      backgroundColor: mapChrome,
       borderRadius: 12,
       paddingHorizontal: 16,
       paddingVertical: 12,
@@ -1720,7 +1725,7 @@ function createStyles(colors: ThemeColors) {
     maneuverCard: {
       marginHorizontal: 12,
       marginTop: 8,
-      backgroundColor: withAlpha(colors.surface, 0.3),
+      backgroundColor: mapChrome,
       borderRadius: 12,
       padding: 16,
     },
@@ -1764,6 +1769,9 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       borderRadius: 16,
       padding: 16,
+    },
+    startSheet: {
+      backgroundColor: mapChrome,
     },
     destination: {
       fontSize: 18,

@@ -1,7 +1,9 @@
-import { AppleMaps, GoogleMaps } from "expo-maps";
+import type { GeoCoordinate } from "@groundops/contracts";
+import { AppleMaps, GoogleMaps, type CameraMoveEvent } from "expo-maps";
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { PixelRatio, Platform, StyleSheet } from "react-native";
-import type { GeoCoordinate } from "@groundops/contracts";
+import { guidanceZoom } from "./guidance";
+import { routeStrokeScale } from "./mapProjection";
 
 export type MapCamera = {
   latitude: number;
@@ -28,6 +30,8 @@ type PlatformMapProps = {
   user: GeoCoordinate | null;
   showTraffic: boolean;
   followUser: boolean;
+  /** Zoom at which the route keeps its design thickness. */
+  navigationZoom?: number;
 };
 
 const routeColor = "#1A73E8";
@@ -41,7 +45,7 @@ function routeStrokeWidth(dp: number): number {
 }
 
 export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function PlatformMap(
-  { path, destination, user, showTraffic, followUser },
+  { path, destination, user, showTraffic, followUser, navigationZoom = guidanceZoom },
   ref,
 ) {
   const googleRef = useRef<GoogleMaps.MapView | null>(null);
@@ -50,6 +54,7 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
   const pendingCamera = useRef<MapCamera | null>(null);
   const [androidMapLoaded, setAndroidMapLoaded] = useState(false);
   const [displayedUser, setDisplayedUserState] = useState<GeoCoordinate | null>(null);
+  const [zoom, setZoom] = useState(navigationZoom);
 
   function moveCamera(camera: MapCamera) {
     const position = {
@@ -110,6 +115,7 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
     }
   }
 
+  const strokeScale = routeStrokeScale(zoom, navigationZoom);
   const polylines = useMemo(
     () =>
       path.length > 0
@@ -118,12 +124,17 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
               id: "route-casing",
               coordinates: path,
               color: routeCasingColor,
-              width: routeStrokeWidth(routeCasingWidthDp),
+              width: routeStrokeWidth(Math.max(1, routeCasingWidthDp * strokeScale)),
             },
-            { id: "route", coordinates: path, color: routeColor, width: routeStrokeWidth(routeWidthDp) },
+            {
+              id: "route",
+              coordinates: path,
+              color: routeColor,
+              width: routeStrokeWidth(Math.max(1, routeWidthDp * strokeScale)),
+            },
           ]
         : [],
-    [path],
+    [path, strokeScale],
   );
   const markers = destination
     ? [{ id: "destination", coordinates: destination, title: "Destination" }]
@@ -131,11 +142,16 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
   const hasUser = user !== null;
   const properties = useMemo(
     () => ({
-      isMyLocationEnabled: hasUser,
+      // Android draws its own yellow puck from userLocation. iOS keeps the system dot.
+      isMyLocationEnabled: Platform.OS === "ios" && hasUser,
       isTrafficEnabled: showTraffic,
     }),
     [hasUser, showTraffic],
   );
+
+  function onCameraMove(event: CameraMoveEvent) {
+    setZoom((current) => (Math.abs(current - event.zoom) < 0.01 ? current : event.zoom));
+  }
   const puck = displayedUser ?? user;
 
   if (Platform.OS === "ios") {
@@ -146,6 +162,7 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
         markers={markers}
         polylines={polylines}
         properties={properties}
+        onCameraMove={onCameraMove}
         uiSettings={{ myLocationButtonEnabled: false, compassEnabled: true }}
       />
     );
@@ -159,6 +176,7 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
       markers={markers}
       polylines={polylines}
       properties={properties}
+      onCameraMove={onCameraMove}
       uiSettings={{ myLocationButtonEnabled: false, compassEnabled: true, zoomControlsEnabled: false }}
       {...(puck
         ? {

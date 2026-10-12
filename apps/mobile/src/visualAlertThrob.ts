@@ -1,4 +1,4 @@
-export const THROB_MS = 750;
+export const THROB_MS = 375;
 
 export function normalizeThrobCount(count: number): number {
   if (!Number.isFinite(count)) {

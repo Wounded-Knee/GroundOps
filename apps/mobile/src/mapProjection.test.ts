@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { geoToScreen, screenToGeo, viewportFromCamera } from "./mapProjection.js";
+import { geoToScreen, routeStrokeScale, screenToGeo, viewportFromCamera } from "./mapProjection.js";
 
 describe("mapProjection", () => {
   it("round-trips geo coordinates through screen space", () => {
@@ -38,5 +38,12 @@ describe("mapProjection", () => {
     assert.equal(viewport.longitude, 2);
     assert.equal(viewport.longitudeDelta, 360 / 2 ** 8);
     assert.equal(viewport.latitudeDelta, viewport.longitudeDelta);
+  });
+
+  it("keeps route thickness at the navigation zoom and halves it each level out", () => {
+    assert.equal(routeStrokeScale(17.5, 17.5), 1);
+    assert.equal(routeStrokeScale(19, 17.5), 1);
+    assert.equal(routeStrokeScale(16.5, 17.5), 0.5);
+    assert.equal(routeStrokeScale(15.5, 17.5), 0.25);
   });
 });

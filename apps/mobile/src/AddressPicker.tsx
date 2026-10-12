@@ -162,7 +162,7 @@ function createStyles(colors: ThemeColors) {
     searchRow: {
       flexDirection: "row",
       alignItems: "center",
-      backgroundColor: colors.surface,
+      backgroundColor: "transparent",
     },
     fieldInput: {
       flex: 1,
@@ -175,13 +175,13 @@ function createStyles(colors: ThemeColors) {
     searchInput: {
       flex: 1,
       color: colors.text,
-      backgroundColor: colors.surface,
+      backgroundColor: "transparent",
       fontSize: 18,
       paddingHorizontal: 16,
       paddingVertical: 14,
     },
     clear: {
-      backgroundColor: colors.surface,
+      backgroundColor: "transparent",
       paddingHorizontal: 12,
       paddingVertical: 12,
     },
@@ -197,7 +197,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 4,
     },
     searchSuggestion: {
-      backgroundColor: colors.surface,
+      backgroundColor: "transparent",
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.borderStrong,
       paddingHorizontal: 16,

@@ -1,8 +1,43 @@
 diff --git a/android/src/main/java/expo/modules/maps/GoogleMapsView.kt b/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
-index 82450b6ab008ef190cbc499d987ffbc774309c82..780fa331b06622af298bb576867e9e46bf62cb4a 100644
 --- a/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
 +++ b/android/src/main/java/expo/modules/maps/GoogleMapsView.kt
-@@ -277,12 +277,13 @@ class GoogleMapsView(context: Context, appContext: AppContext) :
+@@ -18,6 +18,7 @@
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.geometry.Offset
+ import androidx.compose.ui.graphics.Color
+ import com.google.android.gms.maps.CameraUpdateFactory
+ import com.google.android.gms.maps.LocationSource
+@@ -30,6 +31,7 @@
+ import com.google.maps.android.compose.GoogleMap
+ import com.google.maps.android.compose.Marker
+ import com.google.maps.android.compose.MarkerState
++import com.google.maps.android.compose.rememberUpdatedMarkerState
+ import com.google.maps.android.compose.Polygon
+ import com.google.maps.android.compose.Circle
+ import com.google.maps.android.compose.Polyline
+@@ -192,6 +194,19 @@
+         }
+       )
+ 
++      val userCoordinates = props.userLocation.value.coordinates
++      val puckState = rememberUpdatedMarkerState(position = userCoordinates?.toLatLng() ?: LatLng(0.0, 0.0))
++      val puckIcon = remember { navigationPuckIcon(context) }
++      if (userCoordinates != null) {
++        Marker(
++          state = puckState,
++          anchor = Offset(0.5f, 0.5f),
++          icon = puckIcon,
++          zIndex = 10f,
++          onClick = { true }
++        )
++      }
++
+       for ((marker, state) in markerState.value) {
+         key(marker.id) {
+           val icon = remember(marker.icon) { getIconDescriptor(marker) }
+@@ -277,12 +292,13 @@
      val locationSource = remember(coordinates) {
        CustomLocationSource()
      }
@@ -18,7 +53,7 @@ index 82450b6ab008ef190cbc499d987ffbc774309c82..780fa331b06622af298bb576867e9e46
          // Update camera position when location changes and manualCameraControl is disabled.
          cameraState.animate(CameraUpdateFactory.newLatLng(coordinates.toLatLng()))
        }
-@@ -369,11 +370,23 @@ class GoogleMapsView(context: Context, appContext: AppContext) :
+@@ -369,11 +385,23 @@
        ?: props.userLocation.value.coordinates?.toLatLng()
        ?: return
  
@@ -47,6 +82,34 @@ index 82450b6ab008ef190cbc499d987ffbc774309c82..780fa331b06622af298bb576867e9e46
  
      // If centering on the user's location, stop manual camera control.
      if (config?.coordinates == null) {
+@@ -427,6 +455,27 @@
+   }
+ }
+ 
++/** Stock Maps location dot is about 18dp. Draw the same dot 30% larger, in yellow. */
++private const val STOCK_LOCATION_DOT_DP = 18f
++private const val PUCK_SCALE = 1.3f
++private const val STOCK_LOCATION_RING_DP = 2f
++private const val PUCK_YELLOW = "#F5C400"
++
++private fun navigationPuckIcon(context: Context): BitmapDescriptor {
++  val density = context.resources.displayMetrics.density
++  val diameterPx = (STOCK_LOCATION_DOT_DP * PUCK_SCALE * density).toInt().coerceAtLeast(1)
++  val ringPx = STOCK_LOCATION_RING_DP * PUCK_SCALE * density
++  val bitmap = Bitmap.createBitmap(diameterPx, diameterPx, Bitmap.Config.ARGB_8888)
++  val canvas = android.graphics.Canvas(bitmap)
++  val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
++  val center = diameterPx / 2f
++  paint.color = android.graphics.Color.WHITE
++  canvas.drawCircle(center, center, center, paint)
++  paint.color = android.graphics.Color.parseColor(PUCK_YELLOW)
++  canvas.drawCircle(center, center, (center - ringPx).coerceAtLeast(1f), paint)
++  return BitmapDescriptorFactory.fromBitmap(bitmap)
++}
++
+ @Composable
+ private fun MapCircles(
+   circleState: List<Pair<CircleRecord, LatLng>>,
 diff --git a/android/src/main/java/expo/modules/maps/Records.kt b/android/src/main/java/expo/modules/maps/Records.kt
 index 15854606398ea84a49d9eef55750eab4102aa174..5aac14f7b02e2afd6da843911f9a955f8a91e364 100644
 --- a/android/src/main/java/expo/modules/maps/Records.kt

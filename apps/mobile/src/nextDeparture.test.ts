@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Sortie } from "@groundops/contracts";
-import { departureAlertMarks, formatCountdown, nextDeparture } from "./nextDeparture";
+import { departureAlertMarks, formatCountdown, nextDeparture, showDepartureCountdown } from "./nextDeparture";
 
 describe("nextDeparture", () => {
   const now = new Date("2026-09-02T12:00:00.000Z");
@@ -59,6 +59,15 @@ describe("departureAlertMarks", () => {
       marks.map((mark) => mark.minutesBefore),
       [1, 0],
     );
+  });
+});
+
+describe("showDepartureCountdown", () => {
+  it("shows only inside the last 30 minutes", () => {
+    assert.equal(showDepartureCountdown(30 * 60 * 1000), true);
+    assert.equal(showDepartureCountdown(30 * 60 * 1000 + 1), false);
+    assert.equal(showDepartureCountdown(0), true);
+    assert.equal(showDepartureCountdown(-1), false);
   });
 });
 
