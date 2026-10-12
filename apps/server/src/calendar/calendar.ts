@@ -28,6 +28,7 @@ import {
   computeWindow,
   distanceMeters,
   movedFarEnough,
+  placeStillOpen,
   scheduleBackoffMs,
   type ApproachOrigin,
   type DriveDuration,
@@ -208,7 +209,7 @@ export async function authorSortie(
   if (!companyId) {
     return "no-driver";
   }
-  const position = await departurePosition(author.id, null, valid.arrivalAt);
+  const position = await departurePosition(author.id, null, valid.arrivalAt, deps.now());
   if (!position) {
     return "no-location";
   }
@@ -277,7 +278,7 @@ export async function previewSortie(
       ? gps
         ? { ...gps, label: null }
         : null
-      : approachOrigin(places, valid.arrivalAt, sortieId, gps);
+      : approachOrigin(places, valid.arrivalAt, sortieId, gps, now);
   if (!position) {
     return "no-location";
   }
@@ -294,6 +295,8 @@ export async function previewSortie(
   const draftPlace: SortiePlace = {
     id: sortieId ?? previewPlaceId,
     arrivalAt: draftWindow.arrivalAt,
+    scheduledEnd: draftWindow.scheduledEnd,
+    actualEnd: null,
     destination: { latitude: lastStop.latitude, longitude: lastStop.longitude },
     destinationLabel: lastStop.label,
   };
@@ -320,7 +323,7 @@ export async function previewSortie(
       held.push({ ...base, start: cachedStart, end: cachedEnd, changed: false, failed: false });
       continue;
     }
-    const origin = approachOrigin(hypothetical, row.arrivalAt, row.id, gps);
+    const origin = approachOrigin(hypothetical, row.arrivalAt, row.id, gps, now);
     const anchor = origin ? anchorOf(row) : null;
     const withinBackoff =
       row.scheduleFailedAt !== null && now.getTime() - row.scheduleFailedAt.getTime() < scheduleBackoffMs;
@@ -412,7 +415,7 @@ export async function reviseSortie(
   const inProgress = existing.actualStart !== null && existing.actualEnd === null;
   const nextStops = mergeStopActuals(valid.stops, previousStops, inProgress);
 
-  const position = await departurePosition(author.id, sortieId, valid.arrivalAt);
+  const position = await departurePosition(author.id, sortieId, valid.arrivalAt, deps.now());
   if (!position) {
     return "no-location";
   }
@@ -537,7 +540,7 @@ export async function extendStopWait(
   const nextStops = stops.map((stop, index) =>
     index === position ? { ...stop, waitMinutes: stop.waitMinutes + 1 } : stop,
   );
-  const origin = await departurePosition(author.id, sortieId, row.arrivalAuthored ? row.arrivalAt : null);
+  const origin = await departurePosition(author.id, sortieId, row.arrivalAuthored ? row.arrivalAt : null, deps.now());
   if (!origin) {
     return "no-location";
   }
@@ -596,7 +599,7 @@ export async function commenceSortie(
   }
 
   const now = deps.now();
-  const position = await departurePosition(author.id, row.id, row.arrivalAuthored ? row.arrivalAt : null);
+  const position = await departurePosition(author.id, row.id, row.arrivalAuthored ? row.arrivalAt : null, now);
   if (!position) {
     return "no-location";
   }
@@ -758,10 +761,12 @@ async function recomputeOpenSorties(
     if (row.actualStart !== null) {
       continue;
     }
-    if (approachOrigin(places, row.arrivalAt, row.id, null) !== null) {
+    if (approachOrigin(places, row.arrivalAt, row.id, null, now) !== null) {
       continue;
     }
-    await recomputeFrom(userId, row, { ...position, label: null }, now, deps, true);
+    const anchor = anchorOf(row);
+    const originChanged = anchor !== null && anchorMatchesEndedPlace(places, anchor, now);
+    await recomputeFrom(userId, row, { ...position, label: null }, now, deps, !originChanged);
   }
 }
 
@@ -774,7 +779,7 @@ async function alignFollowingSorties(driverId: string, userId: string, deps: Sch
     if (row.actualStart !== null) {
       continue;
     }
-    const origin = approachOrigin(places, row.arrivalAt, row.id, gps);
+    const origin = approachOrigin(places, row.arrivalAt, row.id, gps, now);
     if (!origin) {
       continue;
     }
@@ -1208,6 +1213,7 @@ async function departurePosition(
   driverId: string,
   sortieId: string | null,
   arrivalAt: Date | null,
+  now: Date,
 ): Promise<ApproachOrigin | null> {
   const gps = await latestObservation(db, driverId);
   if (arrivalAt === null) {
@@ -1217,7 +1223,7 @@ async function departurePosition(
     return { ...gps, label: null };
   }
   const places = await driverPlaces(driverId);
-  return approachOrigin(places, arrivalAt, sortieId, gps);
+  return approachOrigin(places, arrivalAt, sortieId, gps, now);
 }
 
 async function originAddress(origin: ApproachOrigin, deps: ScheduleDeps): Promise<string> {
@@ -1261,6 +1267,8 @@ async function driverPlaces(driverId: string): Promise<SortiePlace[]> {
     .select({
       id: sortie.id,
       arrivalAt: sortie.arrivalAt,
+      scheduledEnd: sortie.scheduledEnd,
+      actualEnd: sortie.actualEnd,
       label: sortieStop.label,
       latitude: sortieStop.latitude,
       longitude: sortieStop.longitude,
@@ -1280,13 +1288,24 @@ async function driverPlaces(driverId: string): Promise<SortiePlace[]> {
       current.destinationLabel = row.label;
       continue;
     }
-    places.push({ id: row.id, arrivalAt: row.arrivalAt, destination, destinationLabel: row.label });
+    places.push({
+      id: row.id,
+      arrivalAt: row.arrivalAt,
+      scheduledEnd: row.scheduledEnd,
+      actualEnd: row.actualEnd,
+      destination,
+      destinationLabel: row.label,
+    });
   }
   return places;
 }
 
 function samePlace(left: GeoCoordinate, right: GeoCoordinate): boolean {
   return left.latitude === right.latitude && left.longitude === right.longitude;
+}
+
+function anchorMatchesEndedPlace(places: SortiePlace[], anchor: GeoCoordinate, now: Date): boolean {
+  return places.some((place) => !placeStillOpen(place, now) && samePlace(place.destination, anchor));
 }
 
 function warningLabel(label: string, stops: SortieStop[]): string {

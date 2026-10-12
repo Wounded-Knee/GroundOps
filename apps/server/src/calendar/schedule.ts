@@ -24,6 +24,8 @@ export type ComputedWindow = {
 export type SortiePlace = {
   id: string;
   arrivalAt: Date;
+  scheduledEnd: Date;
+  actualEnd: Date | null;
   destination: GeoCoordinate;
   destinationLabel: string;
 };
@@ -32,14 +34,20 @@ export type ApproachOrigin = GeoCoordinate & {
   label: string | null;
 };
 
-/** The drive to this origin starts at the previous sortie's destination when one is earlier on the schedule. */
+/** A sortie is still an approach origin while it has not been completed and its scheduled end is still ahead. */
+export function placeStillOpen(place: SortiePlace, now: Date): boolean {
+  return place.actualEnd === null && place.scheduledEnd.getTime() > now.getTime();
+}
+
+/** The drive starts at an earlier sortie's destination only while that sortie is still open. */
 export function approachOrigin(
   places: SortiePlace[],
   arrivalAt: Date,
   id: string | null,
   currentPosition: GeoCoordinate | null,
+  now: Date,
 ): ApproachOrigin | null {
-  const previous = previousPlace(places, arrivalAt, id);
+  const previous = previousPlace(places, arrivalAt, id, now);
   if (previous) {
     return { ...previous.destination, label: previous.destinationLabel };
   }
@@ -49,10 +57,13 @@ export function approachOrigin(
   return { ...currentPosition, label: null };
 }
 
-function previousPlace(places: SortiePlace[], arrivalAt: Date, id: string | null): SortiePlace | null {
+function previousPlace(places: SortiePlace[], arrivalAt: Date, id: string | null, now: Date): SortiePlace | null {
   let previous: SortiePlace | null = null;
   for (const place of places) {
     if (id !== null && place.id === id) {
+      continue;
+    }
+    if (!placeStillOpen(place, now)) {
       continue;
     }
     if (!sortsBefore(place, arrivalAt, id)) {
