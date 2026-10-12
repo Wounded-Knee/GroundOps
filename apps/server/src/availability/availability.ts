@@ -1,9 +1,10 @@
-import type { AvailabilityResponse, User } from "@groundops/contracts";
-import { and, desc, eq, isNotNull, lt } from "drizzle-orm";
+import type { AvailabilityInterval, AvailabilityResponse, User } from "@groundops/contracts";
+import { and, asc, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { ensureDriver } from "../calendar/calendar.js";
 import { db } from "../db.js";
 import { availabilityUpdated, publishRealtime } from "../realtime.js";
 import { driver, driverAvailabilityEvent } from "../schema.js";
+import { foldCurrentAvailability } from "./intervals.js";
 
 /** A check-in this old is still treated as available. Older than this is a lapse. */
 export const availabilityLeaseMs = 5 * 60 * 1000;
@@ -18,6 +19,46 @@ type DriverAvailability = {
 };
 
 let lapseChain: Promise<void> = Promise.resolve();
+
+/** Availability the server recorded for this driver over `[from, to)`. */
+export async function readAvailabilityIntervals(
+  userId: string,
+  from: Date,
+  to: Date,
+): Promise<AvailabilityInterval[]> {
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from.getTime() >= to.getTime()) {
+    return [];
+  }
+  const drivers = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId)).limit(1);
+  const row = drivers[0];
+  if (!row) {
+    return [];
+  }
+  const prior = await db
+    .select({ current: driverAvailabilityEvent.current })
+    .from(driverAvailabilityEvent)
+    .where(and(eq(driverAvailabilityEvent.driverId, row.id), lt(driverAvailabilityEvent.recordedAt, from)))
+    .orderBy(desc(driverAvailabilityEvent.recordedAt), desc(driverAvailabilityEvent.id))
+    .limit(1);
+  const events = await db
+    .select({
+      recordedAt: driverAvailabilityEvent.recordedAt,
+      current: driverAvailabilityEvent.current,
+    })
+    .from(driverAvailabilityEvent)
+    .where(
+      and(
+        eq(driverAvailabilityEvent.driverId, row.id),
+        gte(driverAvailabilityEvent.recordedAt, from),
+        lt(driverAvailabilityEvent.recordedAt, to),
+      ),
+    )
+    .orderBy(asc(driverAvailabilityEvent.recordedAt), asc(driverAvailabilityEvent.id));
+  return foldCurrentAvailability(prior[0]?.current ?? false, events, from).map((interval) => ({
+    start: interval.start.toISOString(),
+    end: interval.end ? interval.end.toISOString() : null,
+  }));
+}
 
 /** The platform treats the driver as available only when the choice is set and the check-in is fresh. */
 export function isAvailabilityCurrent(available: boolean, checkedAt: Date | null, now: Date): boolean {

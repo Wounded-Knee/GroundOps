@@ -308,6 +308,59 @@ describe("calendar", () => {
     await app.close();
   });
 
+  it("returns only the caller's server-recorded availability, including a lapse", async () => {
+    const person = await createSession({
+      sub: `calendar-availability-${crypto.randomUUID()}`,
+      displayName: "Available",
+      email: null,
+    });
+    const other = await createSession({
+      sub: `calendar-availability-other-${crypto.randomUUID()}`,
+      displayName: "Other",
+      email: null,
+    });
+    const app = Fastify();
+    registerCalendarRoutes(app);
+    try {
+      const own = await ensureDriver(person.user);
+      const theirs = await ensureDriver(other.user);
+      const on = new Date("2026-10-11T14:00:00.000Z");
+      const lapse = new Date("2026-10-11T15:00:00.000Z");
+      const restored = new Date("2026-10-11T16:00:00.000Z");
+      await db.insert(driverAvailabilityEvent).values([
+        { driverId: own.id, available: true, current: true, recordedAt: on },
+        { driverId: own.id, available: true, current: false, recordedAt: lapse },
+        { driverId: own.id, available: true, current: true, recordedAt: restored },
+        { driverId: theirs.id, available: true, current: true, recordedAt: on },
+      ]);
+
+      const day = await app.inject({
+        method: "GET",
+        url: "/calendar?from=2026-10-11T00:00:00.000Z&to=2026-10-12T00:00:00.000Z",
+        headers: { authorization: `Bearer ${person.token}` },
+      });
+      assert.equal(day.statusCode, 200);
+      assert.deepEqual(day.json().availability, [
+        { start: on.toISOString(), end: lapse.toISOString() },
+        { start: restored.toISOString(), end: null },
+      ]);
+
+      const clipped = await app.inject({
+        method: "GET",
+        url: "/calendar?from=2026-10-11T14:30:00.000Z&to=2026-10-11T15:30:00.000Z",
+        headers: { authorization: `Bearer ${person.token}` },
+      });
+      assert.equal(clipped.statusCode, 200);
+      assert.deepEqual(clipped.json().availability, [
+        { start: "2026-10-11T14:30:00.000Z", end: lapse.toISOString() },
+      ]);
+    } finally {
+      await app.close();
+      await removeUser(person.user.id);
+      await removeUser(other.user.id);
+    }
+  });
+
   it("serves author and revise over HTTP for the session that owns the sortie", async () => {
     const person = await createSession({
       sub: `calendar-http-${crypto.randomUUID()}`,

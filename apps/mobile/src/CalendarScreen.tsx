@@ -1,4 +1,4 @@
-import type { Sortie, SortieWriteRequest } from "@groundops/contracts";
+import type { AvailabilityInterval, Sortie, SortieWriteRequest } from "@groundops/contracts";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
@@ -18,6 +18,7 @@ import {
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
+import { availableYellow } from "./AvailabilityStatus";
 import { resolveApiUrl } from "./apiUrl";
 import { readCalendarCache, writeCalendarCache } from "./calendarCache";
 import {
@@ -31,6 +32,7 @@ import {
 import { coalescedEndDate, coalescedStartDate } from "./sortieStart";
 import { displayWaitMinutes } from "./sortieWait";
 import {
+  availabilityBlocksOnDay,
   blockOnDay,
   calendarDayDelta,
   type LanePlacement,
@@ -79,6 +81,7 @@ type Ready = {
   scope: CalendarScope;
   anchor: Date;
   sorties: Sortie[];
+  availability: AvailabilityInterval[];
   live: boolean;
   message: string | null;
   dialog: DialogDraft | null;
@@ -91,6 +94,7 @@ function emptyCalendar(anchor: Date): Ready {
     scope: "day",
     anchor,
     sorties: [],
+    availability: [],
     live: false,
     message: null,
     dialog: null,
@@ -275,7 +279,9 @@ export function CalendarScreen({
       if (generation.current !== current || !cached) {
         return;
       }
-      setScreen((prev) => (prev.live || prev.message ? prev : { ...prev, sorties: cached.sorties }));
+      setScreen((prev) =>
+        prev.live || prev.message ? prev : { ...prev, sorties: cached.sorties, availability: cached.availability },
+      );
     });
 
     const ensured = await ensureCurrentDriver(apiUrl, token);
@@ -309,6 +315,7 @@ export function CalendarScreen({
       from: range.from.toISOString(),
       to: range.to.toISOString(),
       sorties: calendar.sorties,
+      availability: calendar.availability,
     });
     if (generation.current !== current) {
       return;
@@ -318,6 +325,7 @@ export function CalendarScreen({
       scope,
       anchor,
       sorties: calendar.sorties,
+      availability: calendar.availability,
       live: true,
       message: null,
       summary: prev.summary
@@ -336,6 +344,7 @@ export function CalendarScreen({
       scope,
       anchor,
       sorties: cached?.sorties ?? [],
+      availability: cached?.availability ?? [],
       live: false,
       message: cached ? couldNotRefresh : couldNotLoad,
       dialog: null,
@@ -411,11 +420,13 @@ export function CalendarScreen({
       from: range.from.toISOString(),
       to: range.to.toISOString(),
       sorties: calendar.sorties,
+      availability: calendar.availability,
     });
     setHeld(null);
     setScreen({
       ...ready,
       sorties: calendar.sorties,
+      availability: calendar.availability,
       live: true,
       message: null,
       dialog: null,
@@ -764,6 +775,15 @@ export function CalendarScreen({
                           />
                         );
                       })}
+                      {ready.scope === "day"
+                        ? availabilityBlocksOnDay(ready.availability, day, now, hourPx).map((block, index) => (
+                            <View
+                              key={`${block.top}-${block.height}-${index}`}
+                              pointerEvents="none"
+                              style={[styles.availabilityStripe, { top: block.top, height: block.height }]}
+                            />
+                          ))
+                        : null}
                       {sameLocalDay(day, now) ? (
                         <View pointerEvents="none" style={[styles.nowLine, { top: nowLineTop(now, hourPx) - nowLineHalf }]}>
                           <View style={styles.nowDot} />
@@ -1352,6 +1372,13 @@ function createStyles(colors: ThemeColors) {
     hourRow: {
       flexDirection: "row",
       position: "relative",
+    },
+    availabilityStripe: {
+      position: "absolute",
+      left: 0,
+      width: 4,
+      backgroundColor: availableYellow,
+      zIndex: 1,
     },
     nowLine: {
       position: "absolute",

@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text } from "react-native";
 import { withAlpha } from "./theme";
 
-const availableYellow = "#F5C400";
+export const availableYellow = "#F5C400";
 
 export function AvailabilityStatus({
   current,

@@ -424,12 +424,21 @@ function AppContent() {
       })();
     };
 
+    function applyLive(envelope: Parameters<typeof applyAvailabilityEnvelope>[1]): void {
+      const previous = view.current;
+      const next = applyAvailabilityEnvelope(view, envelope);
+      remember(next);
+      if (next.current !== previous) {
+        setCalendarReload((count) => count + 1);
+      }
+    }
+
     const unsubscribe = subscribeAvailability((envelope) => {
       if (!loaded) {
         pending.push(envelope);
         return;
       }
-      remember(applyAvailabilityEnvelope(view, envelope));
+      applyLive(envelope);
     });
 
     void (async () => {
@@ -449,7 +458,7 @@ function AppContent() {
       setAvailabilityLoaded(true);
       remember(result);
       for (const envelope of pending) {
-        remember(applyAvailabilityEnvelope(view, envelope));
+        applyLive(envelope);
       }
       pending.length = 0;
     })();

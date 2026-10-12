@@ -1,12 +1,14 @@
-import type { Sortie, SortieStop } from "@groundops/contracts";
+import type { AvailabilityInterval, Sortie, SortieStop } from "@groundops/contracts";
 import { taskSortieType } from "@groundops/contracts";
 import * as SQLite from "expo-sqlite";
+import { parseAvailabilityIntervals } from "./calendarTime";
 
 export type CachedCalendar = {
   userId: string;
   from: string;
   to: string;
   sorties: Sortie[];
+  availability: AvailabilityInterval[];
 };
 
 let opening: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -18,7 +20,8 @@ export async function readCalendarCache(userId: string): Promise<CachedCalendar 
     range_from: string;
     range_to: string;
     sorties_json: string;
-  }>("SELECT user_id, range_from, range_to, sorties_json FROM calendar_cache WHERE id = 1");
+    availability_json: string;
+  }>("SELECT user_id, range_from, range_to, sorties_json, availability_json FROM calendar_cache WHERE id = 1");
   const row = rows[0];
   if (!row) {
     return null;
@@ -28,22 +31,24 @@ export async function readCalendarCache(userId: string): Promise<CachedCalendar 
     return null;
   }
   const sorties = parseSorties(row.sorties_json);
-  if (!sorties) {
+  const availability = parseStoredAvailability(row.availability_json);
+  if (!sorties || !availability) {
     await clearCalendarCache();
     return null;
   }
-  return { userId, from: row.range_from, to: row.range_to, sorties };
+  return { userId, from: row.range_from, to: row.range_to, sorties, availability };
 }
 
 export async function writeCalendarCache(cache: CachedCalendar): Promise<void> {
   const db = await database();
   await db.execAsync("DELETE FROM calendar_cache");
   await db.runAsync(
-    "INSERT INTO calendar_cache (id, user_id, range_from, range_to, sorties_json) VALUES (1, ?, ?, ?, ?)",
+    "INSERT INTO calendar_cache (id, user_id, range_from, range_to, sorties_json, availability_json) VALUES (1, ?, ?, ?, ?, ?)",
     cache.userId,
     cache.from,
     cache.to,
     JSON.stringify(cache.sorties),
+    JSON.stringify(cache.availability),
   );
 }
 
@@ -65,10 +70,25 @@ async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
       user_id TEXT NOT NULL,
       range_from TEXT NOT NULL,
       range_to TEXT NOT NULL,
-      sorties_json TEXT NOT NULL
+      sorties_json TEXT NOT NULL,
+      availability_json TEXT NOT NULL DEFAULT '[]'
     );
   `);
+  const columns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(calendar_cache)");
+  if (!columns.some((column) => column.name === "availability_json")) {
+    await db.execAsync("ALTER TABLE calendar_cache ADD COLUMN availability_json TEXT NOT NULL DEFAULT '[]'");
+  }
   return db;
+}
+
+function parseStoredAvailability(value: string): AvailabilityInterval[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+  return parseAvailabilityIntervals(parsed);
 }
 
 function parseSorties(value: string): Sortie[] | null {

@@ -1,3 +1,5 @@
+import type { AvailabilityInterval } from "@groundops/contracts";
+
 export type CalendarScope = "month" | "week" | "day";
 
 export const hourHeight = 64;
@@ -262,6 +264,46 @@ export function minutesFromMidnight(date: Date): number {
 
 export function nowLineTop(now: Date, pixelsPerHour: number): number {
   return (minutesFromMidnight(now) / 60) * pixelsPerHour;
+}
+
+export function parseAvailabilityIntervals(value: unknown): AvailabilityInterval[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const intervals: AvailabilityInterval[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) {
+      return null;
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.start !== "string" || (record.end !== null && typeof record.end !== "string")) {
+      return null;
+    }
+    intervals.push({ start: record.start, end: record.end });
+  }
+  return intervals;
+}
+
+/** Hour-grid stripes for intervals the server treated as available. An open interval ends at `now`. */
+export function availabilityBlocksOnDay(
+  intervals: AvailabilityInterval[],
+  day: Date,
+  now: Date,
+  pixelsPerHour = hourHeight,
+): { top: number; height: number }[] {
+  const blocks: { top: number; height: number }[] = [];
+  for (const interval of intervals) {
+    const start = new Date(interval.start);
+    const end = interval.end === null ? now : new Date(interval.end);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end.getTime() <= start.getTime()) {
+      continue;
+    }
+    const block = blockOnDay(start, end, day, pixelsPerHour);
+    if (block && block.height > 0) {
+      blocks.push(block);
+    }
+  }
+  return blocks;
 }
 
 export function blockOnDay(

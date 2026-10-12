@@ -13,6 +13,7 @@ import type {
   Tariff,
 } from "@groundops/contracts";
 import { taskSortieType } from "@groundops/contracts";
+import { parseAvailabilityIntervals } from "./calendarTime";
 
 export async function ensureCurrentDriver(
   apiUrl: string,
@@ -280,11 +281,12 @@ async function writeSortie(
 }
 
 function isCalendarResponse(value: unknown): value is CalendarResponse {
-  if (typeof value !== "object" || value === null || !("sorties" in value)) {
+  if (typeof value !== "object" || value === null || !("sorties" in value) || !("availability" in value)) {
     return false;
   }
   const sorties = value.sorties;
-  return Array.isArray(sorties) && sorties.every(isSortie);
+  const availability = parseAvailabilityIntervals(value.availability);
+  return Array.isArray(sorties) && sorties.every(isSortie) && availability !== null;
 }
 
 function isDriver(value: unknown): value is Driver {

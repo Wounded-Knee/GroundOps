@@ -20,6 +20,7 @@ import {
   type SortieInput,
 } from "./calendar.js";
 import { defaultSortieRouteDeps, computeSortieDrivingRoute, type SortieRouteDeps } from "./sortieRoute.js";
+import { readAvailabilityIntervals } from "../availability/availability.js";
 import { clearMeterReading, replaceMeterReading } from "./meterReading.js";
 import { readTariff, replaceTariff } from "./tariff.js";
 
@@ -201,7 +202,8 @@ export function registerCalendarRoutes(
     if (result === "no-driver") {
       return reply.code(409).send({ error: "no driver" });
     }
-    return reply.send({ sorties: result });
+    const availability = await readAvailabilityIntervals(active.user.id, from, to);
+    return reply.send({ sorties: result, availability });
   });
 
   app.post("/sorties", async (request, reply) => {

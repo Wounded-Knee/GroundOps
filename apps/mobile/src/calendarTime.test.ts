@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  availabilityBlocksOnDay,
   blockOnDay,
   calendarDayDelta,
   clampHourHeight,
@@ -14,6 +15,7 @@ import {
   moveInterval,
   nowLineTop,
   phoneDigits,
+  parseAvailabilityIntervals,
   placeLanes,
   resizeEnd,
   resizeStart,
@@ -181,5 +183,29 @@ describe("calendar time", () => {
     } finally {
       setCalendarTimeZoneOverride(null);
     }
+  });
+
+  it("parses availability intervals and clips them onto a day", () => {
+    const open = { start: "2026-10-11T14:00:00.000Z", end: null };
+    const closed = { start: "2026-10-11T16:00:00.000Z", end: "2026-10-11T17:00:00.000Z" };
+    assert.deepEqual(parseAvailabilityIntervals([open, closed]), [open, closed]);
+    assert.equal(parseAvailabilityIntervals([{ start: 1, end: null }]), null);
+    assert.equal(parseAvailabilityIntervals(null), null);
+
+    const day = new Date(2026, 8, 28, 12);
+    const overnight = availabilityBlocksOnDay(
+      [{ start: new Date(2026, 8, 27, 23, 0).toISOString(), end: new Date(2026, 8, 28, 1, 0).toISOString() }],
+      day,
+      new Date(2026, 8, 28, 15, 0),
+    );
+    assert.deepEqual(overnight, [{ top: 0, height: 64 }]);
+
+    const now = new Date(2026, 8, 28, 10, 30);
+    const openBlocks = availabilityBlocksOnDay(
+      [{ start: new Date(2026, 8, 28, 9, 0).toISOString(), end: null }],
+      day,
+      now,
+    );
+    assert.deepEqual(openBlocks, [{ top: 9 * 64, height: 1.5 * 64 }]);
   });
 });

@@ -249,8 +249,15 @@ export type LocationObservationRequest = {
   sortieId?: string | null;
 };
 
+/** A span the server treated the driver as available. `end` is null while that is still true. */
+export type AvailabilityInterval = {
+  start: string;
+  end: string | null;
+};
+
 export type CalendarResponse = {
   sorties: Sortie[];
+  availability: AvailabilityInterval[];
 };
 
 /** Driver-owned meter rates. Money is integer US cents. */
