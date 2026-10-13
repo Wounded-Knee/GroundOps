@@ -4,8 +4,8 @@ import { db } from "../db.js";
 import { driver, sortie } from "../schema.js";
 import { setAvailability } from "./availability.js";
 
-/** A lead check, a commencement, or the conclusion of a sortie. */
-export type AvailabilityEvent = "lead" | "commencement" | "conclusion";
+/** A lead check, calendar guidance, a commencement, or the conclusion of a sortie. */
+export type AvailabilityEvent = "lead" | "guidance" | "commencement" | "conclusion";
 
 export type AutomaticAvailabilityInput = {
   event: AvailabilityEvent;
@@ -17,9 +17,12 @@ export type AutomaticAvailabilityInput = {
 
 /**
  * The choice to write for one event, or null when this event must not change it.
- * Lead sets unavailable only. Commencement and conclusion set available, unless another sortie is already inside the lead.
+ * Lead and calendar guidance set unavailable only. Commencement and conclusion set available, unless another sortie is already inside the lead.
  */
 export function automaticAvailabilityChoice(input: AutomaticAvailabilityInput): boolean | null {
+  if (input.event === "guidance") {
+    return input.autoSetUnavailable ? false : null;
+  }
   if (input.withinLead && input.autoSetUnavailable) {
     return false;
   }
@@ -27,6 +30,19 @@ export function automaticAvailabilityChoice(input: AutomaticAvailabilityInput): 
     return true;
   }
   return null;
+}
+
+/**
+ * Calendar Guide. Sets unavailable when that flag is on.
+ * When the flag is off, this is the same check as commencement.
+ */
+export function guidanceAvailabilityChoice(
+  input: Omit<AutomaticAvailabilityInput, "event">,
+): boolean | null {
+  if (input.autoSetUnavailable) {
+    return false;
+  }
+  return automaticAvailabilityChoice({ ...input, event: "commencement" });
 }
 
 type DriverAutomaticRow = {
@@ -49,6 +65,25 @@ export async function applyAutomaticAvailability(person: User, event: Availabili
     return;
   }
   await applyEvent(row, event, now);
+}
+
+/** Calendar Guide. Sets unavailable when that flag is on; otherwise the commencement check. */
+export async function applyGuidanceAvailability(person: User, now: Date): Promise<void> {
+  const rows = await db
+    .select(driverAutomaticSelect)
+    .from(driver)
+    .where(eq(driver.userId, person.id))
+    .limit(1);
+  const row = rows[0];
+  if (!row) {
+    return;
+  }
+  const choice = guidanceAvailabilityChoice({
+    withinLead: await withinLead(row.id, row.thresholdMinutes, now),
+    autoSetUnavailable: row.autoSetUnavailable,
+    autoSetAvailable: row.autoSetAvailable,
+  });
+  await writeChoice(row, choice, now);
 }
 
 /** Lead check for every driver who can be set unavailable. Does not set anyone available. */
@@ -77,6 +112,10 @@ async function applyEvent(row: DriverAutomaticRow, event: AvailabilityEvent, now
     autoSetUnavailable: row.autoSetUnavailable,
     autoSetAvailable: row.autoSetAvailable,
   });
+  await writeChoice(row, choice, now);
+}
+
+async function writeChoice(row: DriverAutomaticRow, choice: boolean | null, now: Date): Promise<void> {
   if (choice === null) {
     return;
   }

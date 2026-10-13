@@ -63,11 +63,13 @@ describe("departureAlertMarks", () => {
 });
 
 describe("showDepartureCountdown", () => {
-  it("shows only inside the last 30 minutes", () => {
-    assert.equal(showDepartureCountdown(30 * 60 * 1000), true);
-    assert.equal(showDepartureCountdown(30 * 60 * 1000 + 1), false);
-    assert.equal(showDepartureCountdown(0), true);
-    assert.equal(showDepartureCountdown(-1), false);
+  it("shows only inside the configured lead", () => {
+    assert.equal(showDepartureCountdown(15 * 60 * 1000, 15), true);
+    assert.equal(showDepartureCountdown(15 * 60 * 1000 + 1, 15), false);
+    assert.equal(showDepartureCountdown(120 * 60 * 1000, 120), true);
+    assert.equal(showDepartureCountdown(0, 30), true);
+    assert.equal(showDepartureCountdown(-1, 30), false);
+    assert.equal(showDepartureCountdown(0, null), false);
   });
 });
 

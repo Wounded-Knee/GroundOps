@@ -29,6 +29,19 @@ import {
   saveGuidanceTimingPrefs,
   stepAdvanceRange,
 } from "./guidanceTimingPrefs";
+import {
+  countdownLeadFromIndex,
+  countdownLeadIndex,
+  countdownLeadOptions,
+  countdownLeadRangeLabel,
+  defaultCountdownLeadMinutes,
+  ensureCountdownLeadMinutesLoaded,
+  formatCountdownLead,
+  getCountdownLeadMinutes,
+  saveCountdownLeadMinutes,
+  subscribeCountdownLeadMinutes,
+  type CountdownLeadMinutes,
+} from "./countdownPrefs";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
 import { throb } from "./VisualAlert";
@@ -74,6 +87,7 @@ export function SettingsScreen({
   const [waitText, setWaitText] = useState("");
   const [zoom, setZoom] = useState(defaultGuidanceCameraPrefs.zoom);
   const [tilt, setTilt] = useState(defaultGuidanceCameraPrefs.tilt);
+  const [countdownLead, setCountdownLead] = useState<CountdownLeadMinutes>(defaultCountdownLeadMinutes);
   const [announceLead, setAnnounceLead] = useState(defaultGuidanceTimingPrefs.announceLeadMeters);
   const [stepAdvance, setStepAdvance] = useState(defaultGuidanceTimingPrefs.stepAdvanceMeters);
   const [message, setMessage] = useState<string | null>(null);
@@ -90,6 +104,22 @@ export function SettingsScreen({
   const [geofenceOpen, setGeofenceOpen] = useState(false);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
   const [hexText, setHexText] = useState(defaultVisualAlertPrefs.color);
+
+  useEffect(() => {
+    let cancelled = false;
+    void ensureCountdownLeadMinutesLoaded().then((lead) => {
+      if (!cancelled) {
+        setCountdownLead(lead);
+      }
+    });
+    const unsubscribe = subscribeCountdownLeadMinutes(() => {
+      setCountdownLead(getCountdownLeadMinutes());
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     void ensureVisualAlertPrefsLoaded();
@@ -395,6 +425,23 @@ export function SettingsScreen({
       <Pressable style={[styles.button, styles.save]} onPress={() => throb(3)}>
         <Text style={styles.saveButtonText}>Throb 3×</Text>
       </Pressable>
+      <SliderField
+        label="Next Sortie Countdown"
+        value={countdownLeadIndex(countdownLead)}
+        minimumValue={0}
+        maximumValue={countdownLeadOptions.length - 1}
+        step={1}
+        rangeHint={countdownLeadRangeLabel}
+        formatValue={(index) => formatCountdownLead(countdownLeadFromIndex(index))}
+        onChange={(index) => {
+          const next = countdownLeadFromIndex(index);
+          if (next === countdownLead) {
+            return;
+          }
+          setCountdownLead(next);
+          void saveCountdownLeadMinutes(next);
+        }}
+      />
       <Text style={styles.section}>Guidance camera</Text>
       <View style={styles.row}>
         <SliderField
@@ -556,6 +603,7 @@ function SliderField({
   minimumValue,
   maximumValue,
   step,
+  rangeHint,
   formatValue,
   onChange,
 }: {
@@ -564,6 +612,7 @@ function SliderField({
   minimumValue: number;
   maximumValue: number;
   step: number;
+  rangeHint?: string;
   formatValue: (value: number) => string;
   onChange: (value: number) => void;
 }) {
@@ -574,9 +623,7 @@ function SliderField({
       <Text style={styles.label}>
         {label} · {formatValue(value)}
       </Text>
-      <Text style={styles.rangeHint}>
-        {minimumValue}–{maximumValue}
-      </Text>
+      <Text style={styles.rangeHint}>{rangeHint ?? `${minimumValue}–${maximumValue}`}</Text>
       <Slider
         style={styles.slider}
         value={value}

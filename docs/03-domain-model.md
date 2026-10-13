@@ -112,7 +112,7 @@ A driver may hold operational relationships with multiple companies at the same 
 
 ### Driver state that is not a separate entity
 
-**Availability** is a boolean. Available means the driver is willing to receive and accept dispatch work. The driver sets it, and may let the platform set it at three moments: unavailable inside a lead time before a sortie is scheduled to commence, and available when a sortie is commenced or when it concludes. A missed check-in does not clear the choice.
+**Availability** is a boolean. Available means the driver is willing to receive and accept dispatch work. The driver sets it, and may let the platform set it at four moments: unavailable inside a lead time before a sortie is scheduled to commence, unavailable when guidance starts from the calendar, and available when a sortie is commenced or when it concludes. A missed check-in does not clear the choice.
 
 **Duty** is a separate on-duty or off-duty state. Off duty stops GPS transmission. On duty starts GPS transmission unless the current vehicle is ambiguous. Which party controls duty — the driver, the schedule, or some other company-assigned rule — is configuration.
 

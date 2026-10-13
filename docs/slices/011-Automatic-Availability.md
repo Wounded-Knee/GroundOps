@@ -6,7 +6,7 @@
 
 **Derived from:** Driver availability in `docs/03-domain-model.md` and `docs/01-architecture..md` section 15.
 
-**Purpose:** The platform sets the driver's availability choice at two moments: when a sortie concludes, and when a sortie is inside the lead time before it is scheduled to commence. The yellow bar still shows that choice.
+**Purpose:** The platform sets the driver's availability choice when a sortie is inside the lead time before it is scheduled to commence, when the driver starts guidance from the calendar, when a sortie is commenced, and when a sortie concludes. The yellow bar still shows that choice.
 
 This document is the implementation boundary. Duty, offers, assignment, a list of who is available, and a background task that checks in while the app is suspended stay outside. Slice 010 still owns the check-in lease.
 
@@ -38,7 +38,7 @@ One actor: a signed-in driver. Reading or saving these settings creates the driv
 Stored on the driver:
 
 - `availability_threshold_minutes` — whole minutes, default 15, allowed 0 through 120.
-- `auto_set_unavailable` — default true. The lead before commencement sets the choice unavailable.
+- `auto_set_unavailable` — default true. The lead before commencement, and starting guidance from the calendar, set the choice unavailable.
 - `auto_set_available` — default true. Commencing or concluding a sortie sets the choice available.
 - `availability_geofence` — a coordinate ring, default empty. Empty means there is no fence. The ring is stored with the other settings. It does not change the choice.
 
@@ -56,17 +56,19 @@ An uncommenced sortie is inside the lead when `scheduledStart` is at or after no
 
 # 4. State transitions
 
-Automatic changes happen on only three events.
+Automatic changes happen on only four events.
 
 **Lead.** An uncommenced sortie is inside the lead. This is checked when a sortie is created, revised, or has its wait extended, and on the same one-minute interval as the check-in lapse for every driver whose unavailable flag is on. Importing the module does not start that interval. When the flag is on, the choice becomes false. The lead does not set the choice available, including after the window passes or a start becomes overdue.
 
-**Commencement.** A sortie is commenced. **Conclusion.** A sortie is completed. Both run the same check. When the available flag is on and no uncommenced sortie is inside the lead, the choice becomes true. When another sortie is already inside the lead and the unavailable flag is on, the choice becomes false instead.
+**Guidance.** The driver selects a sortie on the calendar and taps Guide. When Automatically Set Unavailable is on, the choice becomes false. When that flag is off, Guide uses the commencement check.
+
+**Commencement.** A sortie is commenced other than by that Guide tap. **Conclusion.** A sortie is completed. Both run the same check. When the available flag is on and no uncommenced sortie is inside the lead, the choice becomes true. When another sortie is already inside the lead and the unavailable flag is on, the choice becomes false instead.
 
 A sortie that is merely in progress does not change the choice. Saving settings does not. A GPS fix does not.
 
-The same choice writes no event and publishes nothing. A new driver stays unavailable until a commencement or a conclusion, unless a lead sets them unavailable first.
+The same choice writes no event and publishes nothing. A new driver stays unavailable until a commencement, a conclusion, or calendar guidance, unless a lead sets them unavailable first.
 
-A tap is not one of these events. The next lead, commencement, or conclusion still applies.
+A tap is not one of these events. The next lead, guidance, commencement, or conclusion still applies.
 
 ---
 
@@ -121,7 +123,7 @@ The slice works when all of the following are true:
 1. A new driver's settings are both flags on, threshold 15, and an empty geofence. The choice stays unavailable through a lead check when no sortie is inside the lead. A conclusion sets the choice available, and a second conclusion writes no event.
 2. A missing session is rejected. A bad body is rejected, including a one- or two-point ring and a threshold outside 0–120. A saved ring is returned on the next read. One driver does not receive another's ring.
 3. A sortie already in progress does not change the choice by itself. Commencing one, or completing one, sets the choice available when that flag is on. A start 14 minutes out sets the choice unavailable. A start at exactly 15 minutes, and a start already in the past, do not, and neither one sets the choice available. Repeating an event that does not change the choice writes no event.
-4. A GPS fix, inside or outside the saved ring, does not change the choice. Turning a flag off skips that direction.
+4. A GPS fix, inside or outside the saved ring, does not change the choice. Turning a flag off skips that direction. Starting guidance from the calendar sets the choice unavailable when Automatically Set Unavailable is on, and writes no further event when the choice is already unavailable. When that flag is off, the same Guide tap uses the commencement check.
 5. The settings screen offers the threshold, both flags, and the geofence control. Web does not offer Create or Edit.
 
 ---

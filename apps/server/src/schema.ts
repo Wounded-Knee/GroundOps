@@ -68,7 +68,7 @@ export const driver = pgTable("driver", {
   availabilityCheckedAt: timestamp("availability_checked_at", { withTimezone: true, mode: "date" }),
   /** Lead time before a scheduled start that forces unavailable when that flag is on. */
   availabilityThresholdMinutes: integer("availability_threshold_minutes").notNull().default(15),
-  /** When on, the lead before a sortie sets the choice unavailable. */
+  /** When on, the lead before a sortie, or calendar guidance, sets the choice unavailable. */
   autoSetUnavailable: boolean("auto_set_unavailable").notNull().default(true),
   /** When on, commencing or concluding a sortie sets the choice available. */
   autoSetAvailable: boolean("auto_set_available").notNull().default(true),

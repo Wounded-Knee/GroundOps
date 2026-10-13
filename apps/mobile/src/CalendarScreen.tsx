@@ -482,7 +482,7 @@ export function CalendarScreen({
       setScreen({ ...ready, summary: sortie, message: routeFailed });
       return;
     }
-    const commenced = await commenceSortie(apiUrl, token, sortie.id);
+    const commenced = await commenceSortie(apiUrl, token, sortie.id, { guidance: true });
     if (commenced === "unauthorized") {
       onUnauthorized();
       return;

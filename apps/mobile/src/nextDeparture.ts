@@ -46,11 +46,12 @@ export function departureAlertMarks(departAt: Date, now: Date): DepartureAlertMa
   return marks;
 }
 
-/** Navigation countdown stays hidden until the departure is this close. */
-export const departureCountdownLeadMs = 30 * 60 * 1000;
-
-export function showDepartureCountdown(remainingMs: number): boolean {
-  return remainingMs >= 0 && remainingMs <= departureCountdownLeadMs;
+/** `leadMinutes` of null keeps the countdown hidden. Otherwise it shows at that lead or sooner. */
+export function showDepartureCountdown(remainingMs: number, leadMinutes: number | null): boolean {
+  if (leadMinutes === null) {
+    return false;
+  }
+  return remainingMs >= 0 && remainingMs <= leadMinutes * 60_000;
 }
 
 export function formatCountdown(remainingMs: number): string {

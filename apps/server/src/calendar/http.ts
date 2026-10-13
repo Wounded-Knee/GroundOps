@@ -20,7 +20,7 @@ import {
   type SortieInput,
 } from "./calendar.js";
 import { defaultSortieRouteDeps, computeSortieDrivingRoute, type SortieRouteDeps } from "./sortieRoute.js";
-import { applyAutomaticAvailability } from "../availability/automatic.js";
+import { applyAutomaticAvailability, applyGuidanceAvailability } from "../availability/automatic.js";
 import { readAvailabilityIntervals } from "../availability/availability.js";
 import { clearMeterReading, replaceMeterReading } from "./meterReading.js";
 import { readTariff, replaceTariff } from "./tariff.js";
@@ -62,6 +62,10 @@ const sortieParams = z.object({
   id: z.uuid(),
 });
 
+const commenceBody = z.object({
+  guidance: z.boolean().optional(),
+});
+
 const stopPositionParams = z.object({
   id: z.uuid(),
   position: z.coerce.number().int().nonnegative(),
@@ -92,6 +96,14 @@ const meterBody = z.object({
   remainingMeters: z.number(),
   overviewPath: z.array(coordinateSchema).optional(),
 });
+
+function guidanceRequested(body: unknown): boolean | "invalid" {
+  if (body === undefined || body === null) {
+    return false;
+  }
+  const parsed = commenceBody.safeParse(body);
+  return parsed.success ? parsed.data.guidance === true : "invalid";
+}
 
 export function registerCalendarRoutes(
   app: FastifyInstance,
@@ -302,6 +314,10 @@ export function registerCalendarRoutes(
     if (!params.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
+    const guidance = guidanceRequested(request.body);
+    if (guidance === "invalid") {
+      return reply.code(400).send({ error: "invalid request" });
+    }
     const result = await commenceSortie(active.user, params.data.id, deps);
     if (result === "not-found") {
       return reply.code(404).send({ error: "not found" });
@@ -312,7 +328,11 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
-    await onAvailable(active.user, "commencement");
+    if (guidance) {
+      await applyGuidanceAvailability(active.user, deps.now());
+    } else {
+      await onAvailable(active.user, "commencement");
+    }
     return reply.send(result);
   });
 

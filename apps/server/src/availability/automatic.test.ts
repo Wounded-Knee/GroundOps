@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { automaticAvailabilityChoice } from "./automatic.js";
+import { automaticAvailabilityChoice, guidanceAvailabilityChoice } from "./automatic.js";
 
 const flags = { autoSetUnavailable: true, autoSetAvailable: true };
 
@@ -36,6 +36,26 @@ describe("automatic availability", () => {
         autoSetAvailable: true,
       }),
       true,
+    );
+  });
+
+  it("sets unavailable when calendar guidance starts and that flag is on", () => {
+    assert.equal(guidanceAvailabilityChoice({ withinLead: false, ...flags }), false);
+    assert.equal(
+      guidanceAvailabilityChoice({ withinLead: false, autoSetUnavailable: false, autoSetAvailable: true }),
+      true,
+    );
+    assert.equal(
+      guidanceAvailabilityChoice({ withinLead: true, autoSetUnavailable: false, autoSetAvailable: true }),
+      true,
+    );
+    assert.equal(
+      guidanceAvailabilityChoice({ withinLead: false, autoSetUnavailable: false, autoSetAvailable: false }),
+      null,
+    );
+    assert.equal(
+      automaticAvailabilityChoice({ event: "guidance", withinLead: false, autoSetUnavailable: false, autoSetAvailable: true }),
+      null,
     );
   });
 });

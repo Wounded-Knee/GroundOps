@@ -37,6 +37,11 @@ import {
 } from "./calendarClient";
 import { setActiveSortieObservation } from "./locationObservationReporting";
 import { cancelDepartureAlerts, scheduleDepartureAlerts } from "./departureAlerts";
+import {
+  ensureCountdownLeadMinutesLoaded,
+  getCountdownLeadMinutes,
+  subscribeCountdownLeadMinutes,
+} from "./countdownPrefs";
 import { formatCountdown, nextDeparture, showDepartureCountdown, type NextDeparture } from "./nextDeparture";
 import {
   applyLocationFix,
@@ -227,6 +232,11 @@ export function NavigationScreen({
     subscribeGuidanceTimingPrefs,
     getGuidanceTimingPrefs,
     getGuidanceTimingPrefs,
+  );
+  const countdownLeadMinutes = useSyncExternalStore(
+    subscribeCountdownLeadMinutes,
+    getCountdownLeadMinutes,
+    getCountdownLeadMinutes,
   );
   const navRef = useRef(nav);
   navRef.current = nav;
@@ -1118,6 +1128,7 @@ export function NavigationScreen({
     void ensureGuidanceCameraPrefsLoaded();
     void ensureGuidanceTimingPrefsLoaded();
     void ensureGuidanceMutePrefsLoaded();
+    void ensureCountdownLeadMinutesLoaded();
   }, []);
 
   useEffect(() => {
@@ -1483,7 +1494,8 @@ export function NavigationScreen({
       : 0;
   const browseMessage = nav.mode === "browse" ? nav.message : null;
   const departureRemainingMs = upcoming ? upcoming.departAt.getTime() - clock : null;
-  const showCountdown = departureRemainingMs !== null && showDepartureCountdown(departureRemainingMs);
+  const showCountdown =
+    departureRemainingMs !== null && showDepartureCountdown(departureRemainingMs, countdownLeadMinutes);
   const meterChromeInset = meterActive ? meterPanelHeight(windowHeight) : 0;
 
   return (

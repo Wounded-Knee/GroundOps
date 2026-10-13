@@ -19,7 +19,7 @@ import {
   user,
   userCredential,
 } from "../schema.js";
-import { applyAutomaticAvailability, applyAutomaticAvailabilityLead } from "./automatic.js";
+import { applyAutomaticAvailability, applyAutomaticAvailabilityLead, applyGuidanceAvailability } from "./automatic.js";
 import { registerAvailabilityRoutes } from "./http.js";
 
 const now = new Date("2026-10-12T15:00:00.000Z");
@@ -338,6 +338,43 @@ describe("availability settings", () => {
       await applyAutomaticAvailability(person.user, "conclusion", now);
       assert.equal((await readChoice(person.token)).available, false);
       assert.equal((await eventsFor(person.user.id)).length, 2);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("sets unavailable when calendar guidance starts and that flag is on", async () => {
+    const person = await createSession({
+      sub: `availability-settings-guide-${crypto.randomUUID()}`,
+      displayName: "Guide",
+      email: null,
+    });
+    try {
+      await app.inject({
+        method: "GET",
+        url: "/availability/settings",
+        headers: { authorization: `Bearer ${person.token}` },
+      });
+      await app.inject({
+        method: "PUT",
+        url: "/availability",
+        headers: { authorization: `Bearer ${person.token}` },
+        payload: { available: true },
+      });
+      await applyGuidanceAvailability(person.user, now);
+      assert.equal((await readChoice(person.token)).available, false);
+      await applyGuidanceAvailability(person.user, now);
+      assert.equal((await eventsFor(person.user.id)).length, 2);
+
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: { authorization: `Bearer ${person.token}` },
+        payload: { ...defaultAvailabilitySettings, autoSetUnavailable: false },
+      });
+      await applyGuidanceAvailability(person.user, now);
+      assert.equal((await readChoice(person.token)).available, true);
+      assert.equal((await eventsFor(person.user.id)).length, 3);
     } finally {
       await removeUser(person.user.id);
     }

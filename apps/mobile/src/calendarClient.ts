@@ -127,11 +127,17 @@ export async function commenceSortie(
   apiUrl: string,
   token: string,
   sortieId: string,
+  options?: { guidance?: boolean },
 ): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+  const guidance = options?.guidance === true;
   try {
     const response = await fetch(`${apiUrl}/sorties/${sortieId}/commence`, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}` },
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(guidance ? { "content-type": "application/json" } : {}),
+      },
+      ...(guidance ? { body: JSON.stringify({ guidance: true }) } : {}),
     });
     if (response.status === 401) {
       return "unauthorized";
