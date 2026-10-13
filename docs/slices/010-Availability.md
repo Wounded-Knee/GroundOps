@@ -66,7 +66,7 @@ On Navigation, while the map is the visible surface, it overlays the bottom of t
 
 From top to bottom: the meter, only while a meter reading exists; the turn progress bar and the trip progress bar, in that same case; then `AvailabilityStatus`, always. The turn bar stays the thinner one. The trip bar stays the taller one. Meter actions stay on the meter.
 
-`AvailabilityStatus` is a full-width bar, yellow `#F5C400`. When `current` is false the yellow is at 0.35 opacity. When `current` is true it is full opacity. The label is "Not available" or "Available."
+`AvailabilityStatus` is a full-width bar. When `current` is false the label is "Not available", yellow `#F5C400` on black. When `current` is true the label is "Available", black on yellow `#F5C400`.
 
 A tap sends the opposite choice. Further taps wait until that request settles. The color follows `current`. A failed save leaves the previous color and shows the failure on the bar. A rejected session follows the existing sign-out path.
 

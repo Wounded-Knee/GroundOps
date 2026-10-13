@@ -1,8 +1,7 @@
 import { Pressable, StyleSheet, Text } from "react-native";
 
 export const availableYellow = "#F5C400";
-/** Unavailable state. Solid, so the bar does not show the map through it. */
-export const mutedDarkYellow = "#A68B3A";
+const availableInk = "#000000";
 
 export function AvailabilityStatus({
   current,
@@ -18,6 +17,8 @@ export function AvailabilityStatus({
   onToggle: () => void;
 }) {
   const label = current ? "Available" : "Not available";
+  const backgroundColor = current ? availableYellow : availableInk;
+  const color = current ? availableInk : availableYellow;
   return (
     <Pressable
       accessibilityRole="button"
@@ -25,10 +26,10 @@ export function AvailabilityStatus({
       accessibilityState={{ disabled: !loaded || busy, selected: current }}
       disabled={!loaded || busy}
       onPress={onToggle}
-      style={[styles.bar, { backgroundColor: current ? availableYellow : mutedDarkYellow }]}
+      style={[styles.bar, { backgroundColor }]}
     >
-      <Text style={styles.label}>{label}</Text>
-      {message ? <Text style={styles.message}>{message}</Text> : null}
+      <Text style={[styles.label, { color }]}>{label}</Text>
+      {message ? <Text style={[styles.message, { color }]}>{message}</Text> : null}
     </Pressable>
   );
 }
@@ -40,12 +41,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   label: {
-    color: "#111111",
     fontSize: 16,
     fontWeight: "700",
   },
   message: {
-    color: "#111111",
     fontSize: 13,
     marginTop: 2,
   },
