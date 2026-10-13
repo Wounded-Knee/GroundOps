@@ -1,9 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated, Easing, StyleSheet, useWindowDimensions, View } from "react-native";
+import {
+  Animated,
+  Easing,
+  Platform,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+  type ViewStyle,
+} from "react-native";
 import { withAlpha } from "./theme";
 import { normalizeThrobCount, THROB_MS } from "./visualAlertThrob";
 
-const BANDS = 8;
+const STOPS = 8;
 
 type ThrobHandler = (count: number) => void;
 
@@ -85,55 +93,73 @@ export function VisualAlert({
   if (depth <= 0 || displayBrightness <= 0) {
     return null;
   }
-  const band = depth / BANDS;
-
   return (
     <Animated.View
       style={[styles.root, { opacity: throbbing ? opacity : 1 }]}
       pointerEvents="none"
     >
-      {Array.from({ length: BANDS }, (_, index) => {
-        const t = 1 - index / (BANDS - 1);
-        const bandAlpha = displayBrightness * t * t;
-        const backgroundColor = withAlpha(color, bandAlpha);
-        const inset = index * band;
-        return (
-          <View key={index} style={styles.layer} pointerEvents="none">
-            <View
-              style={[styles.edge, { top: inset, left: 0, right: 0, height: band, backgroundColor }]}
-            />
-            <View
-              style={[
-                styles.edge,
-                { bottom: inset, left: 0, right: 0, height: band, backgroundColor },
-              ]}
-            />
-            <View
-              style={[
-                styles.edge,
-                { top: 0, bottom: 0, left: inset, width: band, backgroundColor },
-              ]}
-            />
-            <View
-              style={[
-                styles.edge,
-                { top: 0, bottom: 0, right: inset, width: band, backgroundColor },
-              ]}
-            />
-          </View>
-        );
-      })}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.edge,
+          { top: 0, left: 0, right: 0, height: depth },
+          gradientStyle(edgeFade(color, displayBrightness, "to bottom")),
+        ]}
+      />
+      <View
+        pointerEvents="none"
+        style={[
+          styles.edge,
+          { bottom: 0, left: 0, right: 0, height: depth },
+          gradientStyle(edgeFade(color, displayBrightness, "to top")),
+        ]}
+      />
+      <View
+        pointerEvents="none"
+        style={[
+          styles.edge,
+          { top: 0, bottom: 0, left: 0, width: depth },
+          gradientStyle(edgeFade(color, displayBrightness, "to right")),
+        ]}
+      />
+      <View
+        pointerEvents="none"
+        style={[
+          styles.edge,
+          { top: 0, bottom: 0, right: 0, width: depth },
+          gradientStyle(edgeFade(color, displayBrightness, "to left")),
+        ]}
+      />
     </Animated.View>
   );
+}
+
+/** Quadratic rim fade: full brightness at the outer edge, transparent at the inner edge. */
+function edgeFade(
+  color: string,
+  brightness: number,
+  direction: "to bottom" | "to top" | "to right" | "to left",
+): string {
+  const stops = Array.from({ length: STOPS }, (_, index) => {
+    const t = 1 - index / (STOPS - 1);
+    const alpha = brightness * t * t;
+    const pct = (index / (STOPS - 1)) * 100;
+    return `${withAlpha(color, alpha)} ${pct}%`;
+  });
+  return `linear-gradient(${direction}, ${stops.join(", ")})`;
+}
+
+function gradientStyle(image: string): ViewStyle {
+  if (Platform.OS === "web") {
+    return { backgroundImage: image } as ViewStyle;
+  }
+  return { experimental_backgroundImage: image };
 }
 
 const styles = StyleSheet.create({
   root: {
     ...StyleSheet.absoluteFill,
     zIndex: 1000,
-  },
-  layer: {
-    ...StyleSheet.absoluteFill,
   },
   edge: {
     position: "absolute",
