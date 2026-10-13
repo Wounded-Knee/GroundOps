@@ -27,6 +27,7 @@ import {
   defaultGuidanceTimingPrefs,
   ensureGuidanceTimingPrefsLoaded,
   normalizeGuidanceTimingPrefs,
+  resumeTravelRange,
   saveGuidanceTimingPrefs,
   stepAdvanceRange,
   type GuidanceTimingPrefs,
@@ -98,6 +99,7 @@ export function SettingsScreen({
   const [countdownLead, setCountdownLead] = useState<CountdownLeadMinutes>(defaultCountdownLeadMinutes);
   const [announceLead, setAnnounceLead] = useState(defaultGuidanceTimingPrefs.announceLeadMeters);
   const [stepAdvance, setStepAdvance] = useState(defaultGuidanceTimingPrefs.stepAdvanceMeters);
+  const [resumeTravel, setResumeTravel] = useState(defaultGuidanceTimingPrefs.resumeTravelMeters);
   const [message, setMessage] = useState<string | null>(null);
   const [editable, setEditable] = useState(false);
   const [thresholdMinutes, setThresholdMinutes] = useState(defaultAvailabilitySettings.thresholdMinutes);
@@ -121,6 +123,7 @@ export function SettingsScreen({
   const timingRef = useRef<GuidanceTimingPrefs>({
     announceLeadMeters: defaultGuidanceTimingPrefs.announceLeadMeters,
     stepAdvanceMeters: defaultGuidanceTimingPrefs.stepAdvanceMeters,
+    resumeTravelMeters: defaultGuidanceTimingPrefs.resumeTravelMeters,
   });
   const timingGeneration = useRef(0);
   const timingChain = useRef(Promise.resolve());
@@ -179,11 +182,13 @@ export function SettingsScreen({
         timingRef.current = {
           announceLeadMeters: timing.announceLeadMeters,
           stepAdvanceMeters: timing.stepAdvanceMeters,
+          resumeTravelMeters: timing.resumeTravelMeters,
         };
         setZoom(camera.zoom);
         setTilt(camera.tilt);
         setAnnounceLead(timing.announceLeadMeters);
         setStepAdvance(timing.stepAdvanceMeters);
+        setResumeTravel(timing.resumeTravelMeters);
       }
       const driver = await ensureCurrentDriver(apiUrl, token);
       if (cancelled) {
@@ -282,16 +287,19 @@ export function SettingsScreen({
       }
       if (
         timingRef.current.announceLeadMeters !== snapshot.announceLeadMeters ||
-        timingRef.current.stepAdvanceMeters !== snapshot.stepAdvanceMeters
+        timingRef.current.stepAdvanceMeters !== snapshot.stepAdvanceMeters ||
+        timingRef.current.resumeTravelMeters !== snapshot.resumeTravelMeters
       ) {
         return;
       }
       timingRef.current = {
         announceLeadMeters: saved.announceLeadMeters,
         stepAdvanceMeters: saved.stepAdvanceMeters,
+        resumeTravelMeters: saved.resumeTravelMeters,
       };
       setAnnounceLead(saved.announceLeadMeters);
       setStepAdvance(saved.stepAdvanceMeters);
+      setResumeTravel(saved.resumeTravelMeters);
     });
   }
 
@@ -652,6 +660,24 @@ export function SettingsScreen({
             }}
           />
         </View>
+        <SliderField
+          label="Auto-resume travel after a stop"
+          value={resumeTravel}
+          minimumValue={resumeTravelRange.min}
+          maximumValue={resumeTravelRange.max}
+          step={5}
+          rangeHint="Off–150 m"
+          formatValue={formatResumeTravel}
+          onChange={(value) => {
+            timingRef.current = { ...timingRef.current, resumeTravelMeters: value };
+            setResumeTravel(value);
+          }}
+          onSlidingComplete={(value) => {
+            timingRef.current = { ...timingRef.current, resumeTravelMeters: value };
+            setResumeTravel(value);
+            persistTiming();
+          }}
+        />
       </Section>
       <Section title="Meter">
         <View style={styles.row}>
@@ -949,6 +975,13 @@ function formatPercent(value: number): string {
 
 function formatMetersSetting(value: number): string {
   return `${Math.round(value)} m`;
+}
+
+function formatResumeTravel(value: number): string {
+  if (Math.round(value) === 0) {
+    return "Off";
+  }
+  return formatMetersSetting(value);
 }
 
 function formatMinutes(value: number): string {

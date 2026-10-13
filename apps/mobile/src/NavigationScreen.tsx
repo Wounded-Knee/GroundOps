@@ -941,8 +941,10 @@ export function NavigationScreen({
     if (current.mode === "arrived" && current.kind === "sortie") {
       const stop = current.stops[current.stopPosition];
       const outsideGeofence = stop ? distanceMeters(fix, stop) > arrivalMeters : false;
+      const resumeMeters = timingPrefs.resumeTravelMeters;
+      const resumedByGps = resumeMeters > 0 && stop ? distanceMeters(fix, stop) > resumeMeters : false;
       const later = hasLaterStop(current.stops, current.stopPosition);
-      if (stop && (later || current.pendingNextLeg) && outsideGeofence) {
+      if (stop && (later || current.pendingNextLeg) && resumedByGps) {
         void startNextLeg();
       } else if (
         shouldCompleteOnLeave({
@@ -1079,6 +1081,7 @@ export function NavigationScreen({
     token,
     onUnauthorized,
     timingPrefs.stepAdvanceMeters,
+    timingPrefs.resumeTravelMeters,
   ]);
 
   const guidancePath = nav.mode === "guiding" || nav.mode === "arrived" ? nav.route.path : null;

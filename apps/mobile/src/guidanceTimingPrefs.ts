@@ -14,6 +14,7 @@ export {
   normalizeGuidanceTimingPrefs,
   parseGuidanceTimingFields,
   parseGuidanceTimingPrefs,
+  resumeTravelRange,
   stepAdvanceRange,
 } from "./guidanceTimingPrefsLogic";
 

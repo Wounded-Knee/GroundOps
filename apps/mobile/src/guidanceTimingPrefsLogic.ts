@@ -3,14 +3,20 @@ import { announceLeadMeters, stepAdvanceMeters } from "./guidance";
 export type GuidanceTimingPrefs = {
   announceLeadMeters: number;
   stepAdvanceMeters: number;
+  /** Meters from a stop before GPS starts the next leg. 0 is off. */
+  resumeTravelMeters: number;
 };
 
 export const announceLeadRange = { min: 50, max: 1000 } as const;
 export const stepAdvanceRange = { min: 10, max: 100 } as const;
+export const resumeTravelRange = { min: 0, max: 150 } as const;
+/** Matches the arrival geofence used for GPS leave before this setting existed. */
+export const defaultResumeTravelMeters = 40;
 
 export const defaultGuidanceTimingPrefs: GuidanceTimingPrefs = {
   announceLeadMeters,
   stepAdvanceMeters,
+  resumeTravelMeters: defaultResumeTravelMeters,
 };
 
 export function parseGuidanceTimingPrefs(raw: string | null): GuidanceTimingPrefs | null {
@@ -25,6 +31,8 @@ export function parseGuidanceTimingPrefs(raw: string | null): GuidanceTimingPref
     return normalizeGuidanceTimingPrefs({
       announceLeadMeters: parsed.announceLeadMeters,
       stepAdvanceMeters: parsed.stepAdvanceMeters,
+      resumeTravelMeters:
+        typeof parsed.resumeTravelMeters === "number" ? parsed.resumeTravelMeters : defaultResumeTravelMeters,
     });
   } catch {
     return null;
@@ -35,6 +43,7 @@ export function normalizeGuidanceTimingPrefs(input: GuidanceTimingPrefs): Guidan
   return {
     announceLeadMeters: clamp(input.announceLeadMeters, announceLeadRange.min, announceLeadRange.max),
     stepAdvanceMeters: clamp(input.stepAdvanceMeters, stepAdvanceRange.min, stepAdvanceRange.max),
+    resumeTravelMeters: clamp(input.resumeTravelMeters, resumeTravelRange.min, resumeTravelRange.max),
   };
 }
 
@@ -50,6 +59,7 @@ export function parseGuidanceTimingFields(
   return normalizeGuidanceTimingPrefs({
     announceLeadMeters: announceLead,
     stepAdvanceMeters: stepAdvance,
+    resumeTravelMeters: defaultResumeTravelMeters,
   });
 }
 
