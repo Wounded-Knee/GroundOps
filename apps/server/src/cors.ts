@@ -8,7 +8,7 @@ export function registerLocalCors(app: FastifyInstance): void {
       reply.header("access-control-allow-origin", origin);
       reply.header("vary", "Origin");
       reply.header("access-control-allow-headers", "authorization, content-type");
-      reply.header("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS");
+      reply.header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     }
     if (request.method === "OPTIONS") {
       return reply.code(204).send();

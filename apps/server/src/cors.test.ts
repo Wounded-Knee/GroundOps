@@ -21,6 +21,7 @@ describe("local cors", () => {
     assert.equal(local.statusCode, 204);
     assert.equal(local.headers["access-control-allow-origin"], "http://localhost:8081");
     assert.equal(local.headers["access-control-allow-headers"], "authorization, content-type");
+    assert.match(String(local.headers["access-control-allow-methods"]), /\bPUT\b/);
 
     const remote = await app.inject({
       method: "GET",

@@ -6,7 +6,7 @@ import {
   type Tariff,
 } from "@groundops/contracts";
 import Slider from "@react-native-community/slider";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { readAvailabilitySettings, saveAvailabilitySettings } from "./availabilityClient";
@@ -20,6 +20,7 @@ import {
   guidanceZoomRange,
   normalizeGuidanceCameraPrefs,
   saveGuidanceCameraPrefs,
+  type GuidanceCameraPrefs,
 } from "./guidanceCameraPrefs";
 import {
   announceLeadRange,
@@ -28,6 +29,7 @@ import {
   normalizeGuidanceTimingPrefs,
   saveGuidanceTimingPrefs,
   stepAdvanceRange,
+  type GuidanceTimingPrefs,
 } from "./guidanceTimingPrefs";
 import {
   countdownLeadFromIndex,
@@ -69,6 +71,12 @@ const appearanceOptions: { value: AppearancePreference; label: string }[] = [
   { value: "system", label: "OS Default" },
 ];
 
+type TariffFields = {
+  flag: string;
+  mile: string;
+  wait: string;
+};
+
 export function SettingsScreen({
   token,
   signOutMessage,
@@ -92,18 +100,45 @@ export function SettingsScreen({
   const [stepAdvance, setStepAdvance] = useState(defaultGuidanceTimingPrefs.stepAdvanceMeters);
   const [message, setMessage] = useState<string | null>(null);
   const [editable, setEditable] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [savingCamera, setSavingCamera] = useState(false);
-  const [savingTiming, setSavingTiming] = useState(false);
   const [thresholdMinutes, setThresholdMinutes] = useState(defaultAvailabilitySettings.thresholdMinutes);
   const [autoSetUnavailable, setAutoSetUnavailable] = useState(defaultAvailabilitySettings.autoSetUnavailable);
   const [autoSetAvailable, setAutoSetAvailable] = useState(defaultAvailabilitySettings.autoSetAvailable);
   const [geofence, setGeofence] = useState<GeoCoordinate[]>(defaultAvailabilitySettings.geofence);
   const [settingsEditable, setSettingsEditable] = useState(false);
-  const [savingSettings, setSavingSettings] = useState(false);
   const [geofenceOpen, setGeofenceOpen] = useState(false);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
   const [hexText, setHexText] = useState(defaultVisualAlertPrefs.color);
+
+  const visualAlertRef = useRef(visualAlert);
+  const visualGeneration = useRef(0);
+  const visualChain = useRef(Promise.resolve());
+  const cameraRef = useRef<GuidanceCameraPrefs>({
+    zoom: defaultGuidanceCameraPrefs.zoom,
+    tilt: defaultGuidanceCameraPrefs.tilt,
+  });
+  const cameraGeneration = useRef(0);
+  const cameraChain = useRef(Promise.resolve());
+  const timingRef = useRef<GuidanceTimingPrefs>({
+    announceLeadMeters: defaultGuidanceTimingPrefs.announceLeadMeters,
+    stepAdvanceMeters: defaultGuidanceTimingPrefs.stepAdvanceMeters,
+  });
+  const timingGeneration = useRef(0);
+  const timingChain = useRef(Promise.resolve());
+  const availabilityRef = useRef<AvailabilitySettings>({
+    thresholdMinutes: defaultAvailabilitySettings.thresholdMinutes,
+    autoSetUnavailable: defaultAvailabilitySettings.autoSetUnavailable,
+    autoSetAvailable: defaultAvailabilitySettings.autoSetAvailable,
+    geofence: defaultAvailabilitySettings.geofence,
+  });
+  const availabilityGeneration = useRef(0);
+  const availabilityChain = useRef(Promise.resolve());
+  const tariffRef = useRef<TariffFields>({ flag: "", mile: "", wait: "" });
+  const lastSavedTariff = useRef<Tariff | null>(null);
+  const pendingTariff = useRef<Tariff | null>(null);
+  const tariffGeneration = useRef(0);
+  const tariffChain = useRef(Promise.resolve());
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  onUnauthorizedRef.current = onUnauthorized;
 
   useEffect(() => {
     let cancelled = false;
@@ -125,6 +160,7 @@ export function SettingsScreen({
     void ensureVisualAlertPrefsLoaded();
     return subscribeVisualAlertPrefs(() => {
       const next = getVisualAlertPrefs();
+      visualAlertRef.current = next;
       setVisualAlert(next);
       setHexText(next.color);
     });
@@ -139,6 +175,11 @@ export function SettingsScreen({
       const camera = await ensureGuidanceCameraPrefsLoaded();
       const timing = await ensureGuidanceTimingPrefsLoaded();
       if (!cancelled) {
+        cameraRef.current = { zoom: camera.zoom, tilt: camera.tilt };
+        timingRef.current = {
+          announceLeadMeters: timing.announceLeadMeters,
+          stepAdvanceMeters: timing.stepAdvanceMeters,
+        };
         setZoom(camera.zoom);
         setTilt(camera.tilt);
         setAnnounceLead(timing.announceLeadMeters);
@@ -149,7 +190,7 @@ export function SettingsScreen({
         return;
       }
       if (driver === "unauthorized") {
-        onUnauthorized();
+        onUnauthorizedRef.current();
         return;
       }
       if (driver === "unreachable") {
@@ -161,12 +202,18 @@ export function SettingsScreen({
         return;
       }
       if (settings === "unauthorized") {
-        onUnauthorized();
+        onUnauthorizedRef.current();
         return;
       }
       if (settings === "unreachable") {
         setMessage(couldNotLoadAvailability);
       } else {
+        availabilityRef.current = {
+          thresholdMinutes: settings.thresholdMinutes,
+          autoSetUnavailable: settings.autoSetUnavailable,
+          autoSetAvailable: settings.autoSetAvailable,
+          geofence: settings.geofence,
+        };
         setThresholdMinutes(settings.thresholdMinutes);
         setAutoSetUnavailable(settings.autoSetUnavailable);
         setAutoSetAvailable(settings.autoSetAvailable);
@@ -178,114 +225,201 @@ export function SettingsScreen({
         return;
       }
       if (tariff === "unauthorized") {
-        onUnauthorized();
+        onUnauthorizedRef.current();
         return;
       }
       if (tariff === "no-driver" || tariff === "unreachable") {
         setMessage(couldNotLoad);
         return;
       }
-      setFlagText(centsToField(tariff.flagCents));
-      setMileText(centsToField(tariff.perMileCents));
-      setWaitText(centsToField(tariff.perWaitMinuteCents));
+      const fields = {
+        flag: centsToField(tariff.flagCents),
+        mile: centsToField(tariff.perMileCents),
+        wait: centsToField(tariff.perWaitMinuteCents),
+      };
+      tariffRef.current = fields;
+      lastSavedTariff.current = tariff;
+      pendingTariff.current = null;
+      setFlagText(fields.flag);
+      setMileText(fields.mile);
+      setWaitText(fields.wait);
       setEditable(true);
     }
     void load();
     return () => {
       cancelled = true;
     };
-  }, [token, onUnauthorized]);
+  }, [token]);
 
-  async function onSave(): Promise<void> {
-    if (!editable || saving) {
+  function persistCamera(): void {
+    enqueueLatest(cameraChain, cameraGeneration, async (ticket) => {
+      if (ticket !== cameraGeneration.current) {
+        return;
+      }
+      const snapshot = { ...cameraRef.current };
+      const saved = await saveGuidanceCameraPrefs(normalizeGuidanceCameraPrefs(snapshot));
+      if (ticket !== cameraGeneration.current) {
+        return;
+      }
+      if (cameraRef.current.zoom !== snapshot.zoom || cameraRef.current.tilt !== snapshot.tilt) {
+        return;
+      }
+      cameraRef.current = { zoom: saved.zoom, tilt: saved.tilt };
+      setZoom(saved.zoom);
+      setTilt(saved.tilt);
+    });
+  }
+
+  function persistTiming(): void {
+    enqueueLatest(timingChain, timingGeneration, async (ticket) => {
+      if (ticket !== timingGeneration.current) {
+        return;
+      }
+      const snapshot = { ...timingRef.current };
+      const saved = await saveGuidanceTimingPrefs(normalizeGuidanceTimingPrefs(snapshot));
+      if (ticket !== timingGeneration.current) {
+        return;
+      }
+      if (
+        timingRef.current.announceLeadMeters !== snapshot.announceLeadMeters ||
+        timingRef.current.stepAdvanceMeters !== snapshot.stepAdvanceMeters
+      ) {
+        return;
+      }
+      timingRef.current = {
+        announceLeadMeters: saved.announceLeadMeters,
+        stepAdvanceMeters: saved.stepAdvanceMeters,
+      };
+      setAnnounceLead(saved.announceLeadMeters);
+      setStepAdvance(saved.stepAdvanceMeters);
+    });
+  }
+
+  function commitAvailability(next: AvailabilitySettings): void {
+    availabilityRef.current = next;
+    setThresholdMinutes(next.thresholdMinutes);
+    setAutoSetUnavailable(next.autoSetUnavailable);
+    setAutoSetAvailable(next.autoSetAvailable);
+    setGeofence(next.geofence);
+    if (!settingsEditable) {
       return;
     }
-    const tariff = parseTariffFields(flagText, mileText, waitText);
+    enqueueLatest(availabilityChain, availabilityGeneration, async (ticket) => {
+      if (ticket !== availabilityGeneration.current) {
+        return;
+      }
+      const snapshot = availabilityRef.current;
+      const saved = await saveAvailabilitySettings(apiUrl, token, snapshot);
+      if (ticket !== availabilityGeneration.current) {
+        return;
+      }
+      if (saved === "unauthorized") {
+        onUnauthorized();
+        return;
+      }
+      if (saved === "unreachable" || saved === "rejected") {
+        setMessage(availabilityNotSaved);
+        return;
+      }
+      if (!sameAvailability(availabilityRef.current, snapshot)) {
+        return;
+      }
+      availabilityRef.current = saved;
+      setThresholdMinutes(saved.thresholdMinutes);
+      setAutoSetUnavailable(saved.autoSetUnavailable);
+      setAutoSetAvailable(saved.autoSetAvailable);
+      setGeofence(saved.geofence);
+      setMessage((current) => (current === availabilityNotSaved ? null : current));
+    });
+  }
+
+  function onTariffChange(field: keyof TariffFields, value: string): void {
+    tariffRef.current = { ...tariffRef.current, [field]: value };
+    if (field === "flag") {
+      setFlagText(value);
+    } else if (field === "mile") {
+      setMileText(value);
+    } else {
+      setWaitText(value);
+    }
+  }
+
+  function onTariffEndEditing(): void {
+    if (!editable) {
+      return;
+    }
+    const fieldsAtBlur = { ...tariffRef.current };
+    const tariff = parseTariffFields(fieldsAtBlur.flag, fieldsAtBlur.mile, fieldsAtBlur.wait);
     if (!tariff) {
+      tariffGeneration.current += 1;
       setMessage(notSaved);
       return;
     }
-    setSaving(true);
-    setMessage(null);
-    const saved = await saveTariff(apiUrl, token, tariff);
-    setSaving(false);
-    if (saved === "unauthorized") {
-      onUnauthorized();
+    const baseline = pendingTariff.current ?? lastSavedTariff.current;
+    if (baseline && sameTariff(tariff, baseline)) {
+      setMessage((current) => (current === notSaved ? null : current));
       return;
     }
-    if (saved === "no-driver" || saved === "unreachable" || saved === "rejected") {
-      setMessage(notSaved);
-      return;
-    }
-    setFlagText(centsToField(saved.flagCents));
-    setMileText(centsToField(saved.perMileCents));
-    setWaitText(centsToField(saved.perWaitMinuteCents));
-  }
-
-  async function onSaveCamera(): Promise<void> {
-    if (savingCamera) {
-      return;
-    }
-    setSavingCamera(true);
-    setMessage(null);
-    const saved = await saveGuidanceCameraPrefs(normalizeGuidanceCameraPrefs({ zoom, tilt }));
-    setSavingCamera(false);
-    setZoom(saved.zoom);
-    setTilt(saved.tilt);
-  }
-
-  async function onSaveTiming(): Promise<void> {
-    if (savingTiming) {
-      return;
-    }
-    setSavingTiming(true);
-    setMessage(null);
-    const saved = await saveGuidanceTimingPrefs(
-      normalizeGuidanceTimingPrefs({
-        announceLeadMeters: announceLead,
-        stepAdvanceMeters: stepAdvance,
-      }),
-    );
-    setSavingTiming(false);
-    setAnnounceLead(saved.announceLeadMeters);
-    setStepAdvance(saved.stepAdvanceMeters);
-  }
-
-  async function onSaveAvailability(): Promise<void> {
-    if (!settingsEditable || savingSettings) {
-      return;
-    }
-    const settings: AvailabilitySettings = {
-      thresholdMinutes,
-      autoSetUnavailable,
-      autoSetAvailable,
-      geofence,
-    };
-    setSavingSettings(true);
-    setMessage(null);
-    const saved = await saveAvailabilitySettings(apiUrl, token, settings);
-    setSavingSettings(false);
-    if (saved === "unauthorized") {
-      onUnauthorized();
-      return;
-    }
-    if (saved === "unreachable" || saved === "rejected") {
-      setMessage(availabilityNotSaved);
-      return;
-    }
-    setThresholdMinutes(saved.thresholdMinutes);
-    setAutoSetUnavailable(saved.autoSetUnavailable);
-    setAutoSetAvailable(saved.autoSetAvailable);
-    setGeofence(saved.geofence);
+    pendingTariff.current = tariff;
+    enqueueLatest(tariffChain, tariffGeneration, async (ticket) => {
+      if (ticket !== tariffGeneration.current) {
+        return;
+      }
+      const saved = await saveTariff(apiUrl, token, tariff);
+      if (ticket !== tariffGeneration.current) {
+        return;
+      }
+      if (saved === "unauthorized") {
+        onUnauthorized();
+        return;
+      }
+      if (saved === "no-driver" || saved === "unreachable" || saved === "rejected") {
+        setMessage(notSaved);
+        return;
+      }
+      if (
+        tariffRef.current.flag !== fieldsAtBlur.flag ||
+        tariffRef.current.mile !== fieldsAtBlur.mile ||
+        tariffRef.current.wait !== fieldsAtBlur.wait
+      ) {
+        return;
+      }
+      const fields = {
+        flag: centsToField(saved.flagCents),
+        mile: centsToField(saved.perMileCents),
+        wait: centsToField(saved.perWaitMinuteCents),
+      };
+      tariffRef.current = fields;
+      lastSavedTariff.current = saved;
+      if (pendingTariff.current && sameTariff(pendingTariff.current, saved)) {
+        pendingTariff.current = null;
+      }
+      setFlagText(fields.flag);
+      setMileText(fields.mile);
+      setWaitText(fields.wait);
+      setMessage((current) => (current === notSaved ? null : current));
+    });
   }
 
   function updateVisualAlert(patch: Partial<VisualAlertPrefs>): void {
-    const next = { ...getVisualAlertPrefs(), ...patch };
+    const next = { ...visualAlertRef.current, ...patch };
+    visualAlertRef.current = next;
     setVisualAlert(next);
     if (patch.color !== undefined) {
       setHexText(patch.color);
     }
-    void saveVisualAlertPrefs(next);
+    enqueueLatest(visualChain, visualGeneration, async (ticket) => {
+      if (ticket !== visualGeneration.current) {
+        return;
+      }
+      await saveVisualAlertPrefs(visualAlertRef.current);
+    });
+  }
+
+  function previewVisualAlert(patch: Partial<VisualAlertPrefs>): void {
+    const next = { ...visualAlertRef.current, ...patch };
+    visualAlertRef.current = next;
+    setVisualAlert(next);
   }
 
   function onHexChange(text: string): void {
@@ -317,8 +451,8 @@ export function SettingsScreen({
               setMessage("A geofence needs at least three vertices.");
               return;
             }
-            setGeofence(next);
             setGeofenceOpen(false);
+            commitAvailability({ ...availabilityRef.current, geofence: next });
           }}
         />
       </View>
@@ -328,191 +462,223 @@ export function SettingsScreen({
   return (
     <ScrollView contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Settings</Text>
-      <Text style={styles.section}>Appearance</Text>
-      <View style={styles.appearanceRow}>
-        {appearanceOptions.map((option) => {
-          const selected = preference === option.value;
-          return (
-            <Pressable
-              key={option.value}
-              accessibilityRole="button"
-              accessibilityState={{ selected }}
-              onPress={() => setPreference(option.value)}
-              style={[styles.appearanceOption, selected ? styles.appearanceOptionSelected : null]}
-            >
-              <Text style={[styles.appearanceOptionText, selected ? styles.appearanceOptionTextSelected : null]}>
-                {option.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      <Text style={styles.section}>Visual alert</Text>
-      <View style={styles.appearanceRow}>
-        {(
-          [
-            { value: true, label: "On" },
-            { value: false, label: "Off" },
-          ] as const
-        ).map((option) => {
-          const selected = visualAlert.enabled === option.value;
-          return (
-            <Pressable
-              key={option.label}
-              accessibilityRole="button"
-              accessibilityState={{ selected }}
-              onPress={() => updateVisualAlert({ enabled: option.value })}
-              style={[styles.appearanceOption, selected ? styles.appearanceOptionSelected : null]}
-            >
-              <Text style={[styles.appearanceOptionText, selected ? styles.appearanceOptionTextSelected : null]}>
-                {option.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      <Text style={styles.label}>Color</Text>
-      <View style={styles.swatchRow}>
-        {visualAlertPresets.map((swatch) => {
-          const selected = visualAlert.color === swatch;
-          return (
-            <Pressable
-              key={swatch}
-              accessibilityRole="button"
-              accessibilityLabel={`Color ${swatch}`}
-              accessibilityState={{ selected }}
-              onPress={() => updateVisualAlert({ color: swatch })}
-              style={[
-                styles.swatch,
-                { backgroundColor: swatch },
-                swatch === "#FFFFFF" ? styles.swatchBordered : null,
-                selected ? styles.swatchSelected : null,
-              ]}
-            />
-          );
-        })}
-      </View>
-      <TextInput
-        style={styles.input}
-        value={hexText}
-        autoCapitalize="characters"
-        autoCorrect={false}
-        placeholder="#RRGGBB"
-        placeholderTextColor={colors.textMuted}
+      <Section title="Appearance">
+        <View style={styles.appearanceRow}>
+          {appearanceOptions.map((option) => {
+            const selected = preference === option.value;
+            return (
+              <Pressable
+                key={option.value}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                onPress={() => setPreference(option.value)}
+                style={[styles.appearanceOption, selected ? styles.appearanceOptionSelected : null]}
+              >
+                <Text style={[styles.appearanceOptionText, selected ? styles.appearanceOptionTextSelected : null]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={styles.subsection}>Visual alert</Text>
+        <View style={styles.appearanceRow}>
+          {(
+            [
+              { value: true, label: "On" },
+              { value: false, label: "Off" },
+            ] as const
+          ).map((option) => {
+            const selected = visualAlert.enabled === option.value;
+            return (
+              <Pressable
+                key={option.label}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                onPress={() => updateVisualAlert({ enabled: option.value })}
+                style={[styles.appearanceOption, selected ? styles.appearanceOptionSelected : null]}
+              >
+                <Text style={[styles.appearanceOptionText, selected ? styles.appearanceOptionTextSelected : null]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={styles.label}>Color</Text>
+        <View style={styles.swatchRow}>
+          {visualAlertPresets.map((swatch) => {
+            const selected = visualAlert.color === swatch;
+            return (
+              <Pressable
+                key={swatch}
+                accessibilityRole="button"
+                accessibilityLabel={`Color ${swatch}`}
+                accessibilityState={{ selected }}
+                onPress={() => updateVisualAlert({ color: swatch })}
+                style={[
+                  styles.swatch,
+                  { backgroundColor: swatch },
+                  swatch === "#FFFFFF" ? styles.swatchBordered : null,
+                  selected ? styles.swatchSelected : null,
+                ]}
+              />
+            );
+          })}
+        </View>
+        <TextInput
+          style={styles.input}
+          value={hexText}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          placeholder="#RRGGBB"
+          placeholderTextColor={colors.textMuted}
         onChangeText={onHexChange}
-        onEndEditing={onHexEndEditing}
-      />
-      <View style={styles.row}>
+        onBlur={onHexEndEditing}
+        />
+        <View style={styles.row}>
+          <SliderField
+            label="Intensity"
+            value={visualAlert.intensity}
+            minimumValue={0}
+            maximumValue={1}
+            step={0.01}
+            formatValue={formatPercent}
+            onChange={(intensity) => previewVisualAlert({ intensity })}
+            onSlidingComplete={(intensity) => updateVisualAlert({ intensity })}
+          />
+          <SliderField
+            label="Brightness"
+            value={visualAlert.brightness}
+            minimumValue={0}
+            maximumValue={1}
+            step={0.01}
+            formatValue={formatPercent}
+            onChange={(brightness) => previewVisualAlert({ brightness })}
+            onSlidingComplete={(brightness) => updateVisualAlert({ brightness })}
+          />
+        </View>
+        <Pressable style={styles.button} onPress={() => throb(3)}>
+          <Text style={styles.buttonText}>Throb 3×</Text>
+        </Pressable>
+      </Section>
+      <Section title="Guidance">
         <SliderField
-          label="Intensity"
-          value={visualAlert.intensity}
+          label="Next Sortie Countdown"
+          value={countdownLeadIndex(countdownLead)}
           minimumValue={0}
-          maximumValue={1}
-          step={0.01}
-          formatValue={formatPercent}
-          onChange={(intensity) => updateVisualAlert({ intensity })}
-        />
-        <SliderField
-          label="Brightness"
-          value={visualAlert.brightness}
-          minimumValue={0}
-          maximumValue={1}
-          step={0.01}
-          formatValue={formatPercent}
-          onChange={(brightness) => updateVisualAlert({ brightness })}
-        />
-      </View>
-      <Pressable style={[styles.button, styles.save]} onPress={() => throb(3)}>
-        <Text style={styles.saveButtonText}>Throb 3×</Text>
-      </Pressable>
-      <SliderField
-        label="Next Sortie Countdown"
-        value={countdownLeadIndex(countdownLead)}
-        minimumValue={0}
-        maximumValue={countdownLeadOptions.length - 1}
-        step={1}
-        rangeHint={countdownLeadRangeLabel}
-        formatValue={(index) => formatCountdownLead(countdownLeadFromIndex(index))}
-        onChange={(index) => {
-          const next = countdownLeadFromIndex(index);
-          if (next === countdownLead) {
-            return;
-          }
-          setCountdownLead(next);
-          void saveCountdownLeadMinutes(next);
-        }}
-      />
-      <Text style={styles.section}>Guidance camera</Text>
-      <View style={styles.row}>
-        <SliderField
-          label="Zoom"
-          value={zoom}
-          minimumValue={guidanceZoomRange.min}
-          maximumValue={guidanceZoomRange.max}
-          step={0.5}
-          formatValue={formatZoom}
-          onChange={setZoom}
-        />
-        <SliderField
-          label="Tilt"
-          value={tilt}
-          minimumValue={guidanceTiltRange.min}
-          maximumValue={guidanceTiltRange.max}
+          maximumValue={countdownLeadOptions.length - 1}
           step={1}
-          formatValue={formatTilt}
-          onChange={setTilt}
+          rangeHint={countdownLeadRangeLabel}
+          formatValue={(index) => formatCountdownLead(countdownLeadFromIndex(index))}
+          onChange={(index) => setCountdownLead(countdownLeadFromIndex(index))}
+          onSlidingComplete={(index) => {
+            const next = countdownLeadFromIndex(index);
+            setCountdownLead(next);
+            void saveCountdownLeadMinutes(next);
+          }}
         />
-      </View>
-      <Pressable
-        style={[styles.button, styles.save, savingCamera ? styles.disabled : null]}
-        disabled={savingCamera}
-        onPress={() => void onSaveCamera()}
-      >
-        <Text style={styles.saveButtonText}>Save camera</Text>
-      </Pressable>
-      <Text style={styles.section}>Guidance timing</Text>
-      <View style={styles.row}>
-        <SliderField
-          label="Announce lead"
-          value={announceLead}
-          minimumValue={announceLeadRange.min}
-          maximumValue={announceLeadRange.max}
-          step={10}
-          formatValue={formatMetersSetting}
-          onChange={setAnnounceLead}
-        />
-        <SliderField
-          label="Step advance"
-          value={stepAdvance}
-          minimumValue={stepAdvanceRange.min}
-          maximumValue={stepAdvanceRange.max}
-          step={5}
-          formatValue={formatMetersSetting}
-          onChange={setStepAdvance}
-        />
-      </View>
-      <Pressable
-        style={[styles.button, styles.save, savingTiming ? styles.disabled : null]}
-        disabled={savingTiming}
-        onPress={() => void onSaveTiming()}
-      >
-        <Text style={styles.saveButtonText}>Save timing</Text>
-      </Pressable>
-      <Text style={styles.section}>Meter tariff</Text>
-      <View style={styles.row}>
-        <Field label="Flag drop ($)" value={flagText} editable={editable} onChange={setFlagText} />
-        <Field label="Per mile ($)" value={mileText} editable={editable} onChange={setMileText} />
-        <Field label="Per wait minute ($)" value={waitText} editable={editable} onChange={setWaitText} />
-      </View>
-      <Pressable
-        style={[styles.button, styles.save, !editable || saving ? styles.disabled : null]}
-        disabled={!editable || saving}
-        onPress={() => void onSave()}
-      >
-        <Text style={styles.saveButtonText}>Save tariff</Text>
-      </Pressable>
-      <Text style={styles.section}>Availability</Text>
-      <View style={styles.row}>
+        <Text style={styles.subsection}>Camera</Text>
+        <View style={styles.row}>
+          <SliderField
+            label="Zoom"
+            value={zoom}
+            minimumValue={guidanceZoomRange.min}
+            maximumValue={guidanceZoomRange.max}
+            step={0.5}
+            formatValue={formatZoom}
+            onChange={(value) => {
+              cameraRef.current = { ...cameraRef.current, zoom: value };
+              setZoom(value);
+            }}
+            onSlidingComplete={(value) => {
+              cameraRef.current = { ...cameraRef.current, zoom: value };
+              setZoom(value);
+              persistCamera();
+            }}
+          />
+          <SliderField
+            label="Tilt"
+            value={tilt}
+            minimumValue={guidanceTiltRange.min}
+            maximumValue={guidanceTiltRange.max}
+            step={1}
+            formatValue={formatTilt}
+            onChange={(value) => {
+              cameraRef.current = { ...cameraRef.current, tilt: value };
+              setTilt(value);
+            }}
+            onSlidingComplete={(value) => {
+              cameraRef.current = { ...cameraRef.current, tilt: value };
+              setTilt(value);
+              persistCamera();
+            }}
+          />
+        </View>
+        <Text style={styles.subsection}>Timing</Text>
+        <View style={styles.row}>
+          <SliderField
+            label="Announce lead"
+            value={announceLead}
+            minimumValue={announceLeadRange.min}
+            maximumValue={announceLeadRange.max}
+            step={10}
+            formatValue={formatMetersSetting}
+            onChange={(value) => {
+              timingRef.current = { ...timingRef.current, announceLeadMeters: value };
+              setAnnounceLead(value);
+            }}
+            onSlidingComplete={(value) => {
+              timingRef.current = { ...timingRef.current, announceLeadMeters: value };
+              setAnnounceLead(value);
+              persistTiming();
+            }}
+          />
+          <SliderField
+            label="Step advance"
+            value={stepAdvance}
+            minimumValue={stepAdvanceRange.min}
+            maximumValue={stepAdvanceRange.max}
+            step={5}
+            formatValue={formatMetersSetting}
+            onChange={(value) => {
+              timingRef.current = { ...timingRef.current, stepAdvanceMeters: value };
+              setStepAdvance(value);
+            }}
+            onSlidingComplete={(value) => {
+              timingRef.current = { ...timingRef.current, stepAdvanceMeters: value };
+              setStepAdvance(value);
+              persistTiming();
+            }}
+          />
+        </View>
+      </Section>
+      <Section title="Meter">
+        <View style={styles.row}>
+          <Field
+            label="Flag drop ($)"
+            value={flagText}
+            editable={editable}
+            onChange={(value) => onTariffChange("flag", value)}
+            onBlur={onTariffEndEditing}
+          />
+          <Field
+            label="Per mile ($)"
+            value={mileText}
+            editable={editable}
+            onChange={(value) => onTariffChange("mile", value)}
+            onBlur={onTariffEndEditing}
+          />
+          <Field
+            label="Per wait minute ($)"
+            value={waitText}
+            editable={editable}
+            onChange={(value) => onTariffChange("wait", value)}
+            onBlur={onTariffEndEditing}
+          />
+        </View>
+      </Section>
+      <Section title="Availability">
         <SliderField
           label="Availability threshold in minutes"
           value={thresholdMinutes}
@@ -521,40 +687,103 @@ export function SettingsScreen({
           step={1}
           formatValue={formatMinutes}
           onChange={(value) => {
-            if (settingsEditable) {
-              setThresholdMinutes(Math.round(value));
+            if (!settingsEditable) {
+              return;
             }
+            const threshold = Math.round(value);
+            availabilityRef.current = { ...availabilityRef.current, thresholdMinutes: threshold };
+            setThresholdMinutes(threshold);
+          }}
+          onSlidingComplete={(value) => {
+            if (!settingsEditable) {
+              return;
+            }
+            const threshold = Math.round(value);
+            commitAvailability({ ...availabilityRef.current, thresholdMinutes: threshold });
           }}
         />
-      </View>
-      <Text style={styles.label}>Automatically Set Unavailable</Text>
-      <OnOff value={autoSetUnavailable} enabled={settingsEditable} onChange={setAutoSetUnavailable} />
-      <Text style={styles.label}>Automatically Set Available</Text>
-      <OnOff value={autoSetAvailable} enabled={settingsEditable} onChange={setAutoSetAvailable} />
-      <Text style={styles.label}>Availability geofence</Text>
-      <Text style={styles.previewHint}>{geofence.length > 0 ? `${geofence.length} vertices` : "No geofence"}</Text>
-      {Platform.OS !== "web" ? (
-        <Pressable
-          style={[styles.button, styles.save, !settingsEditable ? styles.disabled : null]}
-          disabled={!settingsEditable}
-          onPress={() => setGeofenceOpen(true)}
-        >
-          <Text style={styles.saveButtonText}>{geofence.length === 0 ? "Create geofence" : "Edit geofence"}</Text>
-        </Pressable>
-      ) : null}
-      <Pressable
-        style={[styles.button, styles.save, !settingsEditable || savingSettings ? styles.disabled : null]}
-        disabled={!settingsEditable || savingSettings}
-        onPress={() => void onSaveAvailability()}
-      >
-        <Text style={styles.saveButtonText}>Save availability</Text>
-      </Pressable>
+        <Text style={styles.label}>Automatically Set Unavailable</Text>
+        <OnOff
+          value={autoSetUnavailable}
+          enabled={settingsEditable}
+          onChange={(value) => commitAvailability({ ...availabilityRef.current, autoSetUnavailable: value })}
+        />
+        <Text style={styles.label}>Automatically Set Available</Text>
+        <OnOff
+          value={autoSetAvailable}
+          enabled={settingsEditable}
+          onChange={(value) => commitAvailability({ ...availabilityRef.current, autoSetAvailable: value })}
+        />
+        <Text style={styles.label}>Availability geofence</Text>
+        <Text style={styles.previewHint}>{geofence.length > 0 ? `${geofence.length} vertices` : "No geofence"}</Text>
+        {Platform.OS !== "web" ? (
+          <Pressable
+            style={[styles.button, !settingsEditable ? styles.disabled : null]}
+            disabled={!settingsEditable}
+            onPress={() => setGeofenceOpen(true)}
+          >
+            <Text style={styles.buttonText}>{geofence.length === 0 ? "Create geofence" : "Edit geofence"}</Text>
+          </Pressable>
+        ) : null}
+      </Section>
       {message ? <Text style={styles.message}>{message}</Text> : null}
-      {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
-      <Pressable style={styles.button} onPress={onSignOut}>
-        <Text style={styles.buttonText}>Sign out</Text>
-      </Pressable>
+      <Section title="Account">
+        {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
+        <Pressable style={styles.button} onPress={onSignOut}>
+          <Text style={styles.buttonText}>Sign out</Text>
+        </Pressable>
+      </Section>
     </ScrollView>
+  );
+}
+
+function enqueueLatest(
+  chain: { current: Promise<void> },
+  generation: { current: number },
+  work: (ticket: number) => Promise<void>,
+): void {
+  const ticket = ++generation.current;
+  const run = chain.current.then(() => work(ticket));
+  chain.current = run.then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+function sameTariff(left: Tariff, right: Tariff): boolean {
+  return (
+    left.flagCents === right.flagCents &&
+    left.perMileCents === right.perMileCents &&
+    left.perWaitMinuteCents === right.perWaitMinuteCents
+  );
+}
+
+function sameAvailability(left: AvailabilitySettings, right: AvailabilitySettings): boolean {
+  return (
+    left.thresholdMinutes === right.thresholdMinutes &&
+    left.autoSetUnavailable === right.autoSetUnavailable &&
+    left.autoSetAvailable === right.autoSetAvailable &&
+    sameRing(left.geofence, right.geofence)
+  );
+}
+
+function sameRing(left: GeoCoordinate[], right: GeoCoordinate[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (point, index) => point.latitude === right[index]?.latitude && point.longitude === right[index]?.longitude,
+    )
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
+  return (
+    <View style={styles.sectionCard}>
+      <Text style={styles.section}>{title}</Text>
+      {children}
+    </View>
   );
 }
 
@@ -585,7 +814,11 @@ function OnOff({
             accessibilityState={{ selected, disabled: !enabled }}
             disabled={!enabled}
             onPress={() => onChange(choice.option)}
-            style={[styles.appearanceOption, selected ? styles.appearanceOptionSelected : null, !enabled ? styles.disabled : null]}
+            style={[
+              styles.appearanceOption,
+              selected ? styles.appearanceOptionSelected : null,
+              !enabled ? styles.disabled : null,
+            ]}
           >
             <Text style={[styles.appearanceOptionText, selected ? styles.appearanceOptionTextSelected : null]}>
               {choice.label}
@@ -606,6 +839,7 @@ function SliderField({
   rangeHint,
   formatValue,
   onChange,
+  onSlidingComplete,
 }: {
   label: string;
   value: number;
@@ -615,6 +849,7 @@ function SliderField({
   rangeHint?: string;
   formatValue: (value: number) => string;
   onChange: (value: number) => void;
+  onSlidingComplete: (value: number) => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -634,6 +869,7 @@ function SliderField({
         maximumTrackTintColor={colors.border}
         thumbTintColor={colors.accent}
         onValueChange={onChange}
+        onSlidingComplete={onSlidingComplete}
       />
     </View>
   );
@@ -644,11 +880,13 @@ function Field({
   value,
   editable,
   onChange,
+  onBlur,
 }: {
   label: string;
   value: string;
   editable: boolean;
   onChange: (value: string) => void;
+  onBlur: () => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -662,6 +900,7 @@ function Field({
         keyboardType="decimal-pad"
         placeholderTextColor={colors.textMuted}
         onChangeText={onChange}
+        onBlur={onBlur}
       />
     </View>
   );
@@ -721,8 +960,8 @@ function createStyles(colors: ThemeColors) {
     screen: {
       flexGrow: 1,
       backgroundColor: colors.background,
-      padding: 24,
-      justifyContent: "center",
+      padding: 20,
+      paddingBottom: 32,
       alignItems: "stretch",
       gap: 12,
     },
@@ -733,19 +972,30 @@ function createStyles(colors: ThemeColors) {
     previewHint: {
       fontSize: 13,
       color: colors.textMuted,
-      marginBottom: 4,
     },
     title: {
-      fontSize: 24,
-      marginBottom: 8,
-      textAlign: "center",
+      fontSize: 28,
+      fontWeight: "600",
       color: colors.text,
     },
+    sectionCard: {
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 12,
+      padding: 16,
+      gap: 12,
+    },
     section: {
-      fontSize: 16,
+      fontSize: 13,
       fontWeight: "600",
-      marginBottom: 4,
-      marginTop: 8,
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+      color: colors.textMuted,
+    },
+    subsection: {
+      fontSize: 15,
+      fontWeight: "600",
       color: colors.text,
     },
     appearanceRow: {
@@ -778,7 +1028,7 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 12,
       paddingHorizontal: 6,
       alignItems: "center",
-      backgroundColor: colors.surface,
+      backgroundColor: colors.background,
     },
     appearanceOptionSelected: {
       backgroundColor: colors.accent,
@@ -822,7 +1072,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 10,
       paddingVertical: 10,
       fontSize: 16,
-      backgroundColor: colors.surface,
+      backgroundColor: colors.background,
       color: colors.text,
     },
     inputDisabled: {
@@ -830,7 +1080,6 @@ function createStyles(colors: ThemeColors) {
       color: colors.textMuted,
     },
     message: {
-      textAlign: "center",
       fontSize: 16,
       color: colors.textSecondary,
     },
@@ -840,20 +1089,12 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 14,
       borderRadius: 8,
       alignItems: "center",
-      marginTop: 8,
-    },
-    save: {
-      backgroundColor: colors.accent,
     },
     disabled: {
       opacity: 0.5,
     },
     buttonText: {
       color: colors.primaryText,
-      fontSize: 16,
-    },
-    saveButtonText: {
-      color: "#fff",
       fontSize: 16,
     },
   });
