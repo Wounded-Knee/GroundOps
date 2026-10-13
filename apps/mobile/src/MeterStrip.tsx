@@ -5,6 +5,7 @@ import { formatSeconds } from "./guidance";
 import {
   formatMiles,
   formatMoney,
+  formatRunningFare,
   formatWaitMinutes,
   meterCharges,
 } from "./meter";
@@ -38,6 +39,7 @@ export type MeterDisplay = {
   showOnward: boolean;
   showCommence: boolean;
   pendingNextLeg: boolean;
+  flagDropped: boolean;
 };
 
 export function MeterStrip({
@@ -68,7 +70,7 @@ export function MeterStrip({
     reading.waitSeconds,
     reading.remainingMeters,
   );
-  const actualFare = charges ? formatMoney(charges.totalCents) : "—";
+  const runningFare = formatRunningFare(reading.flagDropped, charges ? charges.totalCents : null);
   const estimatedFare = charges ? formatMoney(charges.estimateCents) : "—";
   const estimatedMiles =
     reading.milesTraveled + Math.max(0, reading.remainingMeters) / metersPerMile;
@@ -151,7 +153,7 @@ export function MeterStrip({
                 adjustsFontSizeToFit
                 minimumFontScale={0.35}
               >
-                {actualFare}
+                {runningFare}
               </Text>
               {reading.dwelling && remainingWait !== null ? (
                 <Text style={styles.waitCountdown} accessibilityLabel="Wait countdown">
@@ -171,7 +173,7 @@ export function MeterStrip({
                 label="Time"
                 value={`${formatWaitMinutes(reading.waitSeconds)} min`}
               />
-              <SideRow align="right" label="Fare" value={actualFare} />
+              <SideRow align="right" label="Fare" value={runningFare} />
             </View>
           </View>
           {reading.dwelling || reading.showOnward || reading.showCommence ? (

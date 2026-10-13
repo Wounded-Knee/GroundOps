@@ -6,10 +6,12 @@ import {
   advanceMeterAlongRoute,
   emptyMeter,
   formatMoney,
+  formatRunningFare,
   formatTripEstimate,
   gpsSilenceStationarySeconds,
   isStationary,
   meterCharges,
+  noteFlagDrop,
   baselineAfterReroute,
   progressFraction,
   resetMeterRouteProgress,
@@ -31,6 +33,54 @@ describe("meter", () => {
     assert.equal(charges.estimateCents, 860 + 250);
     assert.equal(formatMoney(charges.totalCents), "$8.60");
     assert.equal(meterCharges(null, 1, 0, 0), null);
+  });
+
+  it("shows No Fare until the flag drops, then the flag amount with no miles", () => {
+    const idle = emptyMeter();
+    assert.equal(idle.flagDropped, false);
+    assert.equal(formatRunningFare(false, defaultTariff.flagCents), "No Fare");
+    assert.equal(noteFlagDrop(idle, false), idle);
+
+    const dropped = noteFlagDrop(idle, true);
+    assert.equal(dropped.flagDropped, true);
+    assert.equal(dropped.milesTraveled, 0);
+    assert.equal(dropped.waitSeconds, 0);
+    assert.equal(noteFlagDrop(dropped, false).flagDropped, true);
+
+    const charges = meterCharges(defaultTariff, 0, 0, 0);
+    assert.ok(charges);
+    assert.equal(charges.totalCents, defaultTariff.flagCents);
+    assert.equal(formatRunningFare(true, charges.totalCents), formatMoney(defaultTariff.flagCents));
+    assert.equal(formatRunningFare(true, null), "—");
+  });
+
+  it("keeps a dropped flag through route progress and GPS updates", () => {
+    const dropped = noteFlagDrop(emptyMeter(), true);
+    const reset = resetMeterRouteProgress(dropped, 10);
+    assert.equal(reset.flagDropped, true);
+
+    const first = advanceMeterAlongRoute(dropped, {
+      fix: origin,
+      observedAtMs: 1_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    const waited = advanceMeterAlongRoute(first, {
+      fix: origin,
+      observedAtMs: 11_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    const moved = advanceMeterAlongRoute(waited, {
+      fix: north(origin, 500),
+      observedAtMs: 21_000,
+      accuracyMeters: 10,
+      routePath: path,
+    });
+    assert.equal(first.flagDropped, true);
+    assert.equal(waited.flagDropped, true);
+    assert.equal(moved.flagDropped, true);
+    assert.equal(tickMeterWait(moved, 30_000).flagDropped, true);
   });
 
   it("formats a pre-trip estimate from tariff and route distance", () => {
@@ -203,11 +253,13 @@ describe("meter", () => {
       },
       alongMeters: 900,
       motion: "moving" as const,
+      flagDropped: true,
     };
     const reset = resetMeterRouteProgress(state, 10);
     assert.equal(reset.milesTraveled, 1.5);
     assert.equal(reset.waitSeconds, 40);
     assert.equal(reset.alongMeters, 10);
+    assert.equal(reset.flagDropped, true);
   });
 });
 

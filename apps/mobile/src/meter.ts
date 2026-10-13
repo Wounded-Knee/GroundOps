@@ -29,6 +29,8 @@ export type MeterState = {
   /** Last projected distance along the current route path. */
   alongMeters: number | null;
   motion: MeterMotion;
+  /** Stays set after the first passenger stop of this guidance session. */
+  flagDropped: boolean;
 };
 
 export type MeterCharges = {
@@ -44,7 +46,22 @@ export type RouteMeterSample = MeterSample & {
 };
 
 export function emptyMeter(): MeterState {
-  return { milesTraveled: 0, waitSeconds: 0, last: null, alongMeters: null, motion: "unknown" };
+  return {
+    milesTraveled: 0,
+    waitSeconds: 0,
+    last: null,
+    alongMeters: null,
+    motion: "unknown",
+    flagDropped: false,
+  };
+}
+
+/** Latches the flag the first time a passenger is present. Later absences leave it set. */
+export function noteFlagDrop(state: MeterState, passengerPresent: boolean): MeterState {
+  if (!passengerPresent || state.flagDropped) {
+    return state;
+  }
+  return { ...state, flagDropped: true };
 }
 
 /** Reset path tracking after a reroute without clearing cumulative miles or wait. */
@@ -95,6 +112,7 @@ export function advanceMeterAlongRoute(state: MeterState, sample: RouteMeterSamp
       last: sample,
       alongMeters: onRoute ? projection.alongMeters : state.alongMeters,
       motion: "stationary",
+      flagDropped: state.flagDropped,
     };
   }
 
@@ -113,6 +131,7 @@ export function advanceMeterAlongRoute(state: MeterState, sample: RouteMeterSamp
     last: sample,
     alongMeters,
     motion: "moving",
+    flagDropped: state.flagDropped,
   };
 }
 
@@ -214,6 +233,17 @@ export function formatWaitClock(waitSeconds: number): string {
 
 export function formatMoney(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
+}
+
+/** Running fare. "No Fare" until the flag drops; then the dollar total, or "—" when unknown. */
+export function formatRunningFare(flagDropped: boolean, totalCents: number | null): string {
+  if (!flagDropped) {
+    return "No Fare";
+  }
+  if (totalCents === null) {
+    return "—";
+  }
+  return formatMoney(totalCents);
 }
 
 /** Pre-trip fare from tariff and full route distance; "—" when tariff is missing. */

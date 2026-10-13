@@ -89,6 +89,7 @@ import {
   emptyMeter,
   formatTripEstimate,
   meterCharges,
+  noteFlagDrop,
   resetMeterRouteProgress,
   stationaryDisplacementMeters,
   tickMeterWait,
@@ -457,9 +458,14 @@ export function NavigationScreen({
     const stopPosition = dwelling ? current.stopPosition : current.firstStopPosition;
     const later = hasLaterStop(current.stops, stopPosition);
     const final = dwelling && isFinalStop(current.stops, current.stopPosition);
+    const metered = noteFlagDrop(nextMeter, sortiePassengerPresent(current));
+    if (metered !== nextMeter) {
+      meterRef.current = metered;
+      setMeter(metered);
+    }
     onMeterReading?.({
-      milesTraveled: nextMeter.milesTraveled,
-      waitSeconds: nextMeter.waitSeconds,
+      milesTraveled: metered.milesTraveled,
+      waitSeconds: metered.waitSeconds,
       remainingMeters: remaining,
       baselineRemainingMeters: baselineRemainingRef.current,
       estimatedDurationSeconds: current.route.durationSeconds,
@@ -474,16 +480,17 @@ export function NavigationScreen({
       showOnward: Boolean(final && !current.pendingNextLeg),
       showCommence: dwelling && (later || current.pendingNextLeg),
       pendingNextLeg: dwelling ? current.pendingNextLeg : false,
+      flagDropped: metered.flagDropped,
     });
     if (!current.sortieId) {
       return;
     }
-    const charges = meterCharges(current.tariff, nextMeter.milesTraveled, nextMeter.waitSeconds, remaining);
+    const charges = meterCharges(current.tariff, metered.milesTraveled, metered.waitSeconds, remaining);
     queueMeterReport(
       {
         sortieId: current.sortieId,
-        milesTraveled: nextMeter.milesTraveled,
-        waitSeconds: nextMeter.waitSeconds,
+        milesTraveled: metered.milesTraveled,
+        waitSeconds: metered.waitSeconds,
         totalCents: charges?.totalCents ?? 0,
         estimateCents: charges?.estimateCents ?? 0,
         remainingMeters: remaining,
@@ -1659,18 +1666,23 @@ function placeFromStop(stop: SortieStop): PlaceSuggestion {
   };
 }
 
-/** Meter accrues only while the current leg has passenger on and the meter is not paused. */
-function sortieLegBillable(nav: NavState): boolean {
+/** The current stop has a passenger, including a paused final stop that already dropped the flag. */
+function sortiePassengerPresent(nav: NavState): boolean {
   if ((nav.mode !== "guiding" && nav.mode !== "arrived") || nav.kind !== "sortie") {
     return false;
   }
   if (nav.mode === "arrived") {
-    if (nav.meterPaused) {
-      return false;
-    }
     return nav.stops[nav.stopPosition]?.passenger === true;
   }
   return nav.stops[nav.firstStopPosition]?.passenger === true;
+}
+
+/** Meter accrues only while the current leg has passenger on and the meter is not paused. */
+function sortieLegBillable(nav: NavState): boolean {
+  if (nav.mode === "arrived" && nav.meterPaused) {
+    return false;
+  }
+  return sortiePassengerPresent(nav);
 }
 
 function Awake() {
