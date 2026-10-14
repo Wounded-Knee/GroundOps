@@ -242,6 +242,17 @@ export function overviewCamera(path: GeoCoordinate[]): { latitude: number; longi
   };
 }
 
+/** North-up, untilted fit of a route. Same center and zoom as `overviewCamera`. */
+export function routeOverviewCamera(
+  path: GeoCoordinate[],
+): { latitude: number; longitude: number; zoom: number; bearing: 0; tilt: 0 } | null {
+  const framed = overviewCamera(path);
+  if (!framed) {
+    return null;
+  }
+  return { ...framed, bearing: 0, tilt: 0 };
+}
+
 export function travelBearing(course: number | null, compass: number | null): number | null {
   if (course !== null && course >= 0) {
     return course;

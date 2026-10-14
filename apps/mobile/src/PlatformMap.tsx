@@ -24,6 +24,14 @@ export type MapHandle = {
   setDisplayedUser: (coordinate: GeoCoordinate | null) => void;
 };
 
+export type MapCameraMove = {
+  latitude: number;
+  longitude: number;
+  zoom: number;
+  tilt: number;
+  bearing: number;
+};
+
 type PlatformMapProps = {
   path: GeoCoordinate[];
   destination: GeoCoordinate | null;
@@ -32,6 +40,7 @@ type PlatformMapProps = {
   followUser: boolean;
   /** Zoom at which the route keeps its design thickness. */
   navigationZoom?: number;
+  onCameraMove?: (camera: MapCameraMove) => void;
 };
 
 const routeColor = "#1A73E8";
@@ -45,7 +54,7 @@ function routeStrokeWidth(dp: number): number {
 }
 
 export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function PlatformMap(
-  { path, destination, user, showTraffic, followUser, navigationZoom = guidanceZoom },
+  { path, destination, user, showTraffic, followUser, navigationZoom = guidanceZoom, onCameraMove },
   ref,
 ) {
   const googleRef = useRef<GoogleMaps.MapView | null>(null);
@@ -149,8 +158,20 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
     [hasUser, showTraffic],
   );
 
-  function onCameraMove(event: CameraMoveEvent) {
+  function handleCameraMove(event: CameraMoveEvent) {
     setZoom((current) => (Math.abs(current - event.zoom) < 0.01 ? current : event.zoom));
+    const latitude = event.coordinates.latitude;
+    const longitude = event.coordinates.longitude;
+    if (latitude === undefined || longitude === undefined) {
+      return;
+    }
+    onCameraMove?.({
+      latitude,
+      longitude,
+      zoom: event.zoom,
+      tilt: event.tilt,
+      bearing: event.bearing,
+    });
   }
   const puck = displayedUser ?? user;
 
@@ -162,8 +183,8 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
         markers={markers}
         polylines={polylines}
         properties={properties}
-        onCameraMove={onCameraMove}
-        uiSettings={{ myLocationButtonEnabled: false, compassEnabled: true }}
+        onCameraMove={handleCameraMove}
+        uiSettings={{ myLocationButtonEnabled: false, compassEnabled: false }}
       />
     );
   }
@@ -176,8 +197,8 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
       markers={markers}
       polylines={polylines}
       properties={properties}
-      onCameraMove={onCameraMove}
-      uiSettings={{ myLocationButtonEnabled: false, compassEnabled: true, zoomControlsEnabled: false }}
+      onCameraMove={handleCameraMove}
+      uiSettings={{ myLocationButtonEnabled: false, compassEnabled: false, zoomControlsEnabled: false }}
       {...(puck
         ? {
             userLocation: {

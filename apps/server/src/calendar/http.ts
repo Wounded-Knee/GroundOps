@@ -328,6 +328,10 @@ export function registerCalendarRoutes(
     if (result === "unavailable") {
       return reply.code(503).send({ error: "schedule unavailable" });
     }
+    const fareBearing = result.stops.some((stop) => stop.passenger);
+    // #region agent log
+    fetch("http://127.0.0.1:7255/ingest/bba8e72d-4c30-46ba-aea7-aa7d479478a0",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"6a49b2"},body:JSON.stringify({sessionId:"6a49b2",hypothesisId:"A",location:"calendar/http.ts:commence",message:"commence availability branch",data:{guidance,fareBearing,passengerStops:result.stops.filter((stop)=>stop.passenger).length,stopCount:result.stops.length,sortieId:result.id},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (guidance) {
       await applyGuidanceAvailability(active.user, deps.now());
     } else {

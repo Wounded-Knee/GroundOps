@@ -106,12 +106,16 @@ const driverAutomaticSelect = {
 };
 
 async function applyEvent(row: DriverAutomaticRow, event: AvailabilityEvent, now: Date): Promise<void> {
+  const lead = await withinLead(row.id, row.thresholdMinutes, now);
   const choice = automaticAvailabilityChoice({
     event,
-    withinLead: await withinLead(row.id, row.thresholdMinutes, now),
+    withinLead: lead,
     autoSetUnavailable: row.autoSetUnavailable,
     autoSetAvailable: row.autoSetAvailable,
   });
+  // #region agent log
+  fetch("http://127.0.0.1:7255/ingest/bba8e72d-4c30-46ba-aea7-aa7d479478a0",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"6a49b2"},body:JSON.stringify({sessionId:"6a49b2",hypothesisId:"B",location:"availability/automatic.ts:applyEvent",message:"automatic availability choice",data:{event,withinLead:lead,autoSetUnavailable:row.autoSetUnavailable,autoSetAvailable:row.autoSetAvailable,thresholdMinutes:row.thresholdMinutes,choice},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   await writeChoice(row, choice, now);
 }
 

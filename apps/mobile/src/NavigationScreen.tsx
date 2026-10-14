@@ -56,6 +56,7 @@ import {
   maneuverLabel,
   offsetAlongBearing,
   overviewCamera,
+  routeOverviewCamera,
   noteRouteBearing,
   noteRouteFix,
   pathLengthMeters,
@@ -98,7 +99,7 @@ import {
 import type { AccountActivity } from "./liveActivity";
 import { overviewPathForUpload, reportDelayMs, stopListKey } from "./liveActivity";
 import type { MeterDisplay } from "./MeterStrip";
-import { PlatformMap, type MapCamera, type MapHandle } from "./PlatformMap";
+import { PlatformMap, type MapCamera, type MapCameraMove, type MapHandle } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
 import {
   bumpStopWaitMinutes,
@@ -162,6 +163,10 @@ type NavState =
 const apiUrl = resolveApiUrl();
 const poseEpsilonMeters = 0.25;
 const poseEpsilonDegrees = 0.2;
+/** Ignore compass bearing changes smaller than this. The control hides within this span of north. */
+const compassBearingEpsilonDegrees = 1;
+
+type GuidanceCameraMode = "follow" | "overview";
 
 function displayedPoseMoved(previous: MotionPose | null, next: MotionPose): boolean {
   if (!previous) {
@@ -214,6 +219,10 @@ export function NavigationScreen({
   const { height: windowHeight } = useWindowDimensions();
   const styles = createStyles(colors);
   const mapRef = useRef<MapHandle>(null);
+  const [cameraMode, setCameraMode] = useState<GuidanceCameraMode>("follow");
+  const cameraModeRef = useRef<GuidanceCameraMode>("follow");
+  const [mapBearing, setMapBearing] = useState(0);
+  const cameraSnapshotRef = useRef<MapCameraMove | null>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
   const [query, setQuery] = useState("");
   const [pendingWhereTo, setPendingWhereTo] = useState<PlaceSuggestion | null>(null);
@@ -1120,7 +1129,9 @@ export function NavigationScreen({
         if (displayedPoseMoved(displayedPoseRef.current, pose)) {
           displayedPoseRef.current = pose;
           const at = { latitude: pose.latitude, longitude: pose.longitude };
-          mapRef.current?.setCamera(guidanceCameraFrom(at, pose.bearing));
+          if (cameraModeRef.current === "follow") {
+            mapRef.current?.setCamera(guidanceCameraFrom(at, pose.bearing));
+          }
           mapRef.current?.setDisplayedUser(at);
         }
       }
@@ -1133,6 +1144,27 @@ export function NavigationScreen({
       displayedPoseRef.current = null;
     };
   }, [nav.mode, cameraPrefs.zoom, cameraPrefs.tilt]);
+
+  const overviewPath =
+    cameraMode === "overview" && (nav.mode === "guiding" || nav.mode === "arrived") ? nav.route.path : null;
+  useEffect(() => {
+    if (!overviewPath) {
+      return;
+    }
+    const camera = routeOverviewCamera(overviewPath);
+    if (!camera) {
+      return;
+    }
+    mapRef.current?.setCamera(camera);
+  }, [overviewPath]);
+
+  useEffect(() => {
+    if (nav.mode === "guiding" || nav.mode === "arrived") {
+      return;
+    }
+    cameraModeRef.current = "follow";
+    setCameraMode((current) => (current === "follow" ? current : "follow"));
+  }, [nav.mode]);
 
   useEffect(() => {
     void ensureGuidanceCameraPrefsLoaded();
@@ -1449,6 +1481,52 @@ export function NavigationScreen({
     void saveGuidanceMutePrefs({ muted });
   }
 
+  function noteMapCamera(camera: MapCameraMove): void {
+    cameraSnapshotRef.current = camera;
+    setMapBearing((current) =>
+      Math.abs(bearingDeltaDegrees(current, camera.bearing)) < compassBearingEpsilonDegrees
+        ? current
+        : camera.bearing,
+    );
+  }
+
+  function onOrientNorth(): void {
+    const camera = cameraSnapshotRef.current;
+    if (!camera) {
+      return;
+    }
+    mapRef.current?.setCamera({
+      latitude: camera.latitude,
+      longitude: camera.longitude,
+      zoom: camera.zoom,
+      tilt: camera.tilt,
+      bearing: 0,
+    });
+  }
+
+  function onToggleCameraMode(): void {
+    if (nav.mode !== "guiding" && nav.mode !== "arrived") {
+      return;
+    }
+    if (cameraModeRef.current === "overview") {
+      cameraModeRef.current = "follow";
+      setCameraMode("follow");
+      const pose = displayedPoseRef.current;
+      if (pose) {
+        const at = { latitude: pose.latitude, longitude: pose.longitude };
+        mapRef.current?.setCamera(guidanceCameraFrom(at, pose.bearing));
+        setMapBearing((current) =>
+          Math.abs(bearingDeltaDegrees(current, pose.bearing)) < compassBearingEpsilonDegrees
+            ? current
+            : pose.bearing,
+        );
+      }
+      return;
+    }
+    cameraModeRef.current = "overview";
+    setCameraMode("overview");
+  }
+
   if (endGuidanceRef) {
     endGuidanceRef.current = onDismiss;
   }
@@ -1507,6 +1585,7 @@ export function NavigationScreen({
   const showCountdown =
     departureRemainingMs !== null && showDepartureCountdown(departureRemainingMs, countdownLeadMinutes);
   const meterChromeInset = meterActive ? meterPanelHeight(windowHeight) : 0;
+  const compassVisible = Math.abs(bearingDeltaDegrees(0, mapBearing)) >= compassBearingEpsilonDegrees;
 
   return (
     <View style={styles.screen}>
@@ -1518,6 +1597,7 @@ export function NavigationScreen({
         showTraffic={guiding !== null || arrived !== null}
         followUser={nav.mode === "browse" && permission === "granted"}
         navigationZoom={cameraPrefs.zoom}
+        onCameraMove={noteMapCamera}
       />
       <View
         style={[StyleSheet.absoluteFill, meterChromeInset > 0 ? { paddingBottom: meterChromeInset } : null]}
@@ -1586,21 +1666,51 @@ export function NavigationScreen({
 
         <View style={styles.spacer} pointerEvents="none" />
 
-        {guiding || arrived ? (
-          <View style={styles.muteRail} pointerEvents="box-none">
-            <Pressable
-              accessibilityLabel={(guiding ?? arrived)!.muted ? "Unmute" : "Mute"}
-              accessibilityRole="button"
-              onPress={onToggleMute}
-              style={styles.muteButton}
-              pointerEvents="auto"
-            >
-              <Ionicons
-                name={(guiding ?? arrived)!.muted ? "volume-mute" : "volume-high"}
-                size={24}
-                color={colors.text}
-              />
-            </Pressable>
+        {compassVisible || guiding || arrived ? (
+          <View style={styles.controlColumn} pointerEvents="box-none">
+            {compassVisible ? (
+              <Pressable
+                accessibilityLabel="Orient north"
+                accessibilityRole="button"
+                onPress={onOrientNorth}
+                style={styles.mapButton}
+                pointerEvents="auto"
+              >
+                <View style={{ transform: [{ rotate: `${-mapBearing}deg` }] }}>
+                  <Ionicons name="compass" size={24} color={colors.text} />
+                </View>
+              </Pressable>
+            ) : null}
+            {guiding || arrived ? (
+              <Pressable
+                accessibilityLabel={cameraMode === "overview" ? "Resume driving view" : "Show full route"}
+                accessibilityRole="button"
+                onPress={onToggleCameraMode}
+                style={styles.mapButton}
+                pointerEvents="auto"
+              >
+                <Ionicons
+                  name={cameraMode === "overview" ? "navigate" : "map-outline"}
+                  size={24}
+                  color={colors.text}
+                />
+              </Pressable>
+            ) : null}
+            {guiding || arrived ? (
+              <Pressable
+                accessibilityLabel={(guiding ?? arrived)!.muted ? "Unmute" : "Mute"}
+                accessibilityRole="button"
+                onPress={onToggleMute}
+                style={styles.mapButton}
+                pointerEvents="auto"
+              >
+                <Ionicons
+                  name={(guiding ?? arrived)!.muted ? "volume-mute" : "volume-high"}
+                  size={24}
+                  color={colors.text}
+                />
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
 
@@ -1774,14 +1884,15 @@ function createStyles(colors: ThemeColors) {
     spacer: {
       flex: 1,
     },
-    muteRail: {
+    controlColumn: {
       position: "absolute",
       right: 12,
       top: 0,
       bottom: 0,
       justifyContent: "center",
+      gap: 12,
     },
-    muteButton: {
+    mapButton: {
       width: 48,
       height: 48,
       borderRadius: 24,

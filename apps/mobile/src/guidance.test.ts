@@ -12,12 +12,14 @@ import {
   guidanceLookAheadMeters,
   noteRouteFix,
   offsetAlongBearing,
+  overviewCamera,
   pathLengthMeters,
   pointAlongPath,
   poseAt,
   projectOntoPath,
   remainingDistanceMeters,
   remainingDurationSeconds,
+  routeOverviewCamera,
   shouldAnnounceUpcoming,
   smoothBearing,
   stepAdvanceMeters,
@@ -29,6 +31,23 @@ import {
 const origin: GeoCoordinate = { latitude: 0, longitude: 0 };
 
 describe("guidance", () => {
+  it("frames a route overview north-up without tilt", () => {
+    const path = [
+      { latitude: 40, longitude: -74 },
+      { latitude: 41, longitude: -73 },
+    ];
+    const framed = overviewCamera(path);
+    const camera = routeOverviewCamera(path);
+    assert.ok(framed);
+    assert.ok(camera);
+    assert.equal(camera.latitude, framed.latitude);
+    assert.equal(camera.longitude, framed.longitude);
+    assert.equal(camera.zoom, framed.zoom);
+    assert.equal(camera.bearing, 0);
+    assert.equal(camera.tilt, 0);
+    assert.equal(routeOverviewCamera([]), null);
+  });
+
   it("advances only the current step when one fix is within 30 meters of more than one step end", () => {
     const destination = north(origin, 200);
     const route = routeWithEnds(20, 5);
