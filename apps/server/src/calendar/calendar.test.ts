@@ -1140,6 +1140,254 @@ describe("calendar", () => {
     }
   });
 
+  it("keeps the next drive on an in-progress terminal after the scheduled end passes", async () => {
+    const person = await createSession({
+      sub: `calendar-in-progress-origin-${crypto.randomUUID()}`,
+      displayName: "In progress origin",
+      email: null,
+    });
+    const airportArrival = new Date("2026-10-14T15:30:00.000Z");
+    const upcomingArrival = new Date("2026-10-14T18:00:00.000Z");
+    const midRoute = northOf(pointA, 2 * 1609.344);
+    const airportFix = northOf(pointA, 200);
+    let now = new Date("2026-10-14T15:00:00.000Z");
+    const calls: { latitude: number; longitude: number }[] = [];
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointB);
+      const deps: ScheduleDeps = {
+        now: () => now,
+        lookupAddress: async (origin) => {
+          if (origin.latitude === midRoute.latitude) {
+            return "2612 Castle Hayne Rd";
+          }
+          if (origin.latitude === airportFix.latitude) {
+            return "1740 Airport Blvd";
+          }
+          return "Driver location";
+        },
+        driveDuration: async (origin) => {
+          calls.push({ latitude: origin.latitude, longitude: origin.longitude });
+          return 600;
+        },
+      };
+
+      const upcoming = await authorSortie(
+        person.user,
+        {
+          label: "Oil Change",
+          arrivalAt: upcomingArrival,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointC, "South 17th Street", false)],
+        },
+        deps,
+      );
+      assert.equal(typeof upcoming, "object");
+      if (typeof upcoming !== "object") {
+        return;
+      }
+
+      const airport = await authorSortie(
+        person.user,
+        {
+          label: "ILM",
+          arrivalAt: airportArrival,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointA, "Airport Boulevard", false)],
+        },
+        deps,
+      );
+      assert.equal(typeof airport, "object");
+      if (typeof airport !== "object") {
+        return;
+      }
+      const chained = await db
+        .select({ label: sortie.scheduleOriginLabel, latitude: sortie.scheduleOriginLatitude })
+        .from(sortie)
+        .where(eq(sortie.id, upcoming.id));
+      assert.equal(chained[0]?.label, "Airport Boulevard");
+      assert.equal(chained[0]?.latitude, pointA.latitude);
+
+      const commenced = await commenceSortie(person.user, airport.id, deps);
+      assert.equal(typeof commenced, "object");
+      if (typeof commenced !== "object" || commenced.scheduledEnd === undefined) {
+        return;
+      }
+
+      now = new Date(Date.parse(commenced.scheduledEnd) + 2_000);
+      calls.length = 0;
+      const enRoute = await recordObservation(
+        person.user,
+        {
+          observedAt: now,
+          latitude: midRoute.latitude,
+          longitude: midRoute.longitude,
+          accuracyMeters: 8,
+        },
+        deps,
+      );
+      assert.equal(enRoute, "ok");
+      const held = await db
+        .select({
+          label: sortie.scheduleOriginLabel,
+          latitude: sortie.scheduleOriginLatitude,
+          longitude: sortie.scheduleOriginLongitude,
+        })
+        .from(sortie)
+        .where(eq(sortie.id, upcoming.id));
+      assert.equal(held[0]?.label, "Airport Boulevard");
+      assert.equal(held[0]?.latitude, pointA.latitude);
+      assert.equal(held[0]?.longitude, pointA.longitude);
+      assert.equal(
+        calls.some((call) => call.latitude === midRoute.latitude),
+        false,
+      );
+
+      const completed = await completeSortie(person.user, airport.id, deps);
+      assert.equal(typeof completed, "object");
+      await db
+        .update(sortie)
+        .set({
+          scheduleOriginLatitude: midRoute.latitude,
+          scheduleOriginLongitude: midRoute.longitude,
+          scheduleOriginLabel: "2612 Castle Hayne Rd",
+        })
+        .where(eq(sortie.id, upcoming.id));
+
+      calls.length = 0;
+      const atTerminal = await recordObservation(
+        person.user,
+        {
+          observedAt: new Date(now.getTime() + 60_000),
+          latitude: airportFix.latitude,
+          longitude: airportFix.longitude,
+          accuracyMeters: 8,
+        },
+        deps,
+      );
+      assert.equal(atTerminal, "ok");
+      const healed = await db
+        .select({
+          label: sortie.scheduleOriginLabel,
+          latitude: sortie.scheduleOriginLatitude,
+          longitude: sortie.scheduleOriginLongitude,
+        })
+        .from(sortie)
+        .where(eq(sortie.id, upcoming.id));
+      assert.equal(healed[0]?.label, "1740 Airport Blvd");
+      assert.equal(healed[0]?.latitude, airportFix.latitude);
+      assert.equal(healed[0]?.longitude, airportFix.longitude);
+      assert.ok(calls.some((call) => call.latitude === airportFix.latitude && call.longitude === airportFix.longitude));
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("does not leave the next drive at an older unfinished stop after a later sortie is completed", async () => {
+    const person = await createSession({
+      sub: `calendar-abandoned-origin-${crypto.randomUUID()}`,
+      displayName: "Abandoned origin",
+      email: null,
+    });
+    const abandonedArrival = new Date("2026-10-13T21:30:00.000Z");
+    const airportArrival = new Date("2026-10-14T15:30:00.000Z");
+    const upcomingArrival = new Date("2026-10-14T18:00:00.000Z");
+    let now = new Date("2026-10-13T21:00:00.000Z");
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, pointB);
+      const deps: ScheduleDeps = {
+        now: () => now,
+        lookupAddress: async () => "1740 Airport Blvd",
+        driveDuration: async () => 600,
+      };
+
+      const abandoned = await authorSortie(
+        person.user,
+        {
+          label: "Yesterday",
+          arrivalAt: abandonedArrival,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointD, "Castle Hayne Road", false)],
+        },
+        deps,
+      );
+      assert.equal(typeof abandoned, "object");
+      if (typeof abandoned !== "object") {
+        return;
+      }
+      const commencedAbandoned = await commenceSortie(person.user, abandoned.id, deps);
+      assert.equal(typeof commencedAbandoned, "object");
+
+      now = new Date("2026-10-14T15:00:00.000Z");
+      const upcoming = await authorSortie(
+        person.user,
+        {
+          label: "Oil Change",
+          arrivalAt: upcomingArrival,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointC, "South 17th Street", false)],
+        },
+        deps,
+      );
+      assert.equal(typeof upcoming, "object");
+      if (typeof upcoming !== "object") {
+        return;
+      }
+
+      const airport = await authorSortie(
+        person.user,
+        {
+          label: "ILM",
+          arrivalAt: airportArrival,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(pointA, "Airport Boulevard", false)],
+        },
+        deps,
+      );
+      assert.equal(typeof airport, "object");
+      if (typeof airport !== "object") {
+        return;
+      }
+      const commencedAirport = await commenceSortie(person.user, airport.id, deps);
+      assert.equal(typeof commencedAirport, "object");
+      if (typeof commencedAirport !== "object") {
+        return;
+      }
+      now = new Date(Date.parse(commencedAirport.scheduledEnd) + 60_000);
+      const completed = await completeSortie(person.user, airport.id, deps);
+      assert.equal(typeof completed, "object");
+
+      const atAirport = await recordObservation(
+        person.user,
+        {
+          observedAt: now,
+          latitude: pointA.latitude,
+          longitude: pointA.longitude,
+          accuracyMeters: 8,
+        },
+        deps,
+      );
+      assert.equal(atAirport, "ok");
+      const origin = await db
+        .select({ label: sortie.scheduleOriginLabel, latitude: sortie.scheduleOriginLatitude })
+        .from(sortie)
+        .where(eq(sortie.id, upcoming.id));
+      assert.notEqual(origin[0]?.label, "Castle Hayne Road");
+      assert.equal(origin[0]?.latitude, pointA.latitude);
+      assert.equal(origin[0]?.label, "1740 Airport Blvd");
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
   it("starts a one-stop sortie from GPS C to D ten minutes before arrival T", async () => {
     const person = await createSession({
       sub: `calendar-line-cd-${crypto.randomUUID()}`,

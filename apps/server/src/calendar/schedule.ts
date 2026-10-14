@@ -3,6 +3,9 @@ import type { GeoCoordinate, SortieStopWrite } from "@groundops/contracts";
 /** Five statute miles. A later fix at least this far from the last computation anchor recomputes the window. */
 export const recomputeMeters = 5 * 1609.344;
 
+/** One statute mile. A fix this close to a completed sortie's last place is still at that terminal. */
+export const terminalPresenceMeters = 1609.344;
+
 export const scheduleBackoffMs = 5 * 60 * 1000;
 
 const refineThresholdMs = 2 * 60 * 1000;
@@ -25,6 +28,7 @@ export type SortiePlace = {
   id: string;
   arrivalAt: Date;
   scheduledEnd: Date;
+  actualStart: Date | null;
   actualEnd: Date | null;
   destination: GeoCoordinate;
   destinationLabel: string;
@@ -34,9 +38,30 @@ export type ApproachOrigin = GeoCoordinate & {
   label: string | null;
 };
 
-/** A sortie is still an approach origin while it has not been completed and its scheduled end is still ahead. */
-export function placeStillOpen(place: SortiePlace, now: Date): boolean {
-  return place.actualEnd === null && place.scheduledEnd.getTime() > now.getTime();
+/**
+ * A later drive still leaves from this sortie's last place.
+ * Completion ends that. The scheduled end passing does not, while this is the
+ * sortie the driver commenced most recently and has not completed. A sortie
+ * that was never commenced stops once its scheduled end is past.
+ */
+export function placeStillOpen(place: SortiePlace, now: Date, places: readonly SortiePlace[]): boolean {
+  if (place.actualEnd !== null) {
+    return false;
+  }
+  if (place.scheduledEnd.getTime() > now.getTime()) {
+    return true;
+  }
+  return place.actualStart !== null && !laterCommencement(place, places);
+}
+
+function laterCommencement(place: SortiePlace, places: readonly SortiePlace[]): boolean {
+  if (place.actualStart === null) {
+    return false;
+  }
+  const started = place.actualStart.getTime();
+  return places.some(
+    (other) => other.id !== place.id && other.actualStart !== null && other.actualStart.getTime() > started,
+  );
 }
 
 /** The drive starts at an earlier sortie's destination only while that sortie is still open. */
@@ -63,7 +88,7 @@ function previousPlace(places: SortiePlace[], arrivalAt: Date, id: string | null
     if (id !== null && place.id === id) {
       continue;
     }
-    if (!placeStillOpen(place, now)) {
+    if (!placeStillOpen(place, now, places)) {
       continue;
     }
     if (!sortsBefore(place, arrivalAt, id)) {
@@ -119,6 +144,32 @@ export function distanceMeters(from: GeoCoordinate, to: GeoCoordinate): number {
 
 export function movedFarEnough(from: GeoCoordinate, to: GeoCoordinate): boolean {
   return distanceMeters(from, to) >= recomputeMeters;
+}
+
+/** The stored anchor is a stray point, and the driver is at the latest completed sortie's last place. */
+export function anchorAwayFromCompletedTerminal(
+  places: readonly SortiePlace[],
+  anchor: GeoCoordinate,
+  gps: GeoCoordinate,
+): boolean {
+  let latest: SortiePlace | null = null;
+  let latestEnded: Date | null = null;
+  for (const place of places) {
+    if (place.actualEnd === null) {
+      continue;
+    }
+    if (latest === null || latestEnded === null || place.actualEnd.getTime() > latestEnded.getTime()) {
+      latest = place;
+      latestEnded = place.actualEnd;
+    }
+  }
+  if (!latest) {
+    return false;
+  }
+  return (
+    distanceMeters(gps, latest.destination) <= terminalPresenceMeters &&
+    distanceMeters(anchor, gps) > terminalPresenceMeters
+  );
 }
 
 async function authoredWindow(

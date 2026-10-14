@@ -24,6 +24,7 @@ import {
   sortieStop,
 } from "../schema.js";
 import {
+  anchorAwayFromCompletedTerminal,
   approachOrigin,
   computeWindow,
   distanceMeters,
@@ -296,6 +297,7 @@ export async function previewSortie(
     id: sortieId ?? previewPlaceId,
     arrivalAt: draftWindow.arrivalAt,
     scheduledEnd: draftWindow.scheduledEnd,
+    actualStart: null,
     actualEnd: null,
     destination: { latitude: lastStop.latitude, longitude: lastStop.longitude },
     destinationLabel: lastStop.label,
@@ -765,8 +767,9 @@ async function recomputeOpenSorties(
       continue;
     }
     const anchor = anchorOf(row);
-    const originChanged = anchor !== null && anchorMatchesEndedPlace(places, anchor, now);
-    await recomputeFrom(userId, row, { ...position, label: null }, now, deps, !originChanged);
+    const endedPlace = anchor !== null && anchorMatchesEndedPlace(places, anchor, now);
+    const strayAnchor = anchor !== null && anchorAwayFromCompletedTerminal(places, anchor, position);
+    await recomputeFrom(userId, row, { ...position, label: null }, now, deps, !(endedPlace || strayAnchor));
   }
 }
 
@@ -1268,6 +1271,7 @@ async function driverPlaces(driverId: string): Promise<SortiePlace[]> {
       id: sortie.id,
       arrivalAt: sortie.arrivalAt,
       scheduledEnd: sortie.scheduledEnd,
+      actualStart: sortie.actualStart,
       actualEnd: sortie.actualEnd,
       label: sortieStop.label,
       latitude: sortieStop.latitude,
@@ -1292,6 +1296,7 @@ async function driverPlaces(driverId: string): Promise<SortiePlace[]> {
       id: row.id,
       arrivalAt: row.arrivalAt,
       scheduledEnd: row.scheduledEnd,
+      actualStart: row.actualStart,
       actualEnd: row.actualEnd,
       destination,
       destinationLabel: row.label,
@@ -1305,7 +1310,7 @@ function samePlace(left: GeoCoordinate, right: GeoCoordinate): boolean {
 }
 
 function anchorMatchesEndedPlace(places: SortiePlace[], anchor: GeoCoordinate, now: Date): boolean {
-  return places.some((place) => !placeStillOpen(place, now) && samePlace(place.destination, anchor));
+  return places.some((place) => !placeStillOpen(place, now, places) && samePlace(place.destination, anchor));
 }
 
 function warningLabel(label: string, stops: SortieStop[]): string {
