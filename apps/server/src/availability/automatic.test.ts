@@ -14,6 +14,27 @@ describe("automatic availability", () => {
     );
   });
 
+  it("sets unavailable when a fare-bearing sortie commences", () => {
+    assert.equal(
+      automaticAvailabilityChoice({ event: "commencement", withinLead: false, fareBearing: true, ...flags }),
+      false,
+    );
+    assert.equal(
+      automaticAvailabilityChoice({
+        event: "commencement",
+        withinLead: false,
+        fareBearing: true,
+        autoSetUnavailable: false,
+        autoSetAvailable: true,
+      }),
+      null,
+    );
+    assert.equal(
+      automaticAvailabilityChoice({ event: "conclusion", withinLead: false, fareBearing: true, ...flags }),
+      true,
+    );
+  });
+
   it("sets available when a sortie is commenced or concludes outside the lead", () => {
     assert.equal(automaticAvailabilityChoice({ event: "commencement", withinLead: false, ...flags }), true);
     assert.equal(automaticAvailabilityChoice({ event: "conclusion", withinLead: false, ...flags }), true);

@@ -216,6 +216,58 @@ describe("suggestPlaces", () => {
       },
     ]);
   });
+
+  it("keeps Google's relevance order and biases the request to the given point", async () => {
+    const bias = { latitude: 40, longitude: -75 };
+    const result = await suggestPlaces("library", bias, {
+      apiKey: "test-key",
+      fetch: async (url, init) => {
+        if (url.endsWith(":autocomplete")) {
+          const body = JSON.parse(String(init?.body)) as {
+            locationBias?: { circle?: { center?: unknown } };
+            origin?: unknown;
+          };
+          assert.equal(body.origin, undefined);
+          assert.deepEqual(body.locationBias?.circle?.center, bias);
+          return Response.json({
+            suggestions: [
+              {
+                placePrediction: {
+                  placeId: "far",
+                  text: { text: "Far Library" },
+                  structuredFormat: {
+                    mainText: { text: "Far Library" },
+                    secondaryText: { text: "Distant City" },
+                  },
+                },
+              },
+              {
+                placePrediction: {
+                  placeId: "near",
+                  text: { text: "Near Library" },
+                  structuredFormat: {
+                    mainText: { text: "Near Library" },
+                    secondaryText: { text: "Local Street" },
+                  },
+                },
+              },
+            ],
+          });
+        }
+        if (url.includes("far")) {
+          return Response.json({ location: { latitude: 41, longitude: -80 } });
+        }
+        return Response.json({ location: { latitude: 40.01, longitude: -75.01 } });
+      },
+    });
+
+    assert.ok(Array.isArray(result));
+    if (!Array.isArray(result)) {
+      return;
+    }
+    assert.equal(result[0]?.name, "Far Library");
+    assert.equal(result[1]?.name, "Near Library");
+  });
 });
 
 describe("computeDrivingRoute", () => {

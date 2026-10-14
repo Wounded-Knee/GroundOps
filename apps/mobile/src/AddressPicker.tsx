@@ -1,4 +1,5 @@
 import type { GeoCoordinate, PlaceSuggestion } from "@groundops/contracts";
+import * as Location from "expo-location";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
@@ -13,7 +14,7 @@ export function AddressPicker({
   placeholder,
   query,
   token,
-  bias = null,
+  bias,
   appearance,
   autoFocus = false,
   onQueryChange,
@@ -38,13 +39,55 @@ export function AddressPicker({
   const inputRef = useRef<TextInput>(null);
   const generation = useRef(0);
   const settledLabel = useRef<string | null>(query.trim().length > 0 ? query : null);
-  const biasRef = useRef(bias);
-  biasRef.current = bias;
+  const biasProvided = bias !== undefined;
+  const [deviceBias, setDeviceBias] = useState<GeoCoordinate | null>(null);
+  const activeBias = biasProvided ? bias : deviceBias;
+  const biasRef = useRef<GeoCoordinate | null>(activeBias);
+  biasRef.current = activeBias;
+  const sawBias = useRef(activeBias !== null);
+  const [biasEpoch, setBiasEpoch] = useState(0);
   const onUnauthorizedRef = useRef(onUnauthorized);
   onUnauthorizedRef.current = onUnauthorized;
   const onSearchFailedRef = useRef(onSearchFailed);
   onSearchFailedRef.current = onSearchFailed;
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+
+  useEffect(() => {
+    if (biasProvided) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!permission.granted || cancelled) {
+          return;
+        }
+        const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (cancelled) {
+          return;
+        }
+        setDeviceBias({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+      } catch {
+        // Search continues without a bias when the device location is unavailable.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [biasProvided]);
+
+  const hasBias = activeBias !== null;
+  useEffect(() => {
+    if (!hasBias || sawBias.current) {
+      return;
+    }
+    sawBias.current = true;
+    setBiasEpoch(1);
+  }, [hasBias]);
 
   useEffect(() => {
     if (!autoFocus) {
@@ -92,7 +135,7 @@ export function AddressPicker({
     return () => {
       clearTimeout(handle);
     };
-  }, [query, token]);
+  }, [query, token, biasEpoch]);
 
   function choose(suggestion: PlaceSuggestion): void {
     settledLabel.current = suggestion.label;

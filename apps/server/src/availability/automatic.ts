@@ -11,13 +11,16 @@ export type AutomaticAvailabilityInput = {
   event: AvailabilityEvent;
   /** An uncommenced sortie starts in strictly less than the threshold. */
   withinLead: boolean;
+  /** The sortie being commenced has a passenger stop. */
+  fareBearing?: boolean;
   autoSetUnavailable: boolean;
   autoSetAvailable: boolean;
 };
 
 /**
  * The choice to write for one event, or null when this event must not change it.
- * Lead and calendar guidance set unavailable only. Commencement and conclusion set available, unless another sortie is already inside the lead.
+ * Lead, calendar guidance, and commencing a fare set unavailable only.
+ * Commencing a sortie without a passenger, and concluding a sortie, set available, unless another sortie is already inside the lead.
  */
 export function automaticAvailabilityChoice(input: AutomaticAvailabilityInput): boolean | null {
   if (input.event === "guidance") {
@@ -25,6 +28,9 @@ export function automaticAvailabilityChoice(input: AutomaticAvailabilityInput): 
   }
   if (input.withinLead && input.autoSetUnavailable) {
     return false;
+  }
+  if (input.event === "commencement" && input.fareBearing) {
+    return input.autoSetUnavailable ? false : null;
   }
   if ((input.event === "commencement" || input.event === "conclusion") && input.autoSetAvailable) {
     return true;
@@ -54,7 +60,12 @@ type DriverAutomaticRow = {
 };
 
 /** Applies one availability event for this driver. A missing driver does nothing. */
-export async function applyAutomaticAvailability(person: User, event: AvailabilityEvent, now: Date): Promise<void> {
+export async function applyAutomaticAvailability(
+  person: User,
+  event: AvailabilityEvent,
+  now: Date,
+  fareBearing = false,
+): Promise<void> {
   const rows = await db
     .select(driverAutomaticSelect)
     .from(driver)
@@ -64,7 +75,7 @@ export async function applyAutomaticAvailability(person: User, event: Availabili
   if (!row) {
     return;
   }
-  await applyEvent(row, event, now);
+  await applyEvent(row, event, now, fareBearing);
 }
 
 /** Calendar Guide. Sets unavailable when that flag is on; otherwise the commencement check. */
@@ -105,17 +116,20 @@ const driverAutomaticSelect = {
   autoSetAvailable: driver.autoSetAvailable,
 };
 
-async function applyEvent(row: DriverAutomaticRow, event: AvailabilityEvent, now: Date): Promise<void> {
+async function applyEvent(
+  row: DriverAutomaticRow,
+  event: AvailabilityEvent,
+  now: Date,
+  fareBearing = false,
+): Promise<void> {
   const lead = await withinLead(row.id, row.thresholdMinutes, now);
   const choice = automaticAvailabilityChoice({
     event,
     withinLead: lead,
+    fareBearing,
     autoSetUnavailable: row.autoSetUnavailable,
     autoSetAvailable: row.autoSetAvailable,
   });
-  // #region agent log
-  fetch("http://127.0.0.1:7255/ingest/bba8e72d-4c30-46ba-aea7-aa7d479478a0",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"6a49b2"},body:JSON.stringify({sessionId:"6a49b2",hypothesisId:"B",location:"availability/automatic.ts:applyEvent",message:"automatic availability choice",data:{event,withinLead:lead,autoSetUnavailable:row.autoSetUnavailable,autoSetAvailable:row.autoSetAvailable,thresholdMinutes:row.thresholdMinutes,choice},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   await writeChoice(row, choice, now);
 }
 

@@ -93,9 +93,6 @@ export async function setAvailability(person: User, available: boolean, now: Dat
   await recordAvailabilityLapse(now);
   const written = await db.transaction(async (tx) => {
     const row = await lockDriver(tx, ensured.id);
-    // #region agent log
-    fetch("http://127.0.0.1:7255/ingest/bba8e72d-4c30-46ba-aea7-aa7d479478a0",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"6a49b2"},body:JSON.stringify({sessionId:"6a49b2",hypothesisId:"D",location:"availability/availability.ts:setAvailability",message:"setAvailability write decision",data:{previous:row.available,next:available,unchanged:row.available===available},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (row.available === available) {
       return { response: toResponse(row, now), publish: null };
     }
