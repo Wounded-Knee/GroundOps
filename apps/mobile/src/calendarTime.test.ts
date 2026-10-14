@@ -5,6 +5,7 @@ import {
   blockOnDay,
   calendarDayDelta,
   clampHourHeight,
+  zoomedScrollY,
   formatUsPhone,
   hourHeightMax,
   hourHeightMin,
@@ -145,6 +146,18 @@ describe("calendar time", () => {
     assert.equal(clampHourHeight(80.6), 81);
     assert.equal(clampHourHeight(66.2, 3.5), 66 + 1 / 3.5);
     assert.equal(clampHourHeight(66.3, 3.5), 66 + 1 / 3.5);
+  });
+
+  it("keeps the pinch anchor under a moving focal point", () => {
+    const anchor = 952.52;
+    const startHourPx = 64;
+    const nextHourPx = 128;
+    const viewport = 508;
+    const pinned = zoomedScrollY(anchor, startHourPx, nextHourPx, 266.64, viewport);
+    assert.equal(pinned + 266.64, anchor * (nextHourPx / startHourPx));
+    const followed = zoomedScrollY(anchor, startHourPx, nextHourPx, 266.64 + 101, viewport);
+    assert.equal(followed + 266.64 + 101, anchor * (nextHourPx / startHourPx));
+    assert.ok(followed < pinned);
   });
 
   it("formats a US phone and keeps ten digits", () => {

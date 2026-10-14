@@ -27,6 +27,34 @@ const realtimeEnvelope = z.object({
   recordedAt: z.string().min(1),
 });
 
+/**
+ * Session token from `Authorization: Bearer`, or from the web handshake.
+ * Browsers cannot set that header, so the web client offers `bearer` and then the token.
+ */
+export function readHandshakeToken(
+  authorization: string | undefined,
+  protocolHeader: string | string[] | undefined,
+): string | null {
+  const bearer = readBearer(authorization);
+  if (bearer) {
+    return bearer;
+  }
+  const header = Array.isArray(protocolHeader) ? protocolHeader.join(",") : protocolHeader;
+  if (!header) {
+    return null;
+  }
+  const protocols = header
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  const marker = protocols.indexOf("bearer");
+  const token = protocols[marker + 1];
+  if (marker < 0 || !token || /\s/.test(token)) {
+    return null;
+  }
+  return token;
+}
+
 /** A socket is kept only for an unrevoked session that is still open. */
 export function sessionMayHoldSocket<T>(active: T | null, readyState: number): active is T {
   return active !== null && readyState === socketOpen;
@@ -62,15 +90,17 @@ export function closeSessionSockets(sessionId: string): void {
  */
 export function registerGateway(app: FastifyInstance, subscription: Subscription): void {
   app.get("/ws", { websocket: true }, (socket, request) => {
-    void acceptSocket(socket, authorizationHeader(request.headers.authorization));
+    void acceptSocket(
+      socket,
+      readHandshakeToken(authorizationHeader(request.headers.authorization), request.headers["sec-websocket-protocol"]),
+    );
   });
 
   void forward(app, subscription);
 }
 
-async function acceptSocket(socket: ClientSocket, authorization: string | undefined): Promise<void> {
+async function acceptSocket(socket: ClientSocket, token: string | null): Promise<void> {
   try {
-    const token = readBearer(authorization);
     const active = token ? await findActiveSession(token) : null;
     if (!sessionMayHoldSocket(active, socket.readyState)) {
       if (socket.readyState === socketOpen) {

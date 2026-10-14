@@ -46,6 +46,25 @@ export function clampHourHeight(value: number, pixelRatio = 1): number {
   return Math.min(hourHeightMax, Math.max(hourHeightMin, snapped));
 }
 
+/**
+ * Scroll offset that keeps `anchorContentY` (a content Y at `startHourPx`) under `focalInScroll`
+ * after the hour scale becomes `nextHourPx`.
+ */
+export function zoomedScrollY(
+  anchorContentY: number,
+  startHourPx: number,
+  nextHourPx: number,
+  focalInScroll: number,
+  viewportHeight: number,
+): number {
+  if (startHourPx <= 0) {
+    return 0;
+  }
+  const maxScroll = Math.max(0, 24 * nextHourPx - Math.max(0, viewportHeight));
+  const y = anchorContentY * (nextHourPx / startHourPx) - focalInScroll;
+  return Math.min(maxScroll, Math.max(0, y));
+}
+
 export function startOfDay(date: Date): Date {
   const parts = zonedTime(date);
   return instantFromZoned(parts.year, parts.month, parts.day, 0, 0, 0);

@@ -1,4 +1,5 @@
 import type { CreateSessionRequest, CreateSessionResponse, User } from "@groundops/contracts";
+import { Platform } from "react-native";
 
 const sessionKey = "groundops.session";
 
@@ -81,8 +82,11 @@ export function liveSocketUrl(apiUrl: string): string {
   return url.toString();
 }
 
-/** React Native's WebSocket sends handshake headers. The DOM type does not list that argument. */
+/** React Native's WebSocket sends handshake headers. The browser cannot, so web offers the token as a protocol. */
 export function openAuthenticatedSocket(apiUrl: string, token: string): WebSocket {
+  if (Platform.OS === "web") {
+    return new WebSocket(liveSocketUrl(apiUrl), ["bearer", token]);
+  }
   const Socket = WebSocket as unknown as {
     new (
       uri: string,

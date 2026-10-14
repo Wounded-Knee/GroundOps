@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { deliverEnvelope, sessionMayHoldSocket, socketOpen } from "./gateway.js";
+import { deliverEnvelope, readHandshakeToken, sessionMayHoldSocket, socketOpen } from "./gateway.js";
 
 describe("gateway audience", () => {
   it("delivers an envelope only to open sockets for that user", () => {
@@ -30,6 +30,13 @@ describe("gateway audience", () => {
     );
     assert.deepEqual(sent.a, ["{\"type\":\"availability.updated\"}"]);
     assert.deepEqual(sent.b, []);
+  });
+
+  it("reads the session token from the bearer header or the web protocol list", () => {
+    assert.equal(readHandshakeToken("Bearer header-token", "bearer, protocol-token"), "header-token");
+    assert.equal(readHandshakeToken(undefined, "bearer, protocol-token"), "protocol-token");
+    assert.equal(readHandshakeToken(undefined, "bearer"), null);
+    assert.equal(readHandshakeToken(undefined, undefined), null);
   });
 
   it("does not keep a socket when the session is missing or revoked", () => {

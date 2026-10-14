@@ -2,7 +2,7 @@ import type { AvailabilityInterval, Sortie, SortieWriteRequest } from "@groundop
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Alert,
   AppState,
@@ -37,6 +37,7 @@ import {
   calendarDayDelta,
   type LanePlacement,
   clampHourHeight,
+  zoomedScrollY,
   dayDeltaFromPixels,
   formatUsPhone,
   hourHeight,
@@ -135,6 +136,8 @@ export function CalendarScreen({
   const styles = createStyles(colors);
   const [screen, setScreen] = useState<Ready>(() => emptyCalendar(new Date()));
   const [hourPx, setHourPx] = useState(hourHeight);
+  const [pinchShift, setPinchShift] = useState(0);
+  const [pinchActive, setPinchActive] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [held, setHeld] = useState<HeldMove | null>(null);
   const [hourScrollLocked, setHourScrollLocked] = useState(false);
@@ -144,11 +147,10 @@ export function CalendarScreen({
   const gridBox = useRef<GridBox | null>(null);
   const columnWidth = useRef(0);
   const hourScroll = useRef<ScrollView>(null);
-  const hourFrameRef = useRef<View>(null);
   const hourPxRef = useRef(hourHeight);
   const scrollYRef = useRef(0);
   const hourScrollViewportH = useRef(0);
-  const hourFrameBox = useRef({ y: 0, height: 0 });
+  const hourScrollBox = useRef({ y: 0, height: 0 });
   const scopeCycleSeen = useRef(scopeCycleToken);
   const pinch = useRef({
     active: false,
@@ -156,7 +158,11 @@ export function CalendarScreen({
     startHourPx: hourHeight,
     startScrollY: 0,
     focalInView: 0,
+    focalNow: 0,
+    anchorContentY: 0,
+    liveHourPx: 0,
   });
+  const pendingZoomScroll = useRef<number | null>(null);
 
   hourPxRef.current = hourPx;
 
@@ -179,51 +185,83 @@ export function CalendarScreen({
     hourScroll.current?.scrollTo({ y, animated: false });
   }
 
-  function applyHourZoom(nextHourPx: number, startHourPx: number, startScrollY: number, focalInView: number): void {
+  function applyHourZoom(nextHourPx: number, startHourPx: number, anchorContentY: number, focalInScroll: number): void {
     const clamped = clampHourHeight(nextHourPx, PixelRatio.get());
-    if (clamped === hourPxRef.current) {
+    const nextScroll = zoomedScrollY(
+      anchorContentY,
+      startHourPx,
+      clamped,
+      focalInScroll,
+      hourScrollViewportH.current,
+    );
+    const currentPx = pinch.current.active && pinch.current.liveHourPx > 0 ? pinch.current.liveHourPx : hourPxRef.current;
+    const scaleChanged = clamped !== currentPx;
+    if (pinch.current.active) {
+      const sameFocal = Math.abs(focalInScroll - pinch.current.focalNow) <= 0.5;
+      if (pinch.current.liveHourPx > 0 && !scaleChanged && sameFocal) {
+        return;
+      }
+    } else if (!scaleChanged && Math.abs(nextScroll - scrollYRef.current) <= 0.5) {
       return;
     }
-    const nextScroll = Math.max(0, (startScrollY + focalInView) * (clamped / startHourPx) - focalInView);
-    setHourPx(clamped);
-    hourPxRef.current = clamped;
+    if (pinch.current.active) {
+      const shift = pinch.current.startScrollY - nextScroll;
+      pinch.current.liveHourPx = clamped;
+      pinch.current.focalNow = focalInScroll;
+      hourPxRef.current = clamped;
+      scrollYRef.current = pinch.current.startScrollY;
+      setHourPx(clamped);
+      setPinchShift(shift);
+      return;
+    }
+    if (scaleChanged) {
+      setHourPx(clamped);
+      hourPxRef.current = clamped;
+    }
+    pendingZoomScroll.current = nextScroll;
     scrollYRef.current = nextScroll;
     hourScroll.current?.scrollTo({ y: nextScroll, animated: false });
   }
 
+  const pinchApi = useRef({
+    beginPinch: (_event: GestureResponderEvent) => {},
+    onMove: (_event: GestureResponderEvent) => {},
+    end: () => {},
+  });
   const pinchResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (event) => (event.nativeEvent.touches?.length ?? 0) >= 2,
       onMoveShouldSetPanResponderCapture: (event) => (event.nativeEvent.touches?.length ?? 0) >= 2,
-      onPanResponderGrant: (event) => beginPinch(event),
-      onPanResponderMove: (event) => {
-        const touches = event.nativeEvent.touches;
-        if ((touches?.length ?? 0) >= 2 && !pinch.current.active) {
-          beginPinch(event);
-        }
-        if (!pinch.current.active || pinch.current.startDist <= 0) {
-          return;
-        }
-        const dist = touchDistance(touches);
-        if (dist <= 0) {
-          return;
-        }
-        applyHourZoom(
-          pinch.current.startHourPx * (dist / pinch.current.startDist),
-          pinch.current.startHourPx,
-          pinch.current.startScrollY,
-          pinch.current.focalInView,
-        );
-      },
-      onPanResponderRelease: () => {
-        pinch.current.active = false;
-      },
-      onPanResponderTerminate: () => {
-        pinch.current.active = false;
-      },
+      onPanResponderGrant: (event) => pinchApi.current.beginPinch(event),
+      onPanResponderMove: (event) => pinchApi.current.onMove(event),
+      onPanResponderRelease: () => pinchApi.current.end(),
+      onPanResponderTerminate: () => pinchApi.current.end(),
     }),
   ).current;
+
+  function onPinchMove(event: GestureResponderEvent): void {
+    const touches = event.nativeEvent.touches;
+    const restarted = (touches?.length ?? 0) >= 2 && !pinch.current.active;
+    if (restarted) {
+      beginPinch(event);
+    }
+    if (!pinch.current.active || pinch.current.startDist <= 0) {
+      return;
+    }
+    const dist = touchDistance(touches);
+    if (dist <= 0) {
+      return;
+    }
+    const midY = touches && touches.length >= 2 ? (touches[0]!.pageY + touches[1]!.pageY) / 2 : null;
+    const focalNow = midY === null ? pinch.current.focalInView : Math.max(0, midY - hourScrollBox.current.y);
+    applyHourZoom(
+      pinch.current.startHourPx * (dist / pinch.current.startDist),
+      pinch.current.startHourPx,
+      pinch.current.anchorContentY,
+      focalNow,
+    );
+  }
 
   function beginPinch(event: GestureResponderEvent): void {
     const touches = event.nativeEvent.touches;
@@ -235,14 +273,66 @@ export function CalendarScreen({
       return;
     }
     const midY = (touches[0]!.pageY + touches[1]!.pageY) / 2;
+    const focalInView = Math.max(0, midY - hourScrollBox.current.y);
     pinch.current = {
       active: true,
       startDist: dist,
       startHourPx: hourPxRef.current,
       startScrollY: scrollYRef.current,
-      focalInView: Math.max(0, midY - hourFrameBox.current.y),
+      focalInView,
+      anchorContentY: scrollYRef.current + focalInView,
+      liveHourPx: hourPxRef.current,
+      focalNow: focalInView,
     };
+    setPinchActive(true);
+    hourScroll.current?.measureInWindow((_x, y, _width, height) => {
+      const previousTop = hourScrollBox.current.y;
+      hourScrollBox.current = { y, height };
+      if (pinch.current.active && Math.abs(previousTop - y) > 1) {
+        const focal = Math.max(0, midY - y);
+        pinch.current.focalInView = focal;
+        pinch.current.anchorContentY = pinch.current.startScrollY + focal;
+      }
+    });
   }
+
+  pinchApi.current.beginPinch = beginPinch;
+  pinchApi.current.onMove = onPinchMove;
+  pinchApi.current.end = () => {
+    const wasActive = pinch.current.active;
+    const live = pinch.current.liveHourPx;
+    const focal = pinch.current.focalNow || pinch.current.focalInView;
+    pinch.current.active = false;
+    pendingZoomScroll.current = null;
+    if (!wasActive || live <= 0) {
+      return;
+    }
+    const y = zoomedScrollY(
+      pinch.current.anchorContentY,
+      pinch.current.startHourPx,
+      live,
+      focal,
+      hourScrollViewportH.current,
+    );
+    pendingZoomScroll.current = y;
+    hourPxRef.current = live;
+    setHourPx(live);
+    setPinchShift(0);
+    setPinchActive(false);
+  };
+
+  useLayoutEffect(() => {
+    if (pinch.current.active) {
+      return;
+    }
+    const y = pendingZoomScroll.current;
+    if (y == null) {
+      return;
+    }
+    pendingZoomScroll.current = null;
+    scrollYRef.current = y;
+    hourScroll.current?.scrollTo({ y, animated: false });
+  }, [hourPx, pinchShift]);
 
   useEffect(() => {
     const current = ++generation.current;
@@ -656,18 +746,13 @@ export function CalendarScreen({
             </ScrollView>
           ) : (
             <View
-              ref={hourFrameRef}
               style={styles.hourFrame}
-              onLayout={() => {
-                hourFrameRef.current?.measureInWindow((_x, y, _width, height) => {
-                  hourFrameBox.current = { y, height };
-                });
-              }}
               {...pinchResponder.panHandlers}
               {...webPinchWheelProps((deltaY) => {
                 const startHourPx = hourPxRef.current;
                 const factor = deltaY < 0 ? 1.08 : 1 / 1.08;
-                applyHourZoom(startHourPx * factor, startHourPx, scrollYRef.current, hourFrameBox.current.height / 2);
+                const focal = hourScrollViewportH.current / 2;
+                applyHourZoom(startHourPx * factor, startHourPx, scrollYRef.current + focal, focal);
               })}
             >
               <View style={styles.dayHeader}>
@@ -691,18 +776,49 @@ export function CalendarScreen({
               </View>
               <ScrollView
                 ref={hourScroll}
-                scrollEnabled={!hourScrollLocked}
+                scrollEnabled={!hourScrollLocked && !pinchActive}
                 style={styles.gridScroll}
                 onLayout={(event) => {
                   hourScrollViewportH.current = event.nativeEvent.layout.height;
-                  scrollNowIntoCenter();
+                  hourScroll.current?.measureInWindow((_x, y, _width, measuredHeight) => {
+                    hourScrollBox.current = { y, height: measuredHeight };
+                  });
+                  if (!pinch.current.active) {
+                    scrollNowIntoCenter();
+                  }
+                }}
+                onContentSizeChange={(_width, height) => {
+                  if (pinch.current.active) {
+                    const y = pinch.current.startScrollY;
+                    scrollYRef.current = y;
+                    hourScroll.current?.scrollTo({ y, animated: false });
+                    return;
+                  }
+                  const pending = pendingZoomScroll.current;
+                  if (pending == null) {
+                    return;
+                  }
+                  const maxScroll = Math.max(0, height - hourScrollViewportH.current);
+                  const y = Math.min(maxScroll, Math.max(0, pending));
+                  scrollYRef.current = y;
+                  hourScroll.current?.scrollTo({ y, animated: false });
+                  pendingZoomScroll.current = null;
                 }}
                 onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => {
+                  if (pinch.current.active) {
+                    return;
+                  }
                   scrollYRef.current = event.nativeEvent.contentOffset.y;
                 }}
                 scrollEventThrottle={16}
               >
-                <View style={[styles.hourRow, { height: 24 * hourPx }]}>
+                <View
+                  style={[
+                    styles.hourRow,
+                    { height: 24 * hourPx },
+                    pinchShift !== 0 ? { transform: [{ translateY: pinchShift }] } : null,
+                  ]}
+                >
                   <View style={[styles.hourGutter, { height: 24 * hourPx }]}>
                     {hours.map((hour) => (
                       <Text key={hour} style={[styles.hourLabel, { top: hour * hourPx, height: hourPx }]}>
