@@ -1,8 +1,10 @@
 import type { LocationObservationRequest } from "@groundops/contracts";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
+import * as TaskManager from "expo-task-manager";
 import { Platform } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
+import { availabilityCheckInMs } from "./availability";
 import { reportLocationObservation } from "./calendarClient";
 import { distanceMeters } from "./guidance";
 import { readStoredSession } from "./sessionStore";
@@ -89,14 +91,18 @@ export async function startLocationObservationUpdates(): Promise<boolean> {
   }
   const started = await Location.hasStartedLocationUpdatesAsync(locationObservationTaskName);
   if (started) {
-    return true;
+    const interval = await runningDeferredInterval();
+    if (interval === availabilityCheckInMs) {
+      return true;
+    }
+    await Location.stopLocationUpdatesAsync(locationObservationTaskName);
   }
   await Location.startLocationUpdatesAsync(locationObservationTaskName, {
     accuracy: Location.Accuracy.High,
     distanceInterval: 25,
     timeInterval: 15_000,
     deferredUpdatesDistance: moveMeters,
-    deferredUpdatesInterval: heartbeatMs,
+    deferredUpdatesInterval: availabilityCheckInMs,
     showsBackgroundLocationIndicator: true,
     pausesUpdatesAutomatically: false,
     foregroundService: {
@@ -105,6 +111,15 @@ export async function startLocationObservationUpdates(): Promise<boolean> {
     },
   });
   return true;
+}
+
+async function runningDeferredInterval(): Promise<number | null> {
+  const options = await TaskManager.getTaskOptionsAsync(locationObservationTaskName);
+  if (typeof options !== "object" || options === null || !("deferredUpdatesInterval" in options)) {
+    return null;
+  }
+  const interval = options.deferredUpdatesInterval;
+  return typeof interval === "number" ? interval : null;
 }
 
 export async function stopLocationObservationUpdates(): Promise<void> {

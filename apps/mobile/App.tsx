@@ -27,6 +27,7 @@ import {
   type AvailabilityView,
 } from "./src/availability";
 import { checkInAvailability, putAvailability, readAvailability } from "./src/availabilityClient";
+import { recordAvailabilityCheckIn } from "./src/availabilityKeepalive";
 import { NavigationScreen } from "./src/NavigationScreen";
 import type { SortieGuideCommand } from "./src/sortieGuide";
 import { SettingsScreen } from "./src/SettingsScreen";
@@ -395,6 +396,7 @@ function AppContent() {
       if (result === "unreachable") {
         return;
       }
+      await recordAvailabilityCheckIn(Date.now());
       remember(applyAvailabilitySnapshot(view, result));
     }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { applyEnvelope, emptyActivity } from "./liveActivity";
-import { applyAvailabilityEnvelope, emptyAvailability } from "./availability";
+import { applyAvailabilityEnvelope, availabilityCheckInDue, availabilityCheckInMs, emptyAvailability } from "./availability";
 
 describe("availability bar", () => {
   it("brightens from a newer envelope and ignores one at or before asOf", () => {
@@ -36,6 +36,14 @@ describe("availability bar", () => {
     });
     assert.equal(lapse.current, false);
     assert.equal(lapse.available, true);
+  });
+
+  it("sends a check-in when none has succeeded, or the last one is at least three minutes old", () => {
+    const now = 1_700_000_000_000;
+    assert.equal(availabilityCheckInDue(null, now), true);
+    assert.equal(availabilityCheckInDue(now - availabilityCheckInMs + 1, now), false);
+    assert.equal(availabilityCheckInDue(now - availabilityCheckInMs, now), true);
+    assert.equal(availabilityCheckInDue(now - availabilityCheckInMs - 1, now), true);
   });
 
   it("does not advance account activity", () => {

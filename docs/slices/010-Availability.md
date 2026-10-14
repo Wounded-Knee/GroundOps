@@ -8,7 +8,7 @@
 
 **Purpose:** A driver can set whether they are willing to receive dispatch work. The signed-in client keeps that choice reachable. The platform treats a driver as unavailable when no client has checked in for more than five minutes.
 
-This document is the implementation boundary. Duty, offers, assignment, a list of who is available, and a background task that pings while the app is suspended stay outside.
+This document is the implementation boundary. Duty, offers, assignment, and a list of who is available stay outside.
 
 ---
 
@@ -17,7 +17,7 @@ This document is the implementation boundary. Duty, offers, assignment, a list o
 After this slice, a signed-in driver can:
 
 1. Tap a yellow bar on every signed-in screen to become available or not. That tap is the driver's choice. The default is not available. The driver does not tap again to remain available.
-2. Stay treated as available while this app checks in. The client sends a check-in immediately and then every three minutes while the choice is available. After more than five minutes without a check-in, the platform treats the driver as unavailable. The stored choice stays available. The next check-in treats them as available again.
+2. Stay treated as available while this app checks in. While the choice is available, the signed-in shell sends a check-in immediately and then every three minutes. On iOS and Android, the background location task also sends a check-in every three minutes while a session is stored, including while the app is suspended. After more than five minutes without a check-in, the platform treats the driver as unavailable. The stored choice stays available. The next check-in treats them as available again. Without background location permission, a suspended client cannot run the shell timer and is treated as unavailable after five minutes.
 3. See that bar update on a second signed-in device for the same driver. That device can send the check-in.
 
 No screen lists other drivers.
@@ -70,7 +70,7 @@ From top to bottom: the meter, only while a meter reading exists; the turn progr
 
 A tap sends the opposite choice. Further taps wait until that request settles. The color follows `current`. A failed save leaves the previous color and shows the failure on the bar. A rejected session follows the existing sign-out path.
 
-While the choice is available, the signed-in shell checks in immediately and every three minutes, including when `current` is false. Sign-out, a rejected session, and a tap that clears the choice stop that timer. A suspended client that cannot run the timer is treated as unavailable after five minutes, and checks in again when it can reach the server.
+While the choice is available, the signed-in shell checks in immediately and every three minutes, including when `current` is false. Sign-out, a rejected session, and a tap that clears the choice stop that timer. On iOS and Android the background location task checks in every three minutes while a session is stored, including when the app is suspended. iOS defers those location deliveries by three minutes so a stationary phone still wakes inside the five-minute lease. The task posts only when three minutes have passed since the last successful check-in. A check-in when the choice is false still changes nothing. A rejected session from that task does not sign the driver out. Without background location permission, a suspended client cannot run the shell timer and is treated as unavailable after five minutes. The next check-in, once the client can reach the server, treats them as available again when the choice is still available.
 
 There is no new bottom-bar destination.
 
@@ -131,4 +131,3 @@ The slice works when all of the following are true:
 - Duty, and who controls it
 - Offers, assignment, and candidate selection
 - A list of drivers who are available
-- A background task that checks in while the app is suspended

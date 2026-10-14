@@ -8,7 +8,7 @@
 
 **Purpose:** The platform sets the driver's availability choice when a sortie is inside the lead time before it is scheduled to commence, when the driver starts guidance from the calendar, when a sortie is commenced, and when a sortie concludes. The yellow bar still shows that choice.
 
-This document is the implementation boundary. Duty, offers, assignment, a list of who is available, and a background task that checks in while the app is suspended stay outside. Slice 010 still owns the check-in lease.
+This document is the implementation boundary. Duty, offers, assignment, and a list of who is available stay outside. Slice 010 still owns the check-in lease, including the background location check-in.
 
 ---
 
@@ -136,4 +136,3 @@ The slice works when all of the following are true:
 - Duty, and who controls it
 - Offers, assignment, and candidate selection
 - A list of drivers who are available
-- A background task that checks in while the app is suspended

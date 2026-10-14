@@ -3,6 +3,14 @@ import type { AvailabilityResponse, RealtimeEnvelope } from "@groundops/contract
 /** How often a signed-in client refreshes a willing driver's check-in. */
 export const availabilityCheckInMs = 3 * 60 * 1000;
 
+/** True when no check-in has succeeded yet, or the last one is at least three minutes old. */
+export function availabilityCheckInDue(lastSentAt: number | null, now: number): boolean {
+  if (lastSentAt === null) {
+    return true;
+  }
+  return now - lastSentAt >= availabilityCheckInMs;
+}
+
 export type AvailabilityView = AvailabilityResponse;
 
 export const emptyAvailability: AvailabilityView = {
