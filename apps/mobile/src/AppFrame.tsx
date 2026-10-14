@@ -41,7 +41,7 @@ export function AppFrame({ children, overlay }: { children: ReactNode; overlay?:
           <SafeAreaView style={styles.frame} edges={["top", "right", "bottom", "left"]}>
             <KeyboardAvoidingView
               style={styles.frame}
-              behavior="height"
+              behavior="padding"
               automaticOffset
               onLayout={(event) => {
                 if (Platform.OS !== "android") {
@@ -56,11 +56,31 @@ export function AppFrame({ children, overlay }: { children: ReactNode; overlay?:
                   screenH: Dimensions.get("screen").height,
                   screenMinusWindow:
                     Dimensions.get("screen").height - Dimensions.get("window").height,
+                  runId: "post-fix",
                 });
                 // #endregion
               }}
             >
-              {children}
+              <View
+                style={styles.frame}
+                onLayout={(event) => {
+                  if (Platform.OS !== "android") {
+                    return;
+                  }
+                  const { height, width } = event.nativeEvent.layout;
+                  // #region agent log
+                  debugLog("A", "AppFrame.tsx:contentLayout", "content box layout", {
+                    height,
+                    width,
+                    windowH: Dimensions.get("window").height,
+                    screenH: Dimensions.get("screen").height,
+                    runId: "post-fix",
+                  });
+                  // #endregion
+                }}
+              >
+                {children}
+              </View>
             </KeyboardAvoidingView>
           </SafeAreaView>
           {overlay}
