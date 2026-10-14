@@ -70,10 +70,12 @@ export const driver = pgTable("driver", {
   availabilityThresholdMinutes: integer("availability_threshold_minutes").notNull().default(15),
   /** When on, the lead before a sortie, or calendar guidance, sets the choice unavailable. */
   autoSetUnavailable: boolean("auto_set_unavailable").notNull().default(true),
-  /** When on, commencing or concluding a sortie sets the choice available. */
+  /** When on, commencing or concluding a sortie sets the choice available, unless the latest fix is outside the geofence. */
   autoSetAvailable: boolean("auto_set_available").notNull().default(true),
   /** Polygon ring. Empty means no availability geofence. */
   availabilityGeofence: jsonb("availability_geofence").$type<GeoCoordinate[]>().notNull().default([]),
+  /** An automatic true is waiting for a GPS fix inside the availability geofence. */
+  availabilityAutoAvailableDeferred: boolean("availability_auto_available_deferred").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 

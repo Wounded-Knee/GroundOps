@@ -379,6 +379,204 @@ describe("availability settings", () => {
       await removeUser(person.user.id);
     }
   });
+
+  it("postpones available while the latest fix is outside the geofence and applies it on re-entry", async () => {
+    const person = await createSession({
+      sub: `availability-settings-defer-${crypto.randomUUID()}`,
+      displayName: "Defer",
+      email: null,
+    });
+    try {
+      const header = { authorization: `Bearer ${person.token}` };
+      await app.inject({ method: "GET", url: "/availability/settings", headers: header });
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: header,
+        payload: { ...defaultAvailabilitySettings, geofence: square },
+      });
+      assert.equal(await observe(person.token, { latitude: 2, longitude: 2 }), 204);
+      await applyAutomaticAvailability(person.user, "conclusion", now);
+      assert.equal((await readChoice(person.token)).available, false);
+      assert.equal(await deferredFor(person.user.id), true);
+      assert.equal((await eventsFor(person.user.id)).length, 0);
+
+      assert.equal(await observe(person.token, { latitude: 3, longitude: 3 }), 204);
+      assert.equal((await readChoice(person.token)).available, false);
+      assert.equal(await deferredFor(person.user.id), true);
+
+      assert.equal(await observe(person.token, { latitude: 0.5, longitude: 0.5 }), 204);
+      assert.equal((await readChoice(person.token)).available, true);
+      assert.equal(await deferredFor(person.user.id), false);
+      assert.equal(await observe(person.token, { latitude: 0.25, longitude: 0.25 }), 204);
+      assert.equal((await eventsFor(person.user.id)).length, 1);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("sets available immediately when the fix is inside, or when the ring or the fix is missing", async () => {
+    const inside = await createSession({
+      sub: `availability-settings-inside-${crypto.randomUUID()}`,
+      displayName: "Inside",
+      email: null,
+    });
+    const unfixed = await createSession({
+      sub: `availability-settings-unfixed-${crypto.randomUUID()}`,
+      displayName: "Unfixed",
+      email: null,
+    });
+    try {
+      await app.inject({
+        method: "GET",
+        url: "/availability/settings",
+        headers: { authorization: `Bearer ${inside.token}` },
+      });
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: { authorization: `Bearer ${inside.token}` },
+        payload: { ...defaultAvailabilitySettings, geofence: square },
+      });
+      assert.equal(await observe(inside.token, { latitude: 0.5, longitude: 0.5 }), 204);
+      await applyAutomaticAvailability(inside.user, "conclusion", now);
+      assert.equal((await readChoice(inside.token)).available, true);
+      assert.equal(await deferredFor(inside.user.id), false);
+
+      await app.inject({
+        method: "GET",
+        url: "/availability/settings",
+        headers: { authorization: `Bearer ${unfixed.token}` },
+      });
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: { authorization: `Bearer ${unfixed.token}` },
+        payload: { ...defaultAvailabilitySettings, geofence: square },
+      });
+      await applyAutomaticAvailability(unfixed.user, "conclusion", now);
+      assert.equal((await readChoice(unfixed.token)).available, true);
+      assert.equal(await deferredFor(unfixed.user.id), false);
+    } finally {
+      await removeUser(inside.user.id);
+      await removeUser(unfixed.user.id);
+    }
+  });
+
+  it("clears a postponed available when a lead sets unavailable", async () => {
+    const person = await createSession({
+      sub: `availability-settings-defer-lead-${crypto.randomUUID()}`,
+      displayName: "Defer lead",
+      email: null,
+    });
+    try {
+      const header = { authorization: `Bearer ${person.token}` };
+      await app.inject({ method: "GET", url: "/availability/settings", headers: header });
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: header,
+        payload: { ...defaultAvailabilitySettings, geofence: square },
+      });
+      assert.equal(await observe(person.token, { latitude: 2, longitude: 2 }), 204);
+      await applyAutomaticAvailability(person.user, "conclusion", now);
+      assert.equal(await deferredFor(person.user.id), true);
+
+      await insertSortie(person.user.id, { actualStart: null, actualEnd: null, scheduledStart: later(14) });
+      await applyAutomaticAvailability(person.user, "lead", now);
+      assert.equal((await readChoice(person.token)).available, false);
+      assert.equal(await deferredFor(person.user.id), false);
+      assert.equal((await eventsFor(person.user.id)).length, 0);
+
+      assert.equal(await observe(person.token, { latitude: 0.5, longitude: 0.5 }), 204);
+      assert.equal((await readChoice(person.token)).available, false);
+      assert.equal((await eventsFor(person.user.id)).length, 0);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("drops a postponement when automatic available is turned off, and applies it when the ring is cleared", async () => {
+    const person = await createSession({
+      sub: `availability-settings-defer-save-${crypto.randomUUID()}`,
+      displayName: "Defer save",
+      email: null,
+    });
+    try {
+      const header = { authorization: `Bearer ${person.token}` };
+      await app.inject({ method: "GET", url: "/availability/settings", headers: header });
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: header,
+        payload: { ...defaultAvailabilitySettings, geofence: square },
+      });
+      assert.equal(await observe(person.token, { latitude: 2, longitude: 2 }), 204);
+      await applyAutomaticAvailability(person.user, "conclusion", now);
+      const turnedOff = await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: header,
+        payload: { ...defaultAvailabilitySettings, geofence: square, autoSetAvailable: false },
+      });
+      assert.equal(turnedOff.statusCode, 200);
+      assert.equal(await deferredFor(person.user.id), false);
+      assert.equal((await readChoice(person.token)).available, false);
+
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: header,
+        payload: { ...defaultAvailabilitySettings, geofence: square },
+      });
+      await applyAutomaticAvailability(person.user, "conclusion", now);
+      assert.equal(await deferredFor(person.user.id), true);
+      const cleared = await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: header,
+        payload: defaultAvailabilitySettings,
+      });
+      assert.equal(cleared.statusCode, 200);
+      assert.equal((await readChoice(person.token)).available, true);
+      assert.equal(await deferredFor(person.user.id), false);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
+  it("does not apply a postponed available when the ring is cleared during a lead", async () => {
+    const person = await createSession({
+      sub: `availability-settings-defer-clear-lead-${crypto.randomUUID()}`,
+      displayName: "Defer clear",
+      email: null,
+    });
+    try {
+      const header = { authorization: `Bearer ${person.token}` };
+      await app.inject({ method: "GET", url: "/availability/settings", headers: header });
+      await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: header,
+        payload: { ...defaultAvailabilitySettings, geofence: square },
+      });
+      assert.equal(await observe(person.token, { latitude: 2, longitude: 2 }), 204);
+      await applyAutomaticAvailability(person.user, "conclusion", now);
+      await insertSortie(person.user.id, { actualStart: null, actualEnd: null, scheduledStart: later(14) });
+      const cleared = await app.inject({
+        method: "PUT",
+        url: "/availability/settings",
+        headers: header,
+        payload: defaultAvailabilitySettings,
+      });
+      assert.equal(cleared.statusCode, 200);
+      assert.equal((await readChoice(person.token)).available, false);
+      assert.equal(await deferredFor(person.user.id), false);
+      assert.equal((await eventsFor(person.user.id)).length, 0);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
 });
 
 function later(minutes: number): Date {
@@ -457,6 +655,16 @@ async function driverFor(userId: string): Promise<string> {
     throw new Error("driver missing");
   }
   return row.id;
+}
+
+async function deferredFor(userId: string): Promise<boolean> {
+  const driverId = await driverFor(userId);
+  const rows = await db
+    .select({ deferred: driver.availabilityAutoAvailableDeferred })
+    .from(driver)
+    .where(eq(driver.id, driverId))
+    .limit(1);
+  return rows[0]?.deferred ?? false;
 }
 
 async function eventsFor(userId: string): Promise<{ available: boolean }[]> {

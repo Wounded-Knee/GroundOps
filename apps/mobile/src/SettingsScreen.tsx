@@ -740,7 +740,8 @@ export function SettingsScreen({
           enabled={settingsEditable}
           onChange={(value) => commitAvailability({ ...availabilityRef.current, autoSetAvailable: value })}
         />
-        <Text style={styles.label}>Availability geofence</Text>
+        <Text style={styles.label}>Availability status geofence</Text>
+        <Text style={styles.previewHint}>Automatic available waits while the GPS fix is outside this fence.</Text>
         <Text style={styles.previewHint}>{geofence.length > 0 ? `${geofence.length} vertices` : "No geofence"}</Text>
         {Platform.OS !== "web" ? (
           <Pressable

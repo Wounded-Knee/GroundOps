@@ -76,7 +76,7 @@ export function registerAvailabilityRoutes(app: FastifyInstance, deps: Availabil
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const saved = await replaceAvailabilitySettings(active.user, parsed.data);
+    const saved = await replaceAvailabilitySettings(active.user, parsed.data, deps.now());
     if (saved === "invalid") {
       return reply.code(400).send({ error: "invalid request" });
     }

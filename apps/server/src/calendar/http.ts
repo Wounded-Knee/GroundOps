@@ -20,7 +20,7 @@ import {
   type SortieInput,
 } from "./calendar.js";
 import { defaultSortieRouteDeps, computeSortieDrivingRoute, type SortieRouteDeps } from "./sortieRoute.js";
-import { applyAutomaticAvailability, applyGuidanceAvailability } from "../availability/automatic.js";
+import { applyAutomaticAvailability, applyDeferredAvailability, applyGuidanceAvailability } from "../availability/automatic.js";
 import { readAvailabilityIntervals } from "../availability/availability.js";
 import { clearMeterReading, replaceMeterReading } from "./meterReading.js";
 import { readTariff, replaceTariff } from "./tariff.js";
@@ -457,6 +457,7 @@ export function registerCalendarRoutes(
     if (result === "no-driver") {
       return reply.code(409).send({ error: "no driver" });
     }
+    await applyDeferredAvailability(active.user, deps.now());
     return reply.code(204).send();
   });
 }

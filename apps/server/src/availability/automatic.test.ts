@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { automaticAvailabilityChoice, guidanceAvailabilityChoice } from "./automatic.js";
+import type { GeoCoordinate } from "@groundops/contracts";
+import { automaticAvailabilityChoice, guidanceAvailabilityChoice, pointInGeofence } from "./automatic.js";
+
+const square: GeoCoordinate[] = [
+  { latitude: 0, longitude: 0 },
+  { latitude: 0, longitude: 1 },
+  { latitude: 1, longitude: 1 },
+  { latitude: 1, longitude: 0 },
+];
 
 const flags = { autoSetUnavailable: true, autoSetAvailable: true };
 
@@ -78,5 +86,12 @@ describe("automatic availability", () => {
       automaticAvailabilityChoice({ event: "guidance", withinLead: false, autoSetUnavailable: false, autoSetAvailable: true }),
       null,
     );
+  });
+
+  it("treats a boundary point as inside and a short ring as no ring", () => {
+    assert.equal(pointInGeofence({ latitude: 0.5, longitude: 0.5 }, square), true);
+    assert.equal(pointInGeofence({ latitude: 2, longitude: 2 }, square), false);
+    assert.equal(pointInGeofence({ latitude: 0, longitude: 0.5 }, square), true);
+    assert.equal(pointInGeofence({ latitude: 0.5, longitude: 0.5 }, square.slice(0, 2)), false);
   });
 });

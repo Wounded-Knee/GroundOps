@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { ensureDriver } from "../calendar/calendar.js";
 import { db } from "../db.js";
 import { driver } from "../schema.js";
+import { settleAvailabilitySettings } from "./automatic.js";
 
 /** Reads the driver's availability settings, creating the driver when needed. */
 export async function readAvailabilitySettings(person: User): Promise<AvailabilitySettings> {
@@ -38,6 +39,7 @@ export async function readAvailabilitySettings(person: User): Promise<Availabili
 export async function replaceAvailabilitySettings(
   person: User,
   settings: AvailabilitySettings,
+  now: Date = new Date(),
 ): Promise<AvailabilitySettings | "invalid"> {
   if (!isValidAvailabilitySettings(settings)) {
     return "invalid";
@@ -56,6 +58,7 @@ export async function replaceAvailabilitySettings(
       availabilityGeofence: geofence,
     })
     .where(eq(driver.id, ensured.id));
+  await settleAvailabilitySettings(person, now);
   return {
     thresholdMinutes: settings.thresholdMinutes,
     autoSetUnavailable: settings.autoSetUnavailable,
