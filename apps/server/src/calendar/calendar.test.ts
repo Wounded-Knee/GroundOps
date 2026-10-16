@@ -1388,6 +1388,73 @@ describe("calendar", () => {
     }
   });
 
+  it("replaces a stale origin once the driver is at the next stop", async () => {
+    const person = await createSession({
+      sub: `calendar-at-pickup-${crypto.randomUUID()}`,
+      displayName: "At pickup",
+      email: null,
+    });
+    const hall = { latitude: 34.274802, longitude: -77.9182343 };
+    const airportFix = { latitude: 34.267558, longitude: -77.912007 };
+    const ilm = { latitude: 34.267045, longitude: -77.910467 };
+    const arrival = new Date("2026-10-15T21:55:00.000Z");
+    const now = new Date("2026-10-15T21:20:00.000Z");
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id, hall);
+      const deps: ScheduleDeps = {
+        now: () => now,
+        lookupAddress: async (origin) =>
+          origin.latitude === airportFix.latitude ? "1740 Airport Blvd" : "1700 Hall Dr",
+        driveDuration: async () => 600,
+      };
+      const upcoming = await authorSortie(
+        person.user,
+        {
+          label: "AA2826",
+          arrivalAt: arrival,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop(ilm, "Airport Boulevard", false)],
+        },
+        deps,
+      );
+      assert.equal(typeof upcoming, "object");
+      if (typeof upcoming !== "object") {
+        return;
+      }
+      await db
+        .update(sortie)
+        .set({
+          scheduleOriginLatitude: hall.latitude,
+          scheduleOriginLongitude: hall.longitude,
+          scheduleOriginLabel: "1700 Hall Dr",
+        })
+        .where(eq(sortie.id, upcoming.id));
+
+      const observed = await recordObservation(
+        person.user,
+        {
+          observedAt: now,
+          latitude: airportFix.latitude,
+          longitude: airportFix.longitude,
+          accuracyMeters: 8,
+        },
+        deps,
+      );
+      assert.equal(observed, "ok");
+      const origin = await db
+        .select({ label: sortie.scheduleOriginLabel, latitude: sortie.scheduleOriginLatitude })
+        .from(sortie)
+        .where(eq(sortie.id, upcoming.id));
+      assert.equal(origin[0]?.label, "1740 Airport Blvd");
+      assert.equal(origin[0]?.latitude, airportFix.latitude);
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
   it("starts a one-stop sortie from GPS C to D ten minutes before arrival T", async () => {
     const person = await createSession({
       sub: `calendar-line-cd-${crypto.randomUUID()}`,

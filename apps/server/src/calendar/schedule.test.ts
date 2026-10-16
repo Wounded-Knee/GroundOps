@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   anchorAwayFromCompletedTerminal,
+  anchorAwayFromPickup,
   approachOrigin,
   placeStillOpen,
   type SortiePlace,
@@ -93,5 +94,22 @@ describe("anchorAwayFromCompletedTerminal", () => {
 
     assert.equal(anchorAwayFromCompletedTerminal([ilm], castleHayne, gps), true);
     assert.equal(anchorAwayFromCompletedTerminal([ilm], gps, gps), false);
+  });
+});
+
+describe("anchorAwayFromPickup", () => {
+  const hall = { latitude: 34.274802, longitude: -77.9182343 };
+  const independence = { latitude: 34.2155255, longitude: -77.9081711 };
+  const atTerminal = { latitude: 34.267558, longitude: -77.912007 };
+  const backAtTerminal = { latitude: 34.2665633, longitude: -77.9135671 };
+
+  it("is true when the driver is at the next stop and the cached origin is another street", () => {
+    assert.equal(anchorAwayFromPickup(hall, atTerminal, airport), true);
+    assert.equal(anchorAwayFromPickup(independence, backAtTerminal, airport), true);
+  });
+
+  it("stays false while the driver is away from the next stop", () => {
+    assert.equal(anchorAwayFromPickup(independence, hall, airport), false);
+    assert.equal(anchorAwayFromPickup(atTerminal, atTerminal, airport), false);
   });
 });

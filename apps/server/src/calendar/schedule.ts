@@ -6,6 +6,9 @@ export const recomputeMeters = 5 * 1609.344;
 /** One statute mile. A fix this close to a completed sortie's last place is still at that terminal. */
 export const terminalPresenceMeters = 1609.344;
 
+/** Half a statute mile. A fix this close to the next stop is already at that pickup. */
+export const pickupPresenceMeters = 0.5 * 1609.344;
+
 export const scheduleBackoffMs = 5 * 60 * 1000;
 
 const refineThresholdMs = 2 * 60 * 1000;
@@ -169,6 +172,18 @@ export function anchorAwayFromCompletedTerminal(
   return (
     distanceMeters(gps, latest.destination) <= terminalPresenceMeters &&
     distanceMeters(anchor, gps) > terminalPresenceMeters
+  );
+}
+
+/** The driver is at the next stop and the cached origin is still somewhere else. */
+export function anchorAwayFromPickup(
+  anchor: GeoCoordinate,
+  gps: GeoCoordinate,
+  pickup: GeoCoordinate,
+): boolean {
+  return (
+    distanceMeters(gps, pickup) <= pickupPresenceMeters &&
+    distanceMeters(anchor, pickup) > pickupPresenceMeters
   );
 }
 

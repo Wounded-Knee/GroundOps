@@ -25,6 +25,7 @@ import {
 } from "../schema.js";
 import {
   anchorAwayFromCompletedTerminal,
+  anchorAwayFromPickup,
   approachOrigin,
   computeWindow,
   distanceMeters,
@@ -759,6 +760,7 @@ async function recomputeOpenSorties(
   const rows = await openSorties(driverId, now);
 
   const places = await driverPlaces(driverId);
+  const pickups = await pickupCoordinates(rows.map((row) => row.id));
   for (const row of rows) {
     if (row.actualStart !== null) {
       continue;
@@ -769,7 +771,9 @@ async function recomputeOpenSorties(
     const anchor = anchorOf(row);
     const endedPlace = anchor !== null && anchorMatchesEndedPlace(places, anchor, now);
     const strayAnchor = anchor !== null && anchorAwayFromCompletedTerminal(places, anchor, position);
-    await recomputeFrom(userId, row, { ...position, label: null }, now, deps, !(endedPlace || strayAnchor));
+    const pickup = pickups.get(row.id) ?? null;
+    const atPickup = anchor !== null && pickup !== null && anchorAwayFromPickup(anchor, position, pickup);
+    await recomputeFrom(userId, row, { ...position, label: null }, now, deps, !(endedPlace || strayAnchor || atPickup));
   }
 }
 
@@ -993,6 +997,25 @@ function blankToNull(value: string | null): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+async function pickupCoordinates(sortieIds: string[]): Promise<Map<string, GeoCoordinate>> {
+  const grouped = new Map<string, GeoCoordinate>();
+  if (sortieIds.length === 0) {
+    return grouped;
+  }
+  const rows = await db
+    .select({
+      sortieId: sortieStop.sortieId,
+      latitude: sortieStop.latitude,
+      longitude: sortieStop.longitude,
+    })
+    .from(sortieStop)
+    .where(and(inArray(sortieStop.sortieId, sortieIds), eq(sortieStop.position, 0)));
+  for (const row of rows) {
+    grouped.set(row.sortieId, { latitude: row.latitude, longitude: row.longitude });
+  }
+  return grouped;
 }
 
 function anchorOf(row: OpenSortie): GeoCoordinate | null {
