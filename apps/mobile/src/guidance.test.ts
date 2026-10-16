@@ -20,8 +20,10 @@ import {
   remainingDistanceMeters,
   remainingDurationSeconds,
   routeOverviewCamera,
+  requiresCourseAdjustment,
   shouldAnnounceUpcoming,
   smoothBearing,
+  turnSide,
   stepAdvanceMeters,
   upcomingStep,
   upcomingStepIndex,
@@ -126,6 +128,34 @@ describe("guidance", () => {
     assert.equal(shouldAnnounceUpcoming(500, 250), false);
     assert.equal(shouldAnnounceUpcoming(250, 250), true);
     assert.equal(shouldAnnounceUpcoming(80, 250), true);
+  });
+
+  it("alerts only maneuvers that change course", () => {
+    assert.equal(requiresCourseAdjustment("merge"), false);
+    assert.equal(requiresCourseAdjustment("name-change"), false);
+    assert.equal(requiresCourseAdjustment("straight"), true);
+    assert.equal(requiresCourseAdjustment("turn-left"), true);
+    assert.equal(requiresCourseAdjustment("ramp-right"), true);
+  });
+
+  it("maps a maneuver to a turn-signal side", () => {
+    assert.equal(turnSide("turn-left"), "left");
+    assert.equal(turnSide("slight-left"), "left");
+    assert.equal(turnSide("sharp-left"), "left");
+    assert.equal(turnSide("fork-left"), "left");
+    assert.equal(turnSide("ramp-left"), "left");
+    assert.equal(turnSide("turn-right"), "right");
+    assert.equal(turnSide("slight-right"), "right");
+    assert.equal(turnSide("sharp-right"), "right");
+    assert.equal(turnSide("fork-right"), "right");
+    assert.equal(turnSide("ramp-right"), "right");
+    assert.equal(turnSide("straight"), "all");
+    assert.equal(turnSide("depart"), "all");
+    assert.equal(turnSide("u-turn"), "all");
+    assert.equal(turnSide("roundabout"), "all");
+    assert.equal(turnSide("arrive"), "all");
+    assert.equal(turnSide("merge"), "all");
+    assert.equal(turnSide("name-change"), "all");
   });
 
   it("requests a reroute only after 5 seconds off the path", () => {

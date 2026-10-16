@@ -264,6 +264,8 @@ export function mapManeuver(googleManeuver: string): Maneuver {
       return "roundabout";
     case "MERGE":
       return "merge";
+    case "NAME_CHANGE":
+      return "name-change";
     case "FORK_LEFT":
       return "fork-left";
     case "FORK_RIGHT":
@@ -545,6 +547,8 @@ function fallbackInstruction(maneuver: Maneuver): string {
       return "Enter the roundabout";
     case "merge":
       return "Merge";
+    case "name-change":
+      return "Continue";
     case "fork-left":
       return "Keep left";
     case "fork-right":

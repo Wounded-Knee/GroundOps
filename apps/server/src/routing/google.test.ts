@@ -13,7 +13,8 @@ describe("mapManeuver", () => {
     assert.equal(mapManeuver("ROUNDABOUT_RIGHT"), "roundabout");
     assert.equal(mapManeuver("FORK_LEFT"), "fork-left");
     assert.equal(mapManeuver("RAMP_RIGHT"), "ramp-right");
-    assert.equal(mapManeuver("NAME_CHANGE"), "straight");
+    assert.equal(mapManeuver("MERGE"), "merge");
+    assert.equal(mapManeuver("NAME_CHANGE"), "name-change");
     assert.equal(mapManeuver("FERRY"), "straight");
     assert.equal(mapManeuver("NOT_A_MANEUVER"), "straight");
   });

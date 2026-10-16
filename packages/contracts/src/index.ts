@@ -145,6 +145,7 @@ export const maneuvers = [
   "u-turn",
   "roundabout",
   "merge",
+  "name-change",
   "fork-left",
   "fork-right",
   "ramp-left",

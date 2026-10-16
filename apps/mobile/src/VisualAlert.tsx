@@ -9,21 +9,21 @@ import {
   type ViewStyle,
 } from "react-native";
 import { withAlpha } from "./theme";
-import { normalizeThrobCount, THROB_MS } from "./visualAlertThrob";
+import { alertEdges, normalizeThrobCount, THROB_MS, type AlertSide } from "./visualAlertThrob";
 
 const STOPS = 8;
 
-type ThrobHandler = (count: number) => void;
+type ThrobHandler = (count: number, side: AlertSide) => void;
 
 let throbHandler: ThrobHandler | null = null;
 
-/** Run `count` consecutive 0.75s throbs (brightness 0→100%→0 at full intensity). */
-export function throb(count: number): void {
+/** Run `count` consecutive throbs. `side` selects which edges pulse. */
+export function throb(count: number, side: AlertSide = "all"): void {
   const n = normalizeThrobCount(count);
   if (n === 0) {
     return;
   }
-  throbHandler?.(n);
+  throbHandler?.(n, side);
 }
 
 export { normalizeThrobCount } from "./visualAlertThrob";
@@ -41,12 +41,14 @@ export function VisualAlert({
 }) {
   const { width, height } = useWindowDimensions();
   const [throbbing, setThrobbing] = useState(false);
+  const [throbSide, setThrobSide] = useState<AlertSide>("all");
   const opacity = useRef(new Animated.Value(1)).current;
   const animation = useRef<Animated.CompositeAnimation | null>(null);
 
   useEffect(() => {
-    throbHandler = (count) => {
+    throbHandler = (count, side) => {
       animation.current?.stop();
+      setThrobSide(side);
       setThrobbing(true);
       opacity.setValue(0);
       const pulses = Array.from({ length: count }, () =>
@@ -93,43 +95,52 @@ export function VisualAlert({
   if (depth <= 0 || displayBrightness <= 0) {
     return null;
   }
+  const edges = alertEdges(throbbing ? throbSide : "all");
   return (
     <Animated.View
       style={[styles.root, { opacity: throbbing ? opacity : 1 }]}
       pointerEvents="none"
     >
-      <View
-        pointerEvents="none"
-        style={[
-          styles.edge,
-          { top: 0, left: 0, right: 0, height: depth },
-          gradientStyle(edgeFade(color, displayBrightness, "to bottom")),
-        ]}
-      />
-      <View
-        pointerEvents="none"
-        style={[
-          styles.edge,
-          { bottom: 0, left: 0, right: 0, height: depth },
-          gradientStyle(edgeFade(color, displayBrightness, "to top")),
-        ]}
-      />
-      <View
-        pointerEvents="none"
-        style={[
-          styles.edge,
-          { top: 0, bottom: 0, left: 0, width: depth },
-          gradientStyle(edgeFade(color, displayBrightness, "to right")),
-        ]}
-      />
-      <View
-        pointerEvents="none"
-        style={[
-          styles.edge,
-          { top: 0, bottom: 0, right: 0, width: depth },
-          gradientStyle(edgeFade(color, displayBrightness, "to left")),
-        ]}
-      />
+      {edges.top ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.edge,
+            { top: 0, left: 0, right: 0, height: depth },
+            gradientStyle(edgeFade(color, displayBrightness, "to bottom")),
+          ]}
+        />
+      ) : null}
+      {edges.bottom ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.edge,
+            { bottom: 0, left: 0, right: 0, height: depth },
+            gradientStyle(edgeFade(color, displayBrightness, "to top")),
+          ]}
+        />
+      ) : null}
+      {edges.left ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.edge,
+            { top: 0, bottom: 0, left: 0, width: depth },
+            gradientStyle(edgeFade(color, displayBrightness, "to right")),
+          ]}
+        />
+      ) : null}
+      {edges.right ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.edge,
+            { top: 0, bottom: 0, right: 0, width: depth },
+            gradientStyle(edgeFade(color, displayBrightness, "to left")),
+          ]}
+        />
+      ) : null}
     </Animated.View>
   );
 }

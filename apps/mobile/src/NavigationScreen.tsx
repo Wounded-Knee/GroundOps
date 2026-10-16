@@ -54,6 +54,8 @@ import {
   formatSeconds,
   guidanceLookAheadMeters,
   maneuverLabel,
+  requiresCourseAdjustment,
+  turnSide,
   offsetAlongBearing,
   overviewCamera,
   routeOverviewCamera,
@@ -1196,7 +1198,9 @@ export function NavigationScreen({
         return;
       }
       if (nav.muted) {
-        throb(10);
+        if (requiresCourseAdjustment(announceStep.maneuver)) {
+          throb(10, turnSide(announceStep.maneuver));
+        }
         return;
       }
       const generation = ++speechGeneration.current;

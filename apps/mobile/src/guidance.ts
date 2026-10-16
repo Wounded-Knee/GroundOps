@@ -469,11 +469,39 @@ export function formatSeconds(seconds: number): string {
   return rest === 0 ? `${hours} hr` : `${hours} hr ${rest} min`;
 }
 
+/** Merge and street-name changes do not require the driver to change course. */
+export function requiresCourseAdjustment(maneuver: Maneuver): boolean {
+  return maneuver !== "merge" && maneuver !== "name-change";
+}
+
+export type TurnSide = "left" | "right" | "all";
+
+/** Screen edge for a pending maneuver. Non-lateral maneuvers use every edge. */
+export function turnSide(maneuver: Maneuver): TurnSide {
+  switch (maneuver) {
+    case "turn-left":
+    case "slight-left":
+    case "sharp-left":
+    case "fork-left":
+    case "ramp-left":
+      return "left";
+    case "turn-right":
+    case "slight-right":
+    case "sharp-right":
+    case "fork-right":
+    case "ramp-right":
+      return "right";
+    default:
+      return "all";
+  }
+}
+
 export function maneuverLabel(maneuver: Maneuver): string {
   switch (maneuver) {
     case "depart":
       return "Depart";
     case "straight":
+    case "name-change":
       return "Continue";
     case "turn-left":
       return "Turn left";
