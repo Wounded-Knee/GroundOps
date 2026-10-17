@@ -1,6 +1,10 @@
-import type { AvailabilityInterval } from "@groundops/contracts";
+import type { AvailabilityInterval, Sortie } from "@groundops/contracts";
+import { coalescedEndDate, coalescedStartDate } from "./sortieStart";
 
-export type CalendarScope = "month" | "week" | "day";
+export type CalendarScope = "month" | "week" | "day" | "agenda";
+
+const agendaFrom = new Date(Date.UTC(1970, 0, 1));
+const agendaTo = new Date(Date.UTC(2100, 0, 1));
 
 export const hourHeight = 64;
 export const hourHeightMin = 32;
@@ -111,6 +115,9 @@ export function sameLocalDay(left: Date, right: Date): boolean {
 }
 
 export function visibleRange(scope: CalendarScope, anchor: Date): { from: Date; to: Date } {
+  if (scope === "agenda") {
+    return { from: new Date(agendaFrom), to: new Date(agendaTo) };
+  }
   if (scope === "day") {
     const from = startOfDay(anchor);
     return { from, to: addDays(from, 1) };
@@ -127,6 +134,9 @@ export function visibleRange(scope: CalendarScope, anchor: Date): { from: Date; 
 }
 
 export function shiftAnchor(scope: CalendarScope, anchor: Date, direction: -1 | 1): Date {
+  if (scope === "agenda") {
+    return anchor;
+  }
   if (scope === "day") {
     return addDays(startOfDay(anchor), direction);
   }
@@ -140,6 +150,9 @@ export function shiftAnchor(scope: CalendarScope, anchor: Date, direction: -1 | 
 export function periodLabel(scope: CalendarScope, anchor: Date): string {
   const zone = calendarTimeZone();
   const opts = zone ? { timeZone: zone } : {};
+  if (scope === "agenda") {
+    return "Agenda";
+  }
   if (scope === "day") {
     return anchor.toLocaleDateString([], { ...opts, weekday: "long", month: "long", day: "numeric", year: "numeric" });
   }
@@ -161,6 +174,43 @@ export function periodLabel(scope: CalendarScope, anchor: Date): string {
       : `${from.toLocaleDateString([], { ...opts, month: "short", day: "numeric", year: "numeric" })} – ${end}`;
   }
   return anchor.toLocaleDateString([], { ...opts, month: "long", year: "numeric" });
+}
+
+type AgendaSortie = Pick<Sortie, "id" | "actualStart" | "actualEnd" | "scheduledStart" | "scheduledEnd">;
+
+/** A sortie is past once its coalesced end is at or before now. */
+export function sortieIsPast(sortie: Pick<Sortie, "actualEnd" | "scheduledEnd">, now: Date): boolean {
+  return coalescedEndDate(sortie).getTime() <= now.getTime();
+}
+
+/** Present and future sorties, soonest coalesced start first. */
+export function upcomingSorties<T extends AgendaSortie>(sorties: readonly T[], now: Date): T[] {
+  return sorties.filter((sortie) => !sortieIsPast(sortie, now)).sort(byStart);
+}
+
+/** Past sorties, most recently ended first. */
+export function historySorties<T extends AgendaSortie>(sorties: readonly T[], now: Date): T[] {
+  return sorties.filter((sortie) => sortieIsPast(sortie, now)).sort(byEndDescending);
+}
+
+function byStart(left: AgendaSortie, right: AgendaSortie): number {
+  const delta = coalescedStartDate(left).getTime() - coalescedStartDate(right).getTime();
+  return delta !== 0 ? delta : compareId(left.id, right.id);
+}
+
+function byEndDescending(left: AgendaSortie, right: AgendaSortie): number {
+  const delta = coalescedEndDate(right).getTime() - coalescedEndDate(left).getTime();
+  return delta !== 0 ? delta : compareId(left.id, right.id);
+}
+
+function compareId(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
 }
 
 export function monthGridDays(anchor: Date): Date[] {

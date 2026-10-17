@@ -16,7 +16,7 @@ This document is the implementation boundary. Responsibility, acceptance, and na
 
 After this slice, a person who is signed in, as slice 001 defines, can:
 
-1. Open a calendar in day view and switch among month, week, and day.
+1. Open a calendar in day view and switch among month, week, day, and agenda.
 2. Become a driver by opening that calendar, when they do not already have one.
 3. Author a sortie from a dialog: an optional label, an optional arrival date and arrival time, an optional passenger name, an optional phone number, and an ordered list of stops. Each stop is a chosen place, a passenger flag for whether a passenger is carried on the leg that ends there, and a wait in whole minutes. The author may add any number of stops. When an arrival is set, it is when the driver is to arrive at the first stop. When no arrival is set, the server assumes immediate departure and computes the arrival. The server computes the scheduled start and end from traffic-aware drive time and caches them.
 4. See a summary of a sortie by tapping it, and revise that sortie from the summary, or by dragging it so the arrival changes. The server recomputes the cached start and end.
@@ -24,7 +24,7 @@ After this slice, a person who is signed in, as slice 001 defines, can:
 6. See the last fetched calendar range when the server cannot be reached.
 7. Sign out, so that session can no longer be used, as slice 001 defines. Sign-out clears the local calendar cache.
 
-On every platform the calendar opens from the bottom bar in **day** view. While Calendar is already open, another tap on that Calendar control rotates the scope day → week → month → day. The calendar stays available during guidance and arrival. Authoring is also available from the New Sortie control on that bar. On iOS and Android, choosing a place in the navigation Where to? field previews a route, then asks Passenger or Reposition. The sortie is written when the driver chooses, as one immediate stop with that passenger flag. That flow does not open this dialog.
+On every platform the calendar opens from the bottom bar in **day** view. While Calendar is already open, another tap on that Calendar control rotates the scope day → week → month → agenda → day. The calendar stays available during guidance and arrival. Authoring is also available from the New Sortie control on that bar. On iOS and Android, choosing a place in the navigation Where to? field previews a route, then asks Passenger or Reposition. The sortie is written when the driver chooses, as one immediate stop with that passenger flag. That flow does not open this dialog.
 
 Search and driving guidance from slice 002 stay as they are.
 
@@ -73,13 +73,14 @@ A sortie has at least one stop. Position order is the client’s authored order.
 
 Creating a sortie does not make the driver responsible. This slice records no acceptance. The calendar shows the sorties that driver authored. Within a day they are ordered by scheduled start and then by id. Two intervals may overlap. The calendar does not list dispatch shifts, duty shifts, vehicle assignments, or time held for another company.
 
-The visible scope is one of three. Opening the calendar starts in **day**.
+The visible scope is one of four. Opening the calendar starts in **day**.
 
 - **Month.** A month grid. Each sortie is a chip on the day of its cached start, showing the label. A sortie whose stops all have passenger off uses the reposition theme color. Any passenger stop keeps the usual chip color. Today is marked.
 - **Week.** Seven day columns and an hour grid. Each sortie is a block from its cached start to its cached end. A sortie whose stops all have passenger off uses the reposition theme color. Any passenger stop keeps the usual block color. The hour grid jumps so the now-line is vertically centered when week is shown.
 - **Day.** The same hour grid for one date, with the same block colors. The hour grid jumps so the now-line is vertically centered when day is shown.
+- **Agenda.** Upcoming and History. Upcoming lists present and future sorties, soonest coalesced start first. History lists past sorties, most recently ended first. A sortie is past when its coalesced end, the actual end when sealed and otherwise the scheduled end, is at or before now. A sortie that is still underway stays on Upcoming. Each sortie is a card: title, coalesced start, first stop, and passenger name when set. Tapping a card expands it into the sortie dialog so the driver can revise it. A collapse control closes that card and drops unsaved edits. Only one card is open. Switching Upcoming and History, or leaving agenda, closes it. Previous, next, and today are hidden. The read uses a wide range so every authored sortie is included.
 
-Previous, next, and today move the visible period. A scope control switches month, week, and day. While Calendar is open, another bottom-bar Calendar tap rotates day → week → month → day. Tapping a day in the month grid, or a day heading in the week, opens that day. Tapping a sortie opens a summary of that sortie. One create action is available in every scope. It opens the dialog with no arrival, so a save is an immediate departure. In week and day, tapping an empty hour opens create with that hour as the arrival.
+Previous, next, and today move the visible period on month, week, and day. A scope control switches month, week, day, and agenda. While Calendar is open, another bottom-bar Calendar tap rotates day → week → month → agenda → day. Tapping a day in the month grid, or a day heading in the week, opens that day. Tapping a sortie opens a summary of that sortie. One create action is available in every scope. It opens the dialog with no arrival, so a save is an immediate departure. In week and day, tapping an empty hour opens create with that hour as the arrival.
 
 The author may revise the label, the arrival, the passenger fields, and the stops. The sortie remains. This slice has no delete. The summary shows the label, or the address when the label is empty, the arrival, the cached start, the address the start was driven from, the cached end, the passenger name, the phone, and the stops in order. Revise on the summary opens the dialog. A sortie whose arrival was computed opens with no arrival. A sortie whose arrival was authored opens with that arrival. Close dismisses the summary.
 
@@ -92,11 +93,11 @@ A failed revise leaves the sortie and the cache unchanged. The block returns to 
 
 In the same transaction as the sortie write, the server appends one operational event. Authoring appends `sortie.created`. Revising, including a drag, appends `sortie.revised`. The event stores the sortie id, the label, the interval, the passenger name, the phone, and the ordered stops after the write. Current state stays on the sortie row and its stop rows. A rejected author or revise writes no sortie change and no event. The client does not rebuild the calendar from events.
 
-The client reads the calendar over HTTP for the range on screen. Month, week, and day each request the range they show. A successful read replaces the local cache for the signed-in user: the stored user id, the range, and the sorties, including passenger fields and stops. The cache is `expo-sqlite` on the device. It is the last successful read, not a second source of truth. Sign-out deletes it. When the stored user id is not the signed-in user, the client deletes the cache before reading.
+The client reads the calendar over HTTP for the range on screen. Month, week, day, and agenda each request the range they show. Agenda requests 1970 through 2100. A successful read replaces the local cache for the signed-in user: the stored user id, the range, and the sorties, including passenger fields and stops. The cache is `expo-sqlite` on the device. It is the last successful read, not a second source of truth. Sign-out deletes it. When the stored user id is not the signed-in user, the client deletes the cache before reading.
 
 A failed author or revise leaves the cache unchanged. After a successful author or revise, the client reads the calendar again, and that read replaces the cache. When that follow-up read fails, the server has the change, the cache stays as it was, and the screen says the calendar could not be refreshed.
 
-The month, week, and day grids are drawn immediately. Sorties appear when the cache or the server read returns. When the server cannot be reached, the person can still switch month, week, and day, and can move with previous, next, and today. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days. A period that was never fetched is empty. Author, revise, and drag are refused. When no range has ever been fetched, the grid is still shown and the screen says the calendar could not be loaded.
+The month, week, day, and agenda views are drawn immediately. Sorties appear when the cache or the server read returns. When the server cannot be reached, the person can still switch month, week, day, and agenda, and can move with previous, next, and today on a date scope. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days. A period that was never fetched is empty. Author, revise, and drag are refused. When no range has ever been fetched, the grid is still shown and the screen says the calendar could not be loaded.
 
 This slice does not publish on NATS. Another session sees a change on its next calendar read.
 
@@ -132,7 +133,7 @@ A sortie created here has no responsible driver, no route, and no offer. Its sto
 
 ## 5.5 Calendar
 
-The **calendar** is that driver's authored sorties over a time range, drawn as month, week, or day. It is a query. This slice does not store a separate calendar entry for each sortie.
+The **calendar** is that driver's authored sorties over a time range, drawn as month, week, day, or agenda. It is a query. This slice does not store a separate calendar entry for each sortie.
 
 ## 5.6 Operational event
 
@@ -175,7 +176,9 @@ A rejected session creates no driver and no sortie. No stops, a stop with no coo
 
 **Day.** One date and the same hour grid and block colors. Previous, next, and today move the day. When day is activated, the hour grid jumps so the now-line sits at the vertical center of the scroll viewport.
 
-**Scope.** Month, week, and day. Switching scope reads the range that scope shows. Opening the calendar starts in day. The in-calendar scope control switches among the three. While Calendar is the active bottom-bar destination, another Calendar tap rotates day → week → month → day.
+**Agenda.** Two tabs, Upcoming and History, dominate the list. Upcoming is present and future sorties, soonest first. History is past sorties, most recent first. A collapsed card shows the title, the coalesced start, the first stop, and the passenger name when set. Reposition sorties use the reposition theme color. Tapping the card expands the sortie dialog in place, without the modal backdrop, so the list scrolls the form. Collapse discards unsaved edits. Switching tabs or leaving agenda does the same. Save reloads the wide agenda range. On iOS and Android the expanded card still offers Guide.
+
+**Scope.** Month, week, day, and agenda. Switching scope reads the range that scope shows. Opening the calendar starts in day. The in-calendar scope control switches among the four. While Calendar is the active bottom-bar destination, another Calendar tap rotates day → week → month → agenda → day.
 
 **Create.** One action in every scope opens the dialog with no arrival. In week and day, tapping an empty hour opens the dialog with that hour as the arrival. The New Sortie control on the bottom bar opens the same dialog over the current screen, with no arrival, and ensures a driver before save.
 
@@ -189,7 +192,7 @@ A rejected session creates no driver and no sortie. No stops, a stop with no coo
 
 When the server cannot be reached and a range is cached, month, week, day, previous, next, and today stay available. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are unavailable. A period that was never fetched is empty.
 
-On every platform a persistent bottom bar opens Navigation, New Sortie, Settings, and Calendar. Opening Calendar shows day view. Another Calendar tap while Calendar is already open rotates day → week → month → day. Leaving the calendar returns to Navigation. Sign out is on Settings. The calendar has no sign-out action.
+On every platform a persistent bottom bar opens Navigation, New Sortie, Settings, and Calendar. Opening Calendar shows day view. Another Calendar tap while Calendar is already open rotates day → week → month → agenda → day. Leaving the calendar returns to Navigation. Sign out is on Settings. The calendar has no sign-out action.
 
 The person sees a failure in these cases:
 
@@ -262,7 +265,7 @@ The slice works when all of the following are true on the local stack:
 
 1. A signed-in person can open a calendar. The first open creates one driver, one company, and one driver–company relationship. A later open reuses that driver.
 2. A second Google account produces a second driver and a second company. Each driver sees only the sorties they authored.
-3. Authoring a sortie shows it on the calendar. Month, week, and day each show that sortie when it falls in the visible range. Switching scope or period reads that range from the server.
+3. Authoring a sortie shows it on the calendar. Month, week, and day each show that sortie when it falls in the visible range. Agenda lists it under Upcoming or History. Switching scope or period reads that range from the server.
 4. Reloading the app, and opening the calendar on a second session for the same user, shows that sortie from the server.
 5. Revising from the dialog changes what the calendar shows. Each author adds one `sortie.created` event. Each revise, including a drag, adds one `sortie.revised` event. A recompute after a five-mile move adds one `sortie.schedule_computed` event and does not add `sortie.revised`. Restarting the server keeps the sortie and the cached window.
 6. When an arrival is set, its date and time share one row, and each takes half of that row. The author can clear that arrival. Those controls are the only times the dialog sends. The calendar block uses the cached start and end. A phone displays as `(555) 123-4567` and is stored as ten digits.
@@ -270,7 +273,7 @@ The slice works when all of the following are true on the local stack:
 8. No stops, an incomplete stop row, a phone number that is not ten digits, or a missing location observation creates no sortie and no event. A failed routing call creates no sortie. An omitted arrival is now plus the drive to the first stop, and the sortie records that the arrival was not authored.
 9. Dragging a sortie on the week or day grid shifts the arrival, snapped to 15 minutes, and the server recomputes the cached start and end. The block cannot be resized. Dragging a chip to another day on the month grid shifts the arrival by whole days and keeps the clock time. A failed drop leaves the previous times.
 10. A missing, unknown, or revoked session is rejected on every endpoint in section 8. A session cannot revise another driver's sortie.
-11. After a successful read, when the server cannot be reached, the person can switch month, week, and day, move previous, next, and today, and open a day from the month grid or a week day heading. Cached sorties that fall on the visible days stay visible. The device does not apply an author, revise, or drag.
+11. After a successful read, when the server cannot be reached, the person can switch month, week, day, and agenda, move previous, next, and today on a date scope, and open a day from the month grid or a week day heading. Cached sorties that fall on the visible days stay visible. The device does not apply an author, revise, or drag.
 12. When the server cannot be reached and no range is cached, the grid is shown and the screen says the calendar could not be loaded.
 13. Sign-out revokes that session and clears the local calendar cache.
 14. On every platform the calendar opens from the bottom bar and stays available during guidance and arrival. Choosing a Where to? suggestion on iOS or Android previews the route, then writes an immediate one-stop sortie only after the driver chooses Passenger or Reposition, and does not open the dialog. A sortie whose stops all have passenger off is drawn with the reposition theme color on month chips and on day and week blocks. A sortie with any passenger stop keeps the usual color. New Sortie opens the author dialog from any destination. On web, Navigation still shows identity and live-connection state. Sign out is on Settings.

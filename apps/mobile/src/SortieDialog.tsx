@@ -63,6 +63,8 @@ export function SortieDialog({
   onCancel,
   onGuide = null,
   onUnauthorized,
+  layout = "modal",
+  onScrollLock,
 }: {
   draft: DialogDraft;
   token: string;
@@ -71,6 +73,8 @@ export function SortieDialog({
   onCancel: () => void;
   onGuide?: (() => void) | null;
   onUnauthorized: () => void;
+  layout?: "modal" | "inline";
+  onScrollLock?: (locked: boolean) => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -90,6 +94,12 @@ export function SortieDialog({
   stopsRef.current = stops;
   const rowHeights = useRef<number[]>([]);
   const dragRef = useRef<StopDrag | null>(null);
+  const scrollLock = useRef(onScrollLock);
+  scrollLock.current = onScrollLock;
+
+  useEffect(() => {
+    return () => scrollLock.current?.(false);
+  }, []);
 
   useEffect(() => {
     const chosen = previewStops(stops);
@@ -195,6 +205,7 @@ export function SortieDialog({
     dragRef.current = next;
     setDrag(next);
     setEditingIndex(null);
+    scrollLock.current?.(true);
   }
 
   function moveDrag(index: number, dy: number): void {
@@ -208,6 +219,7 @@ export function SortieDialog({
   }
 
   function endDrag(dy: number | null): void {
+    scrollLock.current?.(false);
     const current = dragRef.current;
     dragRef.current = null;
     setDrag(null);
@@ -227,15 +239,11 @@ export function SortieDialog({
 
   const pickerMode = picker === "arrival-date" ? "date" : "time";
   const heading = dialogHeading(draft, label, stops);
+  const inline = layout === "inline";
 
-  return (
-    <View style={styles.backdrop}>
-      <ScrollView
-        contentContainerStyle={styles.card}
-        keyboardShouldPersistTaps="handled"
-        scrollEnabled={drag === null}
-      >
-        <Text style={styles.title}>{heading}</Text>
+  const form = (
+    <>
+      {inline ? null : <Text style={styles.title}>{heading}</Text>}
         <View>
           {stops.map((stop, index) => (
             <WaypointRow
@@ -389,9 +397,26 @@ export function SortieDialog({
             </Pressable>
           ) : null}
         </View>
-        <Pressable onPress={onCancel} style={styles.secondary}>
-          <Text style={styles.secondaryText}>Close</Text>
-        </Pressable>
+        {inline ? null : (
+          <Pressable onPress={onCancel} style={styles.secondary}>
+            <Text style={styles.secondaryText}>Close</Text>
+          </Pressable>
+        )}
+    </>
+  );
+
+  if (inline) {
+    return <View style={styles.inlineBody}>{form}</View>;
+  }
+
+  return (
+    <View style={styles.backdrop}>
+      <ScrollView
+        contentContainerStyle={styles.card}
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={drag === null}
+      >
+        {form}
       </ScrollView>
     </View>
   );
@@ -881,6 +906,10 @@ function createStyles(colors: ThemeColors) {
       borderRadius: 12,
       padding: 16,
       gap: 8,
+    },
+    inlineBody: {
+      gap: 8,
+      marginTop: 8,
     },
     title: {
       fontSize: 20,

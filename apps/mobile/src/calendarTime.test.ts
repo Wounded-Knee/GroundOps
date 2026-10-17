@@ -17,14 +17,20 @@ import {
   nowLineTop,
   phoneDigits,
   parseAvailabilityIntervals,
+  historySorties,
+  periodLabel,
   placeLanes,
   resizeEnd,
   resizeStart,
   setCalendarTimeZoneOverride,
+  shiftAnchor,
   shiftIntervalDays,
+  sortieIsPast,
   startOfDay,
+  upcomingSorties,
   visibleRange,
 } from "./calendarTime.js";
+import { coalescedEndDate } from "./sortieStart.js";
 
 describe("calendar time", () => {
   it("requests the visible month grid, week, and day", () => {
@@ -221,4 +227,66 @@ describe("calendar time", () => {
     );
     assert.deepEqual(openBlocks, [{ top: 9 * 64, height: 1.5 * 64 }]);
   });
+
+  it("reads every authored sortie for the agenda", () => {
+    const anchor = new Date(2026, 8, 28, 15, 30);
+    const range = visibleRange("agenda", anchor);
+    assert.equal(range.from.toISOString(), "1970-01-01T00:00:00.000Z");
+    assert.equal(range.to.toISOString(), "2100-01-01T00:00:00.000Z");
+    assert.equal(periodLabel("agenda", anchor), "Agenda");
+    assert.equal(shiftAnchor("agenda", anchor, 1).getTime(), anchor.getTime());
+  });
+
+  it("splits upcoming and history around now", () => {
+    const now = new Date("2026-10-11T15:00:00.000Z");
+    const future = agendaSortie("b-future", "2026-10-11T18:00:00.000Z", "2026-10-11T19:00:00.000Z");
+    const sooner = agendaSortie("a-sooner", "2026-10-11T16:00:00.000Z", "2026-10-11T17:00:00.000Z");
+    const sameStart = agendaSortie("c-tie", "2026-10-11T16:00:00.000Z", "2026-10-11T16:30:00.000Z");
+    const happening = agendaSortie("happening", "2026-10-11T14:00:00.000Z", "2026-10-11T16:00:00.000Z", {
+      actualStart: "2026-10-11T14:05:00.000Z",
+    });
+    const overdue = agendaSortie("overdue", "2026-10-11T12:00:00.000Z", "2026-10-11T13:00:00.000Z", {
+      actualStart: "2026-10-11T12:05:00.000Z",
+    });
+    const completed = agendaSortie("completed", "2026-10-11T08:00:00.000Z", "2026-10-11T09:00:00.000Z", {
+      actualStart: "2026-10-11T08:00:00.000Z",
+      actualEnd: "2026-10-11T09:30:00.000Z",
+    });
+    const missed = agendaSortie("missed", "2026-10-11T10:00:00.000Z", "2026-10-11T11:00:00.000Z");
+    const endedEarlier = agendaSortie("earlier", "2026-10-10T10:00:00.000Z", "2026-10-10T11:00:00.000Z", {
+      actualEnd: "2026-10-10T11:00:00.000Z",
+    });
+
+    assert.equal(sortieIsPast(happening, now), false);
+    assert.equal(sortieIsPast(overdue, now), true);
+    assert.equal(sortieIsPast(completed, now), true);
+    assert.equal(sortieIsPast(missed, now), true);
+    const upcoming = upcomingSorties([future, happening, overdue, sooner, sameStart, completed, missed], now);
+    assert.deepEqual(
+      upcoming.map((sortie) => sortie.id),
+      ["happening", "a-sooner", "c-tie", "b-future"],
+    );
+    for (const sortie of upcoming) {
+      assert.ok(coalescedEndDate(sortie).getTime() > now.getTime(), `${sortie.id} has already ended`);
+    }
+    assert.deepEqual(
+      historySorties([completed, missed, endedEarlier, overdue, future], now).map((sortie) => sortie.id),
+      ["overdue", "missed", "completed", "earlier"],
+    );
+  });
 });
+
+function agendaSortie(
+  id: string,
+  scheduledStart: string,
+  scheduledEnd: string,
+  actuals: { actualStart?: string | null; actualEnd?: string | null } = {},
+) {
+  return {
+    id,
+    scheduledStart,
+    scheduledEnd,
+    actualStart: actuals.actualStart ?? null,
+    actualEnd: actuals.actualEnd ?? null,
+  };
+}

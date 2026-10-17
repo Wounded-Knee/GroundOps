@@ -44,6 +44,7 @@ import {
   formatCalendarDate,
   formatCalendarDateTime,
   formatCalendarTime,
+  historySorties,
   hourSlot,
   minuteDeltaFromPixels,
   monthGridDays,
@@ -54,6 +55,7 @@ import {
   shiftAnchor,
   shiftArrival,
   startOfDay,
+  upcomingSorties,
   visibleRange,
   weekDays,
   type CalendarScope,
@@ -138,6 +140,9 @@ export function CalendarScreen({
   const [now, setNow] = useState(() => new Date());
   const [held, setHeld] = useState<HeldMove | null>(null);
   const [hourScrollLocked, setHourScrollLocked] = useState(false);
+  const [agendaTab, setAgendaTab] = useState<"upcoming" | "history">("upcoming");
+  const [expandedSortieId, setExpandedSortieId] = useState<string | null>(null);
+  const [agendaScrollLocked, setAgendaScrollLocked] = useState(false);
   const generation = useRef(0);
   const saving = useRef(false);
   const gridRef = useRef<View>(null);
@@ -167,7 +172,7 @@ export function CalendarScreen({
   shown.current = { scope: screen.scope, anchor: screen.anchor, live: screen.live };
 
   function scrollNowIntoCenter(at: Date = now): void {
-    if (screen.scope === "month") {
+    if (screen.scope === "month" || screen.scope === "agenda") {
       return;
     }
     const viewportHeight = hourScrollViewportH.current;
@@ -438,6 +443,8 @@ export function CalendarScreen({
 
   function showPeriod(scope: CalendarScope, anchor: Date): void {
     setHeld(null);
+    setExpandedSortieId(null);
+    setAgendaScrollLocked(false);
     const current = ++generation.current;
     setScreen((currentScreen) => ({
       ...currentScreen,
@@ -506,6 +513,8 @@ export function CalendarScreen({
       availability: calendar.availability,
     });
     setHeld(null);
+    setExpandedSortieId(null);
+    setAgendaScrollLocked(false);
     setScreen({
       ...ready,
       sorties: calendar.sorties,
@@ -571,6 +580,7 @@ export function CalendarScreen({
       setScreen({ ...ready, message: departureFailed });
       return;
     }
+    setExpandedSortieId(null);
     setScreen({ ...ready, dialog: null, message: null });
     onGuide({
       sortieId: commenced.id,
@@ -601,7 +611,7 @@ export function CalendarScreen({
   }
 
   useEffect(() => {
-    if (screen.scope === "month") {
+    if (screen.scope === "month" || screen.scope === "agenda") {
       return;
     }
     scrollNowIntoCenter();
@@ -639,7 +649,7 @@ export function CalendarScreen({
           <Text style={styles.period}>{periodLabel(ready.scope, ready.anchor)}</Text>
           <View style={styles.toolbar}>
             <View style={styles.toolbarGroup}>
-              {(["month", "week", "day"] as const).map((scope) => (
+              {(["month", "week", "day", "agenda"] as const).map((scope) => (
                 <Pressable
                   key={scope}
                   accessibilityLabel={scopeLabel(scope)}
@@ -650,6 +660,7 @@ export function CalendarScreen({
                 </Pressable>
               ))}
             </View>
+            {ready.scope === "agenda" ? null : (
             <View style={styles.toolbarGroup}>
               <Pressable
                 accessibilityLabel="Previous"
@@ -673,6 +684,7 @@ export function CalendarScreen({
                 <Ionicons name="chevron-forward" size={20} color={colors.text} />
               </Pressable>
             </View>
+            )}
           </View>
           {ready.message ? <Text style={styles.message}>{ready.message}</Text> : null}
           {ready.scope === "month" ? (
@@ -731,6 +743,49 @@ export function CalendarScreen({
                 })}
               </View>
             </ScrollView>
+          ) : ready.scope === "agenda" ? (
+            <AgendaList
+              tab={agendaTab}
+              sorties={ready.sorties}
+              now={now}
+              live={ready.live}
+              expandedSortieId={expandedSortieId}
+              scrollLocked={agendaScrollLocked}
+              token={token}
+              message={ready.message}
+              onTab={(tab) => {
+                setAgendaTab(tab);
+                setExpandedSortieId(null);
+                setAgendaScrollLocked(false);
+              }}
+              onExpand={(sortieId) => {
+                if (!ready.live) {
+                  return;
+                }
+                setExpandedSortieId(sortieId);
+                setScreen((current) => ({ ...current, dialog: null, message: null }));
+              }}
+              onCollapse={() => {
+                setExpandedSortieId(null);
+                setAgendaScrollLocked(false);
+              }}
+              onSave={(sortieId, body) => {
+                if (body === "invalid") {
+                  setScreen({ ...ready, message: notSaved });
+                  return;
+                }
+                void commit(ready, sortieId, body);
+              }}
+              onGuide={
+                Platform.OS !== "web" && onGuide
+                  ? (sortie) => {
+                      void guideSortie(ready, sortie);
+                    }
+                  : null
+              }
+              onUnauthorized={onUnauthorized}
+              onScrollLock={setAgendaScrollLocked}
+            />
           ) : (
             <View
               style={styles.hourFrame}
@@ -982,12 +1037,145 @@ function dayAtPoint(box: GridBox | null, pageX: number, pageY: number): Date | n
   return box.days[row * 7 + col] ?? null;
 }
 
+function AgendaList({
+  tab,
+  sorties,
+  now,
+  live,
+  expandedSortieId,
+  scrollLocked,
+  token,
+  message,
+  onTab,
+  onExpand,
+  onCollapse,
+  onSave,
+  onGuide,
+  onUnauthorized,
+  onScrollLock,
+}: {
+  tab: "upcoming" | "history";
+  sorties: Sortie[];
+  now: Date;
+  live: boolean;
+  expandedSortieId: string | null;
+  scrollLocked: boolean;
+  token: string;
+  message: string | null;
+  onTab: (tab: "upcoming" | "history") => void;
+  onExpand: (sortieId: string) => void;
+  onCollapse: () => void;
+  onSave: (sortieId: string, body: SortieWriteRequest | "invalid") => void;
+  onGuide: ((sortie: Sortie) => void) | null;
+  onUnauthorized: () => void;
+  onScrollLock: (locked: boolean) => void;
+}) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
+  const listed = tab === "upcoming" ? upcomingSorties(sorties, now) : historySorties(sorties, now);
+  return (
+    <View style={styles.gridScroll}>
+      <View style={styles.agendaTabs}>
+        {(["upcoming", "history"] as const).map((item) => (
+          <Pressable
+            key={item}
+            accessibilityLabel={item === "upcoming" ? "Upcoming" : "History"}
+            onPress={() => onTab(item)}
+            style={[styles.agendaTab, tab === item ? styles.selected : null]}
+          >
+            <Text style={styles.agendaTabText}>{item === "upcoming" ? "Upcoming" : "History"}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <ScrollView
+        style={styles.gridScroll}
+        scrollEnabled={!scrollLocked}
+        keyboardShouldPersistTaps="handled"
+      >
+        {listed.length === 0 ? (
+          <Text style={styles.agendaEmpty}>{tab === "upcoming" ? "No upcoming sorties" : "No past sorties"}</Text>
+        ) : (
+          listed.map((sortie) => {
+            const expanded = expandedSortieId === sortie.id;
+            const reposition = sortieIsReposition(sortie);
+            const firstStop = sortie.stops[0]?.label ?? "";
+            const metaStyle = [styles.agendaMeta, reposition ? styles.agendaMetaReposition : null];
+            const summary = (
+              <View style={styles.agendaCardSummary}>
+                <Text style={[styles.agendaTitle, reposition ? styles.agendaTitleReposition : null]}>
+                  {sortieTitle(sortie)}
+                </Text>
+                <Text style={metaStyle}>
+                  {formatCalendarDateTime(coalescedStartDate(sortie), {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </Text>
+                {firstStop.length > 0 ? (
+                  <Text numberOfLines={1} style={metaStyle}>
+                    {firstStop}
+                  </Text>
+                ) : null}
+                {sortie.passengerName ? (
+                  <Text numberOfLines={1} style={metaStyle}>
+                    {sortie.passengerName}
+                  </Text>
+                ) : null}
+              </View>
+            );
+            if (!expanded) {
+              return (
+                <Pressable
+                  key={sortie.id}
+                  accessibilityRole="button"
+                  disabled={!live}
+                  onPress={() => onExpand(sortie.id)}
+                  style={[styles.agendaCard, reposition ? styles.agendaCardReposition : null]}
+                >
+                  {summary}
+                </Pressable>
+              );
+            }
+            return (
+              <View key={sortie.id} style={[styles.agendaCard, reposition ? styles.agendaCardReposition : null]}>
+                <View style={styles.agendaCardHeader}>
+                  {summary}
+                  <Pressable accessibilityLabel="Collapse" onPress={onCollapse} style={styles.iconButton}>
+                    <Ionicons name="chevron-up" size={20} color={reposition ? colors.repositionText : colors.text} />
+                  </Pressable>
+                </View>
+                <SortieDialog
+                  layout="inline"
+                  draft={dialogFor(sortie)}
+                  token={token}
+                  message={message}
+                  onCancel={onCollapse}
+                  onScrollLock={onScrollLock}
+                  onUnauthorized={onUnauthorized}
+                  onGuide={onGuide ? () => onGuide(sortie) : null}
+                  onSave={(body) => onSave(sortie.id, body)}
+                />
+              </View>
+            );
+          })
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
 function scopeLabel(scope: CalendarScope): string {
   if (scope === "month") {
     return "Month";
   }
   if (scope === "week") {
     return "Week";
+  }
+  if (scope === "agenda") {
+    return "Agenda";
   }
   return "Day";
 }
@@ -998,6 +1186,9 @@ function nextCalendarScope(scope: CalendarScope): CalendarScope {
   }
   if (scope === "week") {
     return "month";
+  }
+  if (scope === "month") {
+    return "agenda";
   }
   return "day";
 }
@@ -1011,6 +1202,9 @@ function scopeIcon(scope: CalendarScope): keyof typeof Ionicons.glyphMap {
   }
   if (scope === "week") {
     return "calendar-outline";
+  }
+  if (scope === "agenda") {
+    return "list-outline";
   }
   return "square-outline";
 }
@@ -1320,6 +1514,8 @@ function createStyles(colors: ThemeColors) {
       justifyContent: "space-between",
       alignItems: "center",
       marginTop: 12,
+      gap: 8,
+      flexWrap: "wrap",
     },
     toolbarGroup: {
       flexDirection: "row",
@@ -1503,6 +1699,63 @@ function createStyles(colors: ThemeColors) {
     },
     selected: {
       backgroundColor: colors.border,
+    },
+    agendaTabs: {
+      flexDirection: "row",
+      gap: 8,
+    },
+    agendaTab: {
+      flex: 1,
+      backgroundColor: colors.surfaceMuted,
+      borderRadius: 8,
+      paddingVertical: 12,
+      alignItems: "center",
+    },
+    agendaTabText: {
+      fontSize: 16,
+      color: colors.text,
+    },
+    agendaEmpty: {
+      marginTop: 24,
+      textAlign: "center",
+      color: colors.textSecondary,
+      fontSize: 16,
+    },
+    agendaCard: {
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 12,
+    },
+    agendaCardReposition: {
+      backgroundColor: colors.reposition,
+      borderColor: colors.reposition,
+    },
+    agendaCardHeader: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 8,
+    },
+    agendaCardSummary: {
+      flex: 1,
+      gap: 2,
+    },
+    agendaTitle: {
+      fontSize: 16,
+      fontWeight: "600",
+      color: colors.text,
+    },
+    agendaTitleReposition: {
+      color: colors.repositionText,
+    },
+    agendaMeta: {
+      fontSize: 14,
+      color: colors.textSecondary,
+    },
+    agendaMetaReposition: {
+      color: colors.repositionText,
     },
   });
 }
