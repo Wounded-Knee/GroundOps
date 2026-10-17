@@ -1,9 +1,11 @@
-import type { PlaceSuggestion, SortieStop, SortieStopWrite, SortieWriteRequest } from "@groundops/contracts";
+import type { PlaceSuggestion, Sortie, SortieStop, SortieStopWrite, SortieWriteRequest } from "@groundops/contracts";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { createElement, useEffect, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
+import { aestheticAddress } from "./aestheticAddress";
 import { resolveApiUrl } from "./apiUrl";
 import { previewSortie, scheduleConflictMessage } from "./calendarClient";
 import {
@@ -19,6 +21,7 @@ import {
   withPickedDate,
   withPickedTime,
 } from "./calendarTime";
+import { applyPassengerToggle, repairPassengerSpan } from "./passengerSpan";
 import { requestReverseGeocode } from "./routingClient";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
@@ -40,9 +43,17 @@ export type DialogDraft = {
   phone: string;
   stops: StopDraft[];
   focusStopIndex?: number | null;
+  /** Saved sortie when the dialog is showing calendar facts. Edits stay on the draft. */
+  sortie?: Sortie | null;
 };
 
 type PickerTarget = "arrival-date" | "arrival-time";
+
+type StopDrag = {
+  index: number;
+  dy: number;
+  target: number;
+};
 
 export function SortieDialog({
   draft,
@@ -50,6 +61,7 @@ export function SortieDialog({
   message = null,
   onSave,
   onCancel,
+  onGuide = null,
   onUnauthorized,
 }: {
   draft: DialogDraft;
@@ -57,6 +69,7 @@ export function SortieDialog({
   message?: string | null;
   onSave: (body: SortieWriteRequest | "invalid") => void;
   onCancel: () => void;
+  onGuide?: (() => void) | null;
   onUnauthorized: () => void;
 }) {
   const { colors } = useTheme();
@@ -67,10 +80,16 @@ export function SortieDialog({
   const [passengerName, setPassengerName] = useState(draft.passengerName);
   const [phone, setPhone] = useState(draft.phone);
   const [stops, setStops] = useState(draft.stops.length > 0 ? draft.stops : [blankStop()]);
+  const [editingIndex, setEditingIndex] = useState<number | null>(draft.focusStopIndex ?? null);
+  const [drag, setDrag] = useState<StopDrag | null>(null);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const gpsSeeded = useRef(false);
   const previewRequest = useRef(0);
+  const stopsRef = useRef(stops);
+  stopsRef.current = stops;
+  const rowHeights = useRef<number[]>([]);
+  const dragRef = useRef<StopDrag | null>(null);
 
   useEffect(() => {
     const chosen = previewStops(stops);
@@ -171,12 +190,114 @@ export function SortieDialog({
     });
   }
 
+  function beginDrag(index: number): void {
+    const next = { index, dy: 0, target: index };
+    dragRef.current = next;
+    setDrag(next);
+    setEditingIndex(null);
+  }
+
+  function moveDrag(index: number, dy: number): void {
+    const next = {
+      index,
+      dy,
+      target: indexAtOffset(rowHeights.current, index, dy, stopsRef.current.length),
+    };
+    dragRef.current = next;
+    setDrag(next);
+  }
+
+  function endDrag(dy: number | null): void {
+    const current = dragRef.current;
+    dragRef.current = null;
+    setDrag(null);
+    if (!current || dy === null) {
+      return;
+    }
+    const to = indexAtOffset(rowHeights.current, current.index, dy, stopsRef.current.length);
+    if (to === current.index) {
+      return;
+    }
+    setStops((items) => withRepairedPassengers(moveStop(items, current.index, to)));
+  }
+
+  function togglePassenger(index: number): void {
+    setStops((current) => withPassengerFlags(current, applyPassengerToggle(current.map((stop) => stop.passenger), index)));
+  }
+
   const pickerMode = picker === "arrival-date" ? "date" : "time";
+  const heading = dialogHeading(draft, label, stops);
 
   return (
     <View style={styles.backdrop}>
-      <ScrollView contentContainerStyle={styles.card} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>{draft.sortieId ? "Revise sortie" : "Author sortie"}</Text>
+      <ScrollView
+        contentContainerStyle={styles.card}
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={drag === null}
+      >
+        <Text style={styles.title}>{heading}</Text>
+        <View>
+          {stops.map((stop, index) => (
+            <WaypointRow
+              key={`stop-${index}`}
+              stop={stop}
+              index={index}
+              count={stops.length}
+              token={token}
+              canRemove={stops.length > 1}
+              editing={editingIndex === index || stop.chosen === null}
+              autoFocus={editingIndex === index}
+              translateY={rowTranslate(index, drag, rowHeights.current)}
+              raised={drag?.index === index}
+              incoming={index > 0}
+              outgoingPassenger={index < stops.length - 1 ? stops[index + 1]!.passenger : null}
+              onLayout={(height) => {
+                rowHeights.current[index] = height;
+              }}
+              onEdit={() => setEditingIndex(index)}
+              onChange={(next) => {
+                setStops((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)));
+              }}
+              onSelect={(next) => {
+                setEditingIndex(null);
+                setStops((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)));
+              }}
+              onRemove={() => {
+                setEditingIndex((current) => {
+                  if (current === null || current === index) {
+                    return null;
+                  }
+                  return current > index ? current - 1 : current;
+                });
+                setStops((current) => withRepairedPassengers(current.filter((_, itemIndex) => itemIndex !== index)));
+              }}
+              onTogglePassenger={() => togglePassenger(index)}
+              onDragGrant={() => beginDrag(index)}
+              onDragMove={(dy) => moveDrag(index, dy)}
+              onDragRelease={endDrag}
+              onUnauthorized={onUnauthorized}
+            />
+          ))}
+        </View>
+        <Pressable
+          onPress={() => {
+            setEditingIndex(stops.length);
+            setStops((current) => [...current, blankStop()]);
+          }}
+          style={styles.addStop}
+        >
+          <Text style={styles.addStopText}>+</Text>
+        </Pressable>
+        {draft.sortie ? (
+          <View style={styles.facts}>
+            <Fact label="Start" value={when(draft.sortie.actualStart ?? draft.sortie.scheduledStart)} />
+            <Fact
+              label="Depart from"
+              value={draft.sortie.departureAddress.length > 0 ? draft.sortie.departureAddress : "—"}
+            />
+            <Fact label="End" value={when(draft.sortie.actualEnd ?? draft.sortie.scheduledEnd)} />
+          </View>
+        ) : null}
         <Text style={styles.fieldLabel}>Label</Text>
         <TextInput
           value={label}
@@ -184,6 +305,22 @@ export function SortieDialog({
             setLabelManual(true);
             setLabel(value);
           }}
+          placeholderTextColor={colors.textMuted}
+          style={styles.input}
+        />
+        <Text style={styles.fieldLabel}>Passenger name</Text>
+        <TextInput
+          value={passengerName}
+          onChangeText={setPassengerName}
+          placeholderTextColor={colors.textMuted}
+          style={styles.input}
+        />
+        <Text style={styles.fieldLabel}>Passenger phone</Text>
+        <TextInput
+          value={phone}
+          onChangeText={(value) => setPhone(formatUsPhone(value))}
+          keyboardType={Platform.OS === "web" ? "default" : "phone-pad"}
+          inputMode={Platform.OS === "web" ? "tel" : undefined}
           placeholderTextColor={colors.textMuted}
           style={styles.input}
         />
@@ -240,82 +377,83 @@ export function SortieDialog({
             <Text style={styles.secondaryText}>Leave now</Text>
           </Pressable>
         ) : null}
-        <Text style={styles.fieldLabel}>Passenger name</Text>
-        <TextInput
-          value={passengerName}
-          onChangeText={setPassengerName}
-          placeholderTextColor={colors.textMuted}
-          style={styles.input}
-        />
-        <Text style={styles.fieldLabel}>Passenger phone</Text>
-        <TextInput
-          value={phone}
-          onChangeText={(value) => setPhone(formatUsPhone(value))}
-          keyboardType={Platform.OS === "web" ? "default" : "phone-pad"}
-          inputMode={Platform.OS === "web" ? "tel" : undefined}
-          placeholderTextColor={colors.textMuted}
-          style={styles.input}
-        />
-        {stops.map((stop, index) => (
-          <StopFieldset
-            key={`stop-${index}`}
-            stop={stop}
-            token={token}
-            canRemove={stops.length > 1}
-            autoFocus={draft.focusStopIndex === index}
-            onChange={(next) => setStops((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)))}
-            onRemove={() => setStops((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-            onUnauthorized={onUnauthorized}
-          />
-        ))}
-        <Pressable onPress={() => setStops((current) => [...current, blankStop()])} style={styles.addStop}>
-          <Text style={styles.addStopText}>+</Text>
-        </Pressable>
         {conflict ? <Text style={styles.message}>{conflict}</Text> : null}
         {message ? <Text style={styles.message}>{message}</Text> : null}
-        <Pressable onPress={save} style={styles.primary}>
-          <Text style={styles.primaryText}>Save</Text>
-        </Pressable>
+        <View style={styles.actionRow}>
+          <Pressable onPress={save} style={[styles.primary, styles.action]}>
+            <Text style={styles.primaryText}>Save</Text>
+          </Pressable>
+          {onGuide ? (
+            <Pressable onPress={onGuide} style={[styles.primary, styles.action]}>
+              <Text style={styles.primaryText}>Guide</Text>
+            </Pressable>
+          ) : null}
+        </View>
         <Pressable onPress={onCancel} style={styles.secondary}>
-          <Text style={styles.secondaryText}>Cancel</Text>
+          <Text style={styles.secondaryText}>Close</Text>
         </Pressable>
       </ScrollView>
     </View>
   );
 }
 
-function StopFieldset({
+function WaypointRow({
   stop,
+  index,
+  count,
   token,
   canRemove,
-  autoFocus = false,
+  editing,
+  autoFocus,
+  translateY,
+  raised,
+  incoming,
+  outgoingPassenger,
+  onLayout,
+  onEdit,
   onChange,
+  onSelect,
   onRemove,
+  onTogglePassenger,
+  onDragGrant,
+  onDragMove,
+  onDragRelease,
   onUnauthorized,
 }: {
   stop: StopDraft;
+  index: number;
+  count: number;
   token: string;
   canRemove: boolean;
-  autoFocus?: boolean;
+  editing: boolean;
+  autoFocus: boolean;
+  translateY: number;
+  raised: boolean;
+  incoming: boolean;
+  outgoingPassenger: boolean | null;
+  onLayout: (height: number) => void;
+  onEdit: () => void;
   onChange: (stop: StopDraft) => void;
+  onSelect: (stop: StopDraft) => void;
   onRemove: () => void;
+  onTogglePassenger: () => void;
+  onDragGrant: () => void;
+  onDragMove: (dy: number) => void;
+  onDragRelease: (dy: number | null) => void;
   onUnauthorized: () => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
+  const place = stop.chosen ? aestheticAddress(stop.chosen) : null;
   return (
-    <View style={styles.legFieldset}>
-      <View style={styles.legRow}>
-        <Pressable
-          onPress={() => onChange({ ...stop, passenger: !stop.passenger })}
-          style={[styles.passengerToggle, stop.passenger ? styles.passengerToggleOn : null]}
-          accessibilityRole="button"
-          accessibilityState={{ selected: stop.passenger }}
-          accessibilityLabel="Passenger"
-        >
-          <Text style={[styles.passengerToggleText, stop.passenger ? styles.passengerToggleTextOn : null]}>P</Text>
-        </Pressable>
-        <View style={styles.addressSlot}>
+    <View
+      onLayout={(event) => onLayout(event.nativeEvent.layout.height)}
+      style={[styles.stop, translateY !== 0 ? { transform: [{ translateY }] } : null, raised ? styles.stopRaised : null]}
+    >
+      <StopGrip onGrant={onDragGrant} onMove={onDragMove} onRelease={onDragRelease} />
+      <TimelineRail passenger={stop.passenger} incoming={incoming} outgoingPassenger={outgoingPassenger} />
+      <View style={styles.stopBody}>
+        {editing || !place ? (
           <AddressPicker
             appearance="field"
             query={stop.query}
@@ -326,7 +464,7 @@ function StopFieldset({
               onChange({ query, chosen, waitMinutes: stop.waitMinutes, passenger: stop.passenger });
             }}
             onSelect={(suggestion) =>
-              onChange({
+              onSelect({
                 query: suggestion.label,
                 chosen: suggestion,
                 waitMinutes: stop.waitMinutes,
@@ -335,29 +473,114 @@ function StopFieldset({
             }
             onUnauthorized={onUnauthorized}
           />
-        </View>
+        ) : (
+          <Pressable onPress={onEdit} accessibilityRole="button" accessibilityLabel="Edit address">
+            <Text style={styles.addressTitle}>{place.title}</Text>
+            {place.subtitle.length > 0 ? <Text style={styles.addressSubtitle}>{place.subtitle}</Text> : null}
+          </Pressable>
+        )}
+        {stop.chosen ? (
+          <View style={styles.waitRow}>
+            <Text style={styles.waitLabel}>Wait</Text>
+            <TextInput
+              value={String(stop.waitMinutes)}
+              onChangeText={(value) => {
+                const digits = value.replace(/\D/g, "");
+                onChange({ ...stop, waitMinutes: digits.length === 0 ? 0 : Number(digits) });
+              }}
+              keyboardType={Platform.OS === "web" ? "default" : "number-pad"}
+              inputMode={Platform.OS === "web" ? "numeric" : undefined}
+              placeholderTextColor={colors.textMuted}
+              style={styles.waitInput}
+              accessibilityLabel={`Wait at stop ${index + 1}`}
+            />
+            {canRemove ? (
+              <Pressable onPress={onRemove} accessibilityRole="button" accessibilityLabel="Remove stop">
+                <Text style={styles.removeText}>Remove</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
       </View>
-      {stop.chosen ? (
-        <>
-          <Text style={styles.fieldLabel}>Wait (minutes)</Text>
-          <TextInput
-            value={String(stop.waitMinutes)}
-            onChangeText={(value) => {
-              const digits = value.replace(/\D/g, "");
-              onChange({ ...stop, waitMinutes: digits.length === 0 ? 0 : Number(digits) });
-            }}
-            keyboardType={Platform.OS === "web" ? "default" : "number-pad"}
-            inputMode={Platform.OS === "web" ? "numeric" : undefined}
-            placeholderTextColor={colors.textMuted}
-            style={styles.input}
-          />
-          {canRemove ? (
-            <Pressable onPress={onRemove} style={styles.secondary}>
-              <Text style={styles.secondaryText}>Remove stop</Text>
-            </Pressable>
-          ) : null}
-        </>
+      <Pressable
+        onPress={onTogglePassenger}
+        style={[styles.passengerToggle, stop.passenger ? styles.passengerToggleOn : null]}
+        accessibilityRole="button"
+        accessibilityState={{ selected: stop.passenger }}
+        accessibilityLabel={`Passenger at stop ${index + 1} of ${count}`}
+      >
+        <Text style={[styles.passengerToggleText, stop.passenger ? styles.passengerToggleTextOn : null]}>P</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function TimelineRail({
+  passenger,
+  incoming,
+  outgoingPassenger,
+}: {
+  passenger: boolean;
+  incoming: boolean;
+  outgoingPassenger: boolean | null;
+}) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
+  return (
+    <View style={styles.rail}>
+      {incoming ? (
+        <View style={[styles.railLineTop, { backgroundColor: passenger ? colors.accent : colors.borderStrong }]} />
       ) : null}
+      {outgoingPassenger !== null ? (
+        <View
+          style={[styles.railLineBottom, { backgroundColor: outgoingPassenger ? colors.accent : colors.borderStrong }]}
+        />
+      ) : null}
+      <View style={[styles.bubble, { backgroundColor: passenger ? colors.accent : colors.borderStrong }]} />
+    </View>
+  );
+}
+
+function StopGrip({
+  onGrant,
+  onMove,
+  onRelease,
+}: {
+  onGrant: () => void;
+  onMove: (dy: number) => void;
+  onRelease: (dy: number | null) => void;
+}) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
+  const latest = useRef({ onGrant, onMove, onRelease });
+  latest.current = { onGrant, onMove, onRelease };
+  const responder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => latest.current.onGrant(),
+      onPanResponderMove: (_event, gesture) => latest.current.onMove(gesture.dy),
+      onPanResponderRelease: (_event, gesture) => latest.current.onRelease(gesture.dy),
+      onPanResponderTerminate: () => latest.current.onRelease(null),
+    }),
+  ).current;
+  return (
+    <View {...responder.panHandlers} accessibilityRole="button" accessibilityLabel="Reorder stop" style={styles.grip}>
+      <Ionicons name="reorder-three" size={22} color={colors.textMuted} />
+    </View>
+  );
+}
+
+function Fact({ label, value }: { label: string; value: string }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
+  return (
+    <View>
+      <Text style={styles.factLabel}>{label}</Text>
+      <Text style={styles.factValue}>{value}</Text>
     </View>
   );
 }
@@ -488,7 +711,8 @@ export function emptyPlaces(): Pick<DialogDraft, "stops"> {
 }
 
 export function placesFromSortie(stops: SortieStop[]): Pick<DialogDraft, "stops"> {
-  return { stops: stops.length > 0 ? stops.map(draftFromStop) : [blankStop()] };
+  const drafts = stops.length > 0 ? stops.map(draftFromStop) : [blankStop()];
+  return { stops: withRepairedPassengers(drafts) };
 }
 
 export function sortieTitle(sortie: { label: string; stops: SortieStop[] }): string {
@@ -510,6 +734,100 @@ export function derivedLabel(passengerName: string, stops: StopDraft[]): string 
     }
   }
   return "";
+}
+
+function dialogHeading(draft: DialogDraft, label: string, stops: StopDraft[]): string {
+  if (draft.sortieId === null) {
+    return "Author sortie";
+  }
+  const titled = sortieTitle({
+    label,
+    stops: stops.flatMap((stop) => {
+      const written = toStop(stop);
+      if (!written) {
+        return [];
+      }
+      return [{ ...written, actualArrivedAt: null, actualDepartedAt: null }];
+    }),
+  });
+  return titled.length > 0 ? titled : "Revise sortie";
+}
+
+function when(value: string): string {
+  const date = new Date(value);
+  return `${formatCalendarDate(date)} ${formatCalendarTime(date)}`;
+}
+
+function withPassengerFlags(stops: StopDraft[], flags: readonly boolean[]): StopDraft[] {
+  let changed = false;
+  const next = stops.map((stop, index) => {
+    const passenger = flags[index] ?? false;
+    if (passenger === stop.passenger) {
+      return stop;
+    }
+    changed = true;
+    return { ...stop, passenger };
+  });
+  return changed ? next : stops;
+}
+
+function withRepairedPassengers(stops: StopDraft[]): StopDraft[] {
+  return withPassengerFlags(
+    stops,
+    repairPassengerSpan(stops.map((stop) => stop.passenger)),
+  );
+}
+
+function moveStop(stops: StopDraft[], from: number, to: number): StopDraft[] {
+  if (from === to || from < 0 || to < 0 || from >= stops.length || to >= stops.length) {
+    return stops;
+  }
+  const next = stops.slice();
+  const [moved] = next.splice(from, 1);
+  if (!moved) {
+    return stops;
+  }
+  next.splice(to, 0, moved);
+  return next;
+}
+
+function indexAtOffset(heights: readonly number[], from: number, dy: number, count: number): number {
+  if (count <= 1) {
+    return 0;
+  }
+  const safe = Array.from({ length: count }, (_, index) => {
+    const height = heights[index] ?? 0;
+    return height > 0 ? height : 64;
+  });
+  const fromTop = safe.slice(0, from).reduce((sum, height) => sum + height, 0);
+  const center = fromTop + dy + (safe[from] ?? 64) / 2;
+  let cursor = 0;
+  for (let index = 0; index < safe.length; index += 1) {
+    const height = safe[index] ?? 64;
+    if (center < cursor + height) {
+      return index;
+    }
+    cursor += height;
+  }
+  return safe.length - 1;
+}
+
+function rowTranslate(index: number, drag: StopDrag | null, heights: readonly number[]): number {
+  if (!drag) {
+    return 0;
+  }
+  if (index === drag.index) {
+    return drag.dy;
+  }
+  const measured = heights[drag.index] ?? 0;
+  const span = measured > 0 ? measured : 64;
+  if (drag.index < drag.target && index > drag.index && index <= drag.target) {
+    return -span;
+  }
+  if (drag.target < drag.index && index >= drag.target && index < drag.index) {
+    return span;
+  }
+  return 0;
 }
 
 async function currentGpsPlace(
@@ -568,6 +886,119 @@ function createStyles(colors: ThemeColors) {
       fontSize: 20,
       color: colors.text,
     },
+    stop: {
+      flexDirection: "row",
+      alignItems: "stretch",
+      minHeight: 56,
+    },
+    stopRaised: {
+      zIndex: 2,
+      elevation: 3,
+    },
+    grip: {
+      width: 36,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    rail: {
+      width: 28,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    railLineTop: {
+      position: "absolute",
+      top: 0,
+      height: "50%",
+      width: 2,
+    },
+    railLineBottom: {
+      position: "absolute",
+      top: "50%",
+      bottom: 0,
+      width: 2,
+    },
+    bubble: {
+      width: 12,
+      height: 12,
+      borderRadius: 6,
+      borderWidth: 2,
+      borderColor: colors.surface,
+      zIndex: 1,
+    },
+    stopBody: {
+      flex: 1,
+      minWidth: 0,
+      justifyContent: "center",
+      paddingVertical: 8,
+      gap: 4,
+    },
+    addressTitle: {
+      fontSize: 16,
+      color: colors.text,
+    },
+    addressSubtitle: {
+      fontSize: 14,
+      color: colors.textMuted,
+    },
+    waitRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+    },
+    waitLabel: {
+      fontSize: 14,
+      color: colors.textSecondary,
+    },
+    waitInput: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      fontSize: 16,
+      paddingHorizontal: 8,
+      paddingVertical: 6,
+      minWidth: 64,
+      color: colors.text,
+      backgroundColor: colors.surface,
+    },
+    removeText: {
+      fontSize: 14,
+      color: colors.textSecondary,
+    },
+    passengerToggle: {
+      width: 44,
+      minHeight: 44,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
+      alignSelf: "center",
+      backgroundColor: colors.surfaceMuted,
+    },
+    passengerToggleOn: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    passengerToggleText: {
+      fontSize: 16,
+      fontWeight: "700",
+      color: colors.text,
+    },
+    passengerToggleTextOn: {
+      color: colors.primaryText,
+    },
+    facts: {
+      gap: 8,
+      marginTop: 8,
+    },
+    factLabel: {
+      fontSize: 13,
+      color: colors.textSecondary,
+    },
+    factValue: {
+      fontSize: 16,
+      color: colors.text,
+    },
     arrivalRow: {
       flexDirection: "row",
     },
@@ -588,46 +1019,6 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 12,
       color: colors.text,
       backgroundColor: colors.surface,
-    },
-    legFieldset: {
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 8,
-      padding: 8,
-      gap: 4,
-      marginTop: 4,
-    },
-    legRow: {
-      flexDirection: "row",
-      alignItems: "flex-start",
-      gap: 8,
-    },
-    passengerToggle: {
-      width: 44,
-      minHeight: 44,
-      borderRadius: 8,
-      borderWidth: 1,
-      borderColor: colors.border,
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: colors.surfaceMuted,
-      marginTop: 4,
-    },
-    passengerToggleOn: {
-      backgroundColor: colors.primary,
-      borderColor: colors.primary,
-    },
-    passengerToggleText: {
-      fontSize: 16,
-      fontWeight: "700",
-      color: colors.text,
-    },
-    passengerToggleTextOn: {
-      color: colors.primaryText,
-    },
-    addressSlot: {
-      flex: 1,
-      minWidth: 0,
     },
     addStop: {
       backgroundColor: colors.surfaceMuted,
@@ -653,6 +1044,13 @@ function createStyles(colors: ThemeColors) {
     pickerValue: {
       fontSize: 16,
       color: colors.text,
+    },
+    actionRow: {
+      flexDirection: "row",
+      gap: 12,
+    },
+    action: {
+      flex: 1,
     },
     primary: {
       backgroundColor: colors.primary,

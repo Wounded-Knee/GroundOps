@@ -30,7 +30,6 @@ import {
   reviseSortie,
 } from "./calendarClient";
 import { coalescedEndDate, coalescedStartDate } from "./sortieStart";
-import { displayWaitMinutes } from "./sortieWait";
 import {
   availabilityBlocksOnDay,
   blockOnDay,
@@ -86,7 +85,6 @@ type Ready = {
   live: boolean;
   message: string | null;
   dialog: DialogDraft | null;
-  summary: Sortie | null;
 };
 
 function emptyCalendar(anchor: Date): Ready {
@@ -99,7 +97,6 @@ function emptyCalendar(anchor: Date): Ready {
     live: false,
     message: null,
     dialog: null,
-    summary: null,
   };
 }
 
@@ -418,9 +415,7 @@ export function CalendarScreen({
       availability: calendar.availability,
       live: true,
       message: null,
-      summary: prev.summary
-        ? (calendar.sorties.find((item) => item.id === prev.summary?.id) ?? null)
-        : null,
+      dialog: withFreshSortie(prev.dialog, calendar.sorties),
     }));
   }
 
@@ -438,7 +433,6 @@ export function CalendarScreen({
       live: false,
       message: cached ? couldNotRefresh : couldNotLoad,
       dialog: null,
-      summary: null,
     }));
   }
 
@@ -450,7 +444,6 @@ export function CalendarScreen({
       scope,
       anchor,
       dialog: null,
-      summary: null,
       message: currentScreen.live ? null : currentScreen.message,
     }));
     void load(scope, anchor, current);
@@ -527,14 +520,7 @@ export function CalendarScreen({
     if (!ready.live) {
       return;
     }
-    setScreen({ ...ready, dialog, summary: null, message: null });
-  }
-
-  function openSummary(ready: Ready, sortie: Sortie): void {
-    if (!ready.live) {
-      return;
-    }
-    setScreen({ ...ready, summary: sortie, dialog: null, message: null });
+    setScreen({ ...ready, dialog, message: null });
   }
 
   async function guideSortie(ready: Ready, sortie: Sortie): Promise<void> {
@@ -543,14 +529,14 @@ export function CalendarScreen({
     }
     const permission = await Location.requestForegroundPermissionsAsync();
     if (permission.status !== "granted") {
-      setScreen({ ...ready, summary: sortie, message: locationRequired });
+      setScreen({ ...ready, message: locationRequired });
       return;
     }
     let position: Location.LocationObject;
     try {
       position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation });
     } catch {
-      setScreen({ ...ready, summary: sortie, message: locationRequired });
+      setScreen({ ...ready, message: locationRequired });
       return;
     }
     const origin = {
@@ -569,7 +555,7 @@ export function CalendarScreen({
       return;
     }
     if (route === "failed") {
-      setScreen({ ...ready, summary: sortie, message: routeFailed });
+      setScreen({ ...ready, message: routeFailed });
       return;
     }
     const commenced = await commenceSortie(apiUrl, token, sortie.id, { guidance: true });
@@ -578,14 +564,14 @@ export function CalendarScreen({
       return;
     }
     if (commenced === "no-location") {
-      setScreen({ ...ready, summary: sortie, message: locationRequired });
+      setScreen({ ...ready, message: locationRequired });
       return;
     }
     if (typeof commenced === "string") {
-      setScreen({ ...ready, summary: sortie, message: departureFailed });
+      setScreen({ ...ready, message: departureFailed });
       return;
     }
-    setScreen({ ...ready, summary: null, message: null });
+    setScreen({ ...ready, dialog: null, message: null });
     onGuide({
       sortieId: commenced.id,
       stops: commenced.stops,
@@ -721,8 +707,8 @@ export function CalendarScreen({
                           key={sortie.id}
                           label={sortieTitle(sortie)}
                           reposition={sortieIsReposition(sortie)}
-                          enabled={ready.live && !ready.dialog && !ready.summary}
-                          onOpen={() => openSummary(ready, sortie)}
+                          enabled={ready.live && !ready.dialog}
+                          onOpen={() => openDialog(ready, dialogFor(sortie))}
                           onMove={(pageX, pageY) => {
                             const target = dayAtPoint(gridBox.current, pageX, pageY);
                             if (!target) {
@@ -847,7 +833,7 @@ export function CalendarScreen({
                       {hours.map((hour) => (
                         <Pressable
                           key={hour}
-                          disabled={!ready.live || ready.dialog !== null || ready.summary !== null}
+                          disabled={!ready.live || ready.dialog !== null}
                           onPress={() => {
                             openDialog(ready, dialogForCreate(hourSlot(day, hour).start));
                           }}
@@ -871,12 +857,12 @@ export function CalendarScreen({
                             height={block.height}
                             lane={lane}
                             hourPx={hourPx}
-                            enabled={ready.live && !ready.dialog && !ready.summary}
+                            enabled={ready.live && !ready.dialog}
                             allowDayShift={ready.scope === "week"}
                             columnWidth={() => columnWidth.current}
                             heldOffset={held?.sortieId === sortie.id ? { x: held.x, y: held.y } : null}
                             onLift={setHourScrollLocked}
-                            onOpen={() => openSummary(ready, sortie)}
+                            onOpen={() => openDialog(ready, dialogFor(sortie))}
                             onMove={(dayDelta, minuteDelta) => {
                               const arrival = shiftArrival(new Date(sortie.arrivalAt), dayDelta, minuteDelta);
                               if (!arrival) {
@@ -919,7 +905,18 @@ export function CalendarScreen({
             <SortieDialog
               draft={ready.dialog}
               token={token}
-              onCancel={() => setScreen({ ...ready, dialog: null, summary: null })}
+              message={ready.message}
+              onCancel={() => setScreen({ ...ready, dialog: null })}
+              onGuide={
+                Platform.OS !== "web" && onGuide && ready.dialog.sortie
+                  ? () => {
+                      const sortie = ready.dialog?.sortie;
+                      if (sortie) {
+                        void guideSortie(ready, sortie);
+                      }
+                    }
+                  : null
+              }
               onUnauthorized={onUnauthorized}
               onSave={(body) => {
                 if (body === "invalid") {
@@ -927,26 +924,6 @@ export function CalendarScreen({
                   return;
                 }
                 void commit(ready, ready.dialog?.sortieId ?? null, body);
-              }}
-            />
-          ) : null}
-          {ready.summary ? (
-            <SortieSummary
-              sortie={ready.summary}
-              message={ready.message}
-              onClose={() => setScreen({ ...ready, summary: null })}
-              onGuide={
-                Platform.OS !== "web" && onGuide
-                  ? () => {
-                      void guideSortie(ready, ready.summary!);
-                    }
-                  : null
-              }
-              onRevise={() => {
-                const summary = ready.summary;
-                if (summary) {
-                  openDialog(ready, dialogFor(summary));
-                }
               }}
             />
           ) : null}
@@ -967,6 +944,7 @@ function dialogFor(sortie: Sortie): DialogDraft {
     passengerName: sortie.passengerName ?? "",
     phone: formatUsPhone(sortie.passengerPhone ?? ""),
     ...placesFromSortie(sortie.stops),
+    sortie,
   };
 }
 
@@ -989,11 +967,6 @@ function writeFrom(sortie: Sortie, arrival: Date): SortieWriteRequest {
     passengerPhone: sortie.passengerPhone,
     stops: sortie.stops,
   };
-}
-
-function when(value: string): string {
-  const date = new Date(value);
-  return `${formatCalendarDate(date)} ${formatCalendarTime(date)}`;
 }
 
 function dayAtPoint(box: GridBox | null, pageX: number, pageY: number): Date | null {
@@ -1163,74 +1136,15 @@ function MonthChip({
   );
 }
 
-function SortieSummary({
-  sortie,
-  message,
-  onClose,
-  onRevise,
-  onGuide,
-}: {
-  sortie: Sortie;
-  message: string | null;
-  onClose: () => void;
-  onRevise: () => void;
-  onGuide: (() => void) | null;
-}) {
-  const { colors } = useTheme();
-  const styles = createStyles(colors);
-  return (
-    <View style={styles.backdrop}>
-      <ScrollView contentContainerStyle={styles.summaryCard}>
-        <Text style={styles.summaryTitle}>{sortieTitle(sortie)}</Text>
-        <SummaryRow
-          label="Arrival"
-          value={when(sortie.stops[0]?.actualArrivedAt ?? sortie.arrivalAt)}
-        />
-        <SummaryRow label="Start" value={when(sortie.actualStart ?? sortie.scheduledStart)} />
-        <SummaryRow label="Depart from" value={sortie.departureAddress.length > 0 ? sortie.departureAddress : "—"} />
-        <SummaryRow label="End" value={when(sortie.actualEnd ?? sortie.scheduledEnd)} />
-        <SummaryRow label="Passenger" value={sortie.passengerName ?? "—"} />
-        <SummaryRow label="Phone" value={sortie.passengerPhone ? formatUsPhone(sortie.passengerPhone) : "—"} />
-        {sortie.stops.map((stop, index) => {
-          const waitMinutes = displayWaitMinutes(stop);
-          const wait = waitMinutes > 0 ? ` · wait ${waitMinutes} min` : "";
-          const meter = stop.passenger ? " · meter" : "";
-          return (
-            <SummaryRow
-              key={`${index}-${stop.label}`}
-              label={`Stop ${index + 1}`}
-              value={`${stop.label}${meter}${wait}`}
-            />
-          );
-        })}
-        {message ? <Text style={styles.message}>{message}</Text> : null}
-        <View style={styles.summaryActions}>
-          {onGuide ? (
-            <Pressable onPress={onGuide} style={[styles.primary, styles.summaryAction]}>
-              <Text style={styles.primaryText}>Guide</Text>
-            </Pressable>
-          ) : null}
-          <Pressable onPress={onRevise} style={[styles.primary, styles.summaryAction]}>
-            <Text style={styles.primaryText}>Revise</Text>
-          </Pressable>
-        </View>
-        <Pressable onPress={onClose} style={styles.summaryClose}>
-          <Text style={styles.secondaryText}>Close</Text>
-        </Pressable>
-      </ScrollView>
-    </View>
-  );
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  const { colors } = useTheme();
-  const styles = createStyles(colors);
-  return (
-    <View style={styles.summaryRow}>
-      <Text style={styles.summaryLabel}>{label}</Text>
-      <Text style={styles.summaryValue}>{value}</Text>
-    </View>
-  );
+function withFreshSortie(dialog: DialogDraft | null, sorties: Sortie[]): DialogDraft | null {
+  if (!dialog?.sortie) {
+    return dialog;
+  }
+  const fresh = sorties.find((item) => item.id === dialog.sortie?.id);
+  if (!fresh || fresh === dialog.sortie) {
+    return dialog;
+  }
+  return { ...dialog, sortie: fresh };
 }
 
 function HourBlock({
@@ -1582,81 +1496,13 @@ function createStyles(colors: ThemeColors) {
     blockTextReposition: {
       color: colors.repositionText,
     },
-    backdrop: {
-      position: "absolute",
-      top: 0,
-      right: 0,
-      bottom: 0,
-      left: 0,
-      backgroundColor: colors.overlay,
-      padding: 16,
-    },
-    summaryCard: {
-      backgroundColor: colors.surface,
-      borderRadius: 12,
-      padding: 16,
-      gap: 8,
-    },
-    summaryTitle: {
-      fontSize: 20,
-      color: colors.text,
-    },
-    summaryRow: {
-      gap: 2,
-    },
-    summaryLabel: {
-      fontSize: 13,
-      color: colors.textSecondary,
-    },
-    summaryValue: {
-      fontSize: 16,
-      color: colors.text,
-    },
-    summaryClose: {
-      backgroundColor: colors.surfaceMuted,
-      borderRadius: 8,
-      paddingVertical: 10,
-      alignItems: "center",
-      marginTop: 8,
-    },
-    summaryActions: {
-      flexDirection: "row",
-      gap: 12,
-      marginTop: 12,
-    },
-    summaryAction: {
-      flex: 1,
-      marginTop: 0,
-    },
     message: {
       marginTop: 12,
       fontSize: 16,
       color: colors.text,
     },
-    primary: {
-      backgroundColor: colors.primary,
-      borderRadius: 8,
-      paddingVertical: 14,
-      alignItems: "center",
-      marginTop: 12,
-    },
-    primaryText: {
-      color: colors.primaryText,
-      fontSize: 16,
-    },
-    secondary: {
-      backgroundColor: colors.surfaceMuted,
-      borderRadius: 8,
-      paddingVertical: 10,
-      paddingHorizontal: 12,
-      alignItems: "center",
-    },
     selected: {
       backgroundColor: colors.border,
-    },
-    secondaryText: {
-      fontSize: 16,
-      color: colors.text,
     },
   });
 }
