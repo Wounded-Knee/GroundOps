@@ -1103,7 +1103,6 @@ describe("calendar", () => {
           scheduledStart: sortie.scheduledStart,
           latitude: sortie.scheduleOriginLatitude,
           longitude: sortie.scheduleOriginLongitude,
-          label: sortie.scheduleOriginLabel,
         })
         .from(sortie)
         .where(eq(sortie.id, future.id));
@@ -1113,7 +1112,7 @@ describe("calendar", () => {
       );
       assert.equal(recomputed[0]?.latitude, nearA.latitude);
       assert.equal(recomputed[0]?.longitude, nearA.longitude);
-      assert.equal(recomputed[0]?.label, "Driver location");
+      assert.equal(await shownDeparture(person.user, future.id, deps), "Driver location");
       assert.ok(calls.some((call) => call.latitude === nearA.latitude));
 
       calls.length = 0;
@@ -1205,10 +1204,10 @@ describe("calendar", () => {
         return;
       }
       const chained = await db
-        .select({ label: sortie.scheduleOriginLabel, latitude: sortie.scheduleOriginLatitude })
+        .select({ latitude: sortie.scheduleOriginLatitude })
         .from(sortie)
         .where(eq(sortie.id, upcoming.id));
-      assert.equal(chained[0]?.label, "Airport Boulevard");
+      assert.equal(await shownDeparture(person.user, upcoming.id, deps), "Airport Boulevard");
       assert.equal(chained[0]?.latitude, pointA.latitude);
 
       const commenced = await commenceSortie(person.user, airport.id, deps);
@@ -1232,13 +1231,12 @@ describe("calendar", () => {
       assert.equal(enRoute, "ok");
       const held = await db
         .select({
-          label: sortie.scheduleOriginLabel,
           latitude: sortie.scheduleOriginLatitude,
           longitude: sortie.scheduleOriginLongitude,
         })
         .from(sortie)
         .where(eq(sortie.id, upcoming.id));
-      assert.equal(held[0]?.label, "Airport Boulevard");
+      assert.equal(await shownDeparture(person.user, upcoming.id, deps), "Airport Boulevard");
       assert.equal(held[0]?.latitude, pointA.latitude);
       assert.equal(held[0]?.longitude, pointA.longitude);
       assert.equal(
@@ -1253,7 +1251,6 @@ describe("calendar", () => {
         .set({
           scheduleOriginLatitude: midRoute.latitude,
           scheduleOriginLongitude: midRoute.longitude,
-          scheduleOriginLabel: "2612 Castle Hayne Rd",
         })
         .where(eq(sortie.id, upcoming.id));
 
@@ -1271,13 +1268,12 @@ describe("calendar", () => {
       assert.equal(atTerminal, "ok");
       const healed = await db
         .select({
-          label: sortie.scheduleOriginLabel,
           latitude: sortie.scheduleOriginLatitude,
           longitude: sortie.scheduleOriginLongitude,
         })
         .from(sortie)
         .where(eq(sortie.id, upcoming.id));
-      assert.equal(healed[0]?.label, "1740 Airport Blvd");
+      assert.equal(await shownDeparture(person.user, upcoming.id, deps), "1740 Airport Blvd");
       assert.equal(healed[0]?.latitude, airportFix.latitude);
       assert.equal(healed[0]?.longitude, airportFix.longitude);
       assert.ok(calls.some((call) => call.latitude === airportFix.latitude && call.longitude === airportFix.longitude));
@@ -1377,12 +1373,13 @@ describe("calendar", () => {
       );
       assert.equal(atAirport, "ok");
       const origin = await db
-        .select({ label: sortie.scheduleOriginLabel, latitude: sortie.scheduleOriginLatitude })
+        .select({ latitude: sortie.scheduleOriginLatitude })
         .from(sortie)
         .where(eq(sortie.id, upcoming.id));
-      assert.notEqual(origin[0]?.label, "Castle Hayne Road");
+      const departedFrom = await shownDeparture(person.user, upcoming.id, deps);
+      assert.notEqual(departedFrom, "Castle Hayne Road");
       assert.equal(origin[0]?.latitude, pointA.latitude);
-      assert.equal(origin[0]?.label, "1740 Airport Blvd");
+      assert.equal(departedFrom, "1740 Airport Blvd");
     } finally {
       await removeUser(person.user.id);
     }
@@ -1429,7 +1426,6 @@ describe("calendar", () => {
         .set({
           scheduleOriginLatitude: hall.latitude,
           scheduleOriginLongitude: hall.longitude,
-          scheduleOriginLabel: "1700 Hall Dr",
         })
         .where(eq(sortie.id, upcoming.id));
 
@@ -1445,10 +1441,10 @@ describe("calendar", () => {
       );
       assert.equal(observed, "ok");
       const origin = await db
-        .select({ label: sortie.scheduleOriginLabel, latitude: sortie.scheduleOriginLatitude })
+        .select({ latitude: sortie.scheduleOriginLatitude })
         .from(sortie)
         .where(eq(sortie.id, upcoming.id));
-      assert.equal(origin[0]?.label, "1740 Airport Blvd");
+      assert.equal(await shownDeparture(person.user, upcoming.id, deps), "1740 Airport Blvd");
       assert.equal(origin[0]?.latitude, airportFix.latitude);
     } finally {
       await removeUser(person.user.id);
@@ -1645,7 +1641,7 @@ describe("calendar", () => {
         ),
       );
 
-      const calendar = await readCalendar(person.user, scheduleNow, new Date("2026-10-01T00:00:00.000Z"));
+      const calendar = await readCalendar(person.user, scheduleNow, new Date("2026-10-01T00:00:00.000Z"), deps);
       assert.equal(Array.isArray(calendar), true);
       if (!Array.isArray(calendar)) {
         return;
@@ -2377,6 +2373,23 @@ async function companiesFor(userId: string): Promise<string[]> {
     .innerJoin(driver, eq(driver.id, driverCompany.driverId))
     .where(eq(driver.userId, userId));
   return rows.map((row) => row.name);
+}
+
+async function shownDeparture(
+  person: Parameters<typeof readCalendar>[0],
+  sortieId: string,
+  deps: ScheduleDeps,
+): Promise<string | undefined> {
+  const calendar = await readCalendar(
+    person,
+    new Date("2026-01-01T00:00:00.000Z"),
+    new Date("2027-01-01T00:00:00.000Z"),
+    deps,
+  );
+  if (!Array.isArray(calendar)) {
+    return undefined;
+  }
+  return calendar.find((item) => item.id === sortieId)?.departureAddress;
 }
 
 async function driverCount(userId: string): Promise<number> {

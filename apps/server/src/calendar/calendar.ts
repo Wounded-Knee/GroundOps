@@ -105,7 +105,6 @@ type StoredSortie = SortieRow & {
   arrivalAuthored: boolean;
   actualStart: Date | null;
   actualEnd: Date | null;
-  scheduleOriginLabel: string | null;
 };
 
 const sortieSelect = {
@@ -117,7 +116,6 @@ const sortieSelect = {
   scheduledEnd: sortie.scheduledEnd,
   actualStart: sortie.actualStart,
   actualEnd: sortie.actualEnd,
-  scheduleOriginLabel: sortie.scheduleOriginLabel,
   passengerName: sortie.passengerName,
   passengerPhone: sortie.passengerPhone,
 };
@@ -158,6 +156,7 @@ export async function readCalendar(
   person: User,
   from: Date,
   to: Date,
+  deps: ScheduleDeps = defaultScheduleDeps,
 ): Promise<Sortie[] | "no-driver" | "invalid-range"> {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from.getTime() >= to.getTime()) {
     return "invalid-range";
@@ -190,7 +189,11 @@ export async function readCalendar(
     db,
     rows.map((row) => row.id),
   );
-  return rows.map((row) => toSortie(row, stops.get(row.id) ?? []));
+  return presentSorties(
+    author.id,
+    rows.map((row) => toSortie(row, stops.get(row.id) ?? [])),
+    deps,
+  );
 }
 
 export async function authorSortie(
@@ -219,7 +222,6 @@ export async function authorSortie(
   if (window === "failed") {
     return "unavailable";
   }
-  const departureAddress = await originAddress(position, deps);
 
   const authored = await db.transaction(async (tx) => {
     const inserted = await tx
@@ -235,7 +237,6 @@ export async function authorSortie(
         scheduledEnd: window.scheduledEnd,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
-        scheduleOriginLabel: departureAddress,
         scheduleFailedAt: null,
         passengerName: valid.passengerName,
         passengerPhone: valid.passengerPhone,
@@ -250,11 +251,13 @@ export async function authorSortie(
     await writeEvent(tx, sortieCreated, row, valid.stops);
     return toSortie(row, valid.stops);
   });
-  if (typeof authored === "object") {
-    await publishSortie(person.id, authored);
-    await alignFollowingSorties(author.id, person.id, deps);
+  if (typeof authored !== "object") {
+    return authored;
   }
-  return authored;
+  const shown = await presentSortie(author.id, authored, deps);
+  await publishSortie(person.id, shown);
+  await alignFollowingSorties(author.id, person.id, deps);
+  return shown;
 }
 
 export async function previewSortie(
@@ -426,7 +429,6 @@ export async function reviseSortie(
   if (window === "failed") {
     return "unavailable";
   }
-  const departureAddress = await originAddress(position, deps);
 
   const revised = await db.transaction(async (tx) => {
     const updated = await tx
@@ -441,7 +443,6 @@ export async function reviseSortie(
         actualEnd: inProgress ? existing.actualEnd : null,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
-        scheduleOriginLabel: departureAddress,
         scheduleFailedAt: null,
         passengerName: valid.passengerName,
         passengerPhone: valid.passengerPhone,
@@ -458,11 +459,13 @@ export async function reviseSortie(
     await writeEvent(tx, sortieRevised, row, nextStops);
     return toSortie(row, nextStops);
   });
-  if (typeof revised === "object") {
-    await publishSortie(person.id, revised);
-    await alignFollowingSorties(author.id, person.id, deps);
+  if (typeof revised !== "object") {
+    return revised;
   }
-  return revised;
+  const shown = await presentSortie(author.id, revised, deps);
+  await publishSortie(person.id, shown);
+  await alignFollowingSorties(author.id, person.id, deps);
+  return shown;
 }
 
 export async function assertStopArrival(
@@ -496,7 +499,7 @@ export async function assertStopArrival(
     return "invalid";
   }
   if (target.actualArrivedAt !== null) {
-    return toSortie(row, stops);
+    return presentSortie(author.id, toSortie(row, stops), deps);
   }
   const now = deps.now();
   const nextStops = stops.map((stop, index) =>
@@ -510,8 +513,9 @@ export async function assertStopArrival(
     await writeEvent(tx, sortieStopArrivalAsserted, row, nextStops);
     return toSortie(row, nextStops);
   });
-  await publishSortie(person.id, asserted);
-  return asserted;
+  const shown = await presentSortie(author.id, asserted, deps);
+  await publishSortie(person.id, shown);
+  return shown;
 }
 
 export async function extendStopWait(
@@ -571,11 +575,13 @@ export async function extendStopWait(
     }
     return toSortie(next, nextStops);
   });
-  if (typeof revised === "object") {
-    await publishSortie(person.id, revised);
-    await alignFollowingSorties(author.id, person.id, deps);
+  if (typeof revised !== "object") {
+    return revised;
   }
-  return revised;
+  const shown = await presentSortie(author.id, revised, deps);
+  await publishSortie(person.id, shown);
+  await alignFollowingSorties(author.id, person.id, deps);
+  return shown;
 }
 
 export async function commenceSortie(
@@ -598,7 +604,7 @@ export async function commenceSortie(
   }
   const stops = (await stopsBySortie(db, [row.id])).get(row.id) ?? [];
   if (row.actualStart !== null) {
-    return toSortie(row, stops);
+    return presentSortie(author.id, toSortie(row, stops), deps);
   }
 
   const now = deps.now();
@@ -616,7 +622,6 @@ export async function commenceSortie(
   if (window === "failed") {
     return "unavailable";
   }
-  const departureAddress = await originAddress(position, deps);
 
   const commenced = await db.transaction(async (tx) => {
     const updated = await tx
@@ -628,7 +633,6 @@ export async function commenceSortie(
         actualStart: now,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
-        scheduleOriginLabel: departureAddress,
         scheduleFailedAt: null,
       })
       .where(eq(sortie.id, sortieId))
@@ -640,11 +644,13 @@ export async function commenceSortie(
     await writeEvent(tx, sortieCommenced, next, stops);
     return toSortie(next, stops);
   });
-  if (typeof commenced === "object") {
-    await publishSortie(person.id, commenced);
-    await alignFollowingSorties(author.id, person.id, deps);
+  if (typeof commenced !== "object") {
+    return commenced;
   }
-  return commenced;
+  const shown = await presentSortie(author.id, commenced, deps);
+  await publishSortie(person.id, shown);
+  await alignFollowingSorties(author.id, person.id, deps);
+  return shown;
 }
 
 export async function completeSortie(
@@ -670,7 +676,7 @@ export async function completeSortie(
     return "not-commenced";
   }
   if (row.actualEnd !== null) {
-    return toSortie(row, stops);
+    return presentSortie(author.id, toSortie(row, stops), deps);
   }
 
   const now = deps.now();
@@ -701,11 +707,13 @@ export async function completeSortie(
     await writeEvent(tx, sortieCompleted, next, nextStops);
     return toSortie(next, nextStops);
   });
-  if (typeof completed === "object") {
-    await publishSortie(person.id, completed);
-    await clearDriverMeter(author.id, person.id);
+  if (typeof completed !== "object") {
+    return completed;
   }
-  return completed;
+  const shown = await presentSortie(author.id, completed, deps);
+  await publishSortie(person.id, shown);
+  await clearDriverMeter(author.id, person.id);
+  return shown;
 }
 
 export async function recordObservation(
@@ -739,12 +747,12 @@ export async function recordObservation(
     }),
   );
   if (inProgress) {
-    await inferStopActuals(person.id, inProgress, {
+    await inferStopActuals(person.id, author.id, inProgress, {
       latitude: input.latitude,
       longitude: input.longitude,
       accuracyMeters: input.accuracyMeters,
       observedAt: input.observedAt,
-    });
+    }, deps);
   }
   await recomputeOpenSorties(author.id, person.id, { latitude: input.latitude, longitude: input.longitude }, deps);
   return "ok";
@@ -773,7 +781,7 @@ async function recomputeOpenSorties(
     const strayAnchor = anchor !== null && anchorAwayFromCompletedTerminal(places, anchor, position);
     const pickup = pickups.get(row.id) ?? null;
     const atPickup = anchor !== null && pickup !== null && anchorAwayFromPickup(anchor, position, pickup);
-    await recomputeFrom(userId, row, { ...position, label: null }, now, deps, !(endedPlace || strayAnchor || atPickup));
+    await recomputeFrom(driverId, userId, row, { ...position, label: null }, now, deps, !(endedPlace || strayAnchor || atPickup));
   }
 }
 
@@ -790,11 +798,12 @@ async function alignFollowingSorties(driverId: string, userId: string, deps: Sch
     if (!origin) {
       continue;
     }
-    await recomputeFrom(userId, row, origin, now, deps, false);
+    await recomputeFrom(driverId, userId, row, origin, now, deps, false);
   }
 }
 
 async function recomputeFrom(
+  driverId: string,
   userId: string,
   row: OpenSortie,
   position: ApproachOrigin,
@@ -808,10 +817,6 @@ async function recomputeFrom(
       return;
     }
   } else if (anchor && samePlace(anchor, position)) {
-    const address = await originAddress(position, deps);
-    if (row.scheduleOriginLabel !== address) {
-      await db.update(sortie).set({ scheduleOriginLabel: address }).where(eq(sortie.id, row.id));
-    }
     return;
   }
   if (row.scheduleFailedAt && now.getTime() - row.scheduleFailedAt.getTime() < scheduleBackoffMs) {
@@ -834,7 +839,6 @@ async function recomputeFrom(
     await db.update(sortie).set({ scheduleFailedAt: now }).where(eq(sortie.id, row.id));
     return;
   }
-  const address = await originAddress(position, deps);
 
   await db.transaction(async (tx) => {
     await tx
@@ -845,7 +849,6 @@ async function recomputeFrom(
         scheduledEnd: window.scheduledEnd,
         scheduleOriginLatitude: position.latitude,
         scheduleOriginLongitude: position.longitude,
-        scheduleOriginLabel: address,
         scheduleFailedAt: null,
       })
       .where(eq(sortie.id, row.id));
@@ -866,15 +869,18 @@ async function recomputeFrom(
   });
   await publishSortie(
     userId,
-    toSortie(
-      {
-        ...row,
-        arrivalAt: window.arrivalAt,
-        scheduledStart: window.scheduledStart,
-        scheduledEnd: window.scheduledEnd,
-        scheduleOriginLabel: address,
-      },
-      stops,
+    await presentSortie(
+      driverId,
+      toSortie(
+        {
+          ...row,
+          arrivalAt: window.arrivalAt,
+          scheduledStart: window.scheduledStart,
+          scheduledEnd: window.scheduledEnd,
+        },
+        stops,
+      ),
+      deps,
     ),
   );
 }
@@ -1105,8 +1111,10 @@ async function resolveInProgressSortie(
 
 async function inferStopActuals(
   userId: string,
+  driverId: string,
   inProgress: StoredSortie,
   fix: { latitude: number; longitude: number; accuracyMeters: number | null; observedAt: Date },
+  deps: ScheduleDeps,
 ): Promise<void> {
   const stopRows = await db
     .select({
@@ -1154,7 +1162,7 @@ async function inferStopActuals(
             .where(and(eq(sortieStop.sortieId, inProgress.id), eq(sortieStop.position, index)));
           await writeEvent(tx, sortieStopArrivalInferred, inProgress, nextStops);
         });
-        await publishSortie(userId, toSortie(inProgress, nextStops));
+        await publishSortie(userId, await presentSortie(driverId, toSortie(inProgress, nextStops), deps));
       }
       return;
     }
@@ -1171,7 +1179,7 @@ async function inferStopActuals(
             .where(and(eq(sortieStop.sortieId, inProgress.id), eq(sortieStop.position, index)));
           await writeEvent(tx, sortieStopDepartureInferred, inProgress, nextStops);
         });
-        await publishSortie(userId, toSortie(inProgress, nextStops));
+        await publishSortie(userId, await presentSortie(driverId, toSortie(inProgress, nextStops), deps));
       }
       return;
     }
@@ -1281,7 +1289,6 @@ async function openSorties(driverId: string, now: Date): Promise<OpenSortie[]> {
       passengerPhone: sortie.passengerPhone,
       scheduleOriginLatitude: sortie.scheduleOriginLatitude,
       scheduleOriginLongitude: sortie.scheduleOriginLongitude,
-      scheduleOriginLabel: sortie.scheduleOriginLabel,
       scheduleFailedAt: sortie.scheduleFailedAt,
     })
     .from(sortie)
@@ -1383,7 +1390,10 @@ async function findCompanyId(tx: Database, driverId: string): Promise<string | n
   return rows[0]?.companyId ?? null;
 }
 
-export async function readActivity(person: User): Promise<ActivityResponse> {
+export async function readActivity(
+  person: User,
+  deps: ScheduleDeps = defaultScheduleDeps,
+): Promise<ActivityResponse> {
   const asOf = new Date().toISOString();
   const author = await findDriver(db, person.id);
   if (!author) {
@@ -1395,7 +1405,7 @@ export async function readActivity(person: User): Promise<ActivityResponse> {
   return {
     asOf,
     location,
-    sortie: inProgress ? toSortie(inProgress, stops) : null,
+    sortie: inProgress ? await presentSortie(author.id, toSortie(inProgress, stops), deps) : null,
     meter: await readDriverMeter(author.id),
   };
 }
@@ -1439,11 +1449,54 @@ function toSortie(row: StoredSortie, stops: SortieStop[]): Sortie {
     scheduledEnd: row.scheduledEnd.toISOString(),
     actualStart: row.actualStart ? row.actualStart.toISOString() : null,
     actualEnd: row.actualEnd ? row.actualEnd.toISOString() : null,
-    departureAddress: row.scheduleOriginLabel ?? "",
+    departureAddress: "",
     passengerName: row.passengerName,
     passengerPhone: row.passengerPhone,
     stops,
   };
+}
+
+/** Fills depart-from from the previous still-open last stop, or the latest GPS fix when this sortie is next. */
+async function presentSorties(driverId: string, sorties: Sortie[], deps: ScheduleDeps): Promise<Sortie[]> {
+  if (sorties.length === 0) {
+    return [];
+  }
+  const now = deps.now();
+  const places = await driverPlaces(driverId);
+  const gps = await latestObservation(db, driverId);
+  const gpsAddress: { value: Promise<string> | null } = { value: null };
+  const presented: Sortie[] = [];
+  for (const item of sorties) {
+    const origin = approachOrigin(places, new Date(item.arrivalAt), item.id, gps, now);
+    presented.push({ ...item, departureAddress: await departureAddressOf(origin, deps, gpsAddress) });
+  }
+  return presented;
+}
+
+async function presentSortie(driverId: string, item: Sortie, deps: ScheduleDeps): Promise<Sortie> {
+  const [presented] = await presentSorties(driverId, [item], deps);
+  return presented ?? item;
+}
+
+async function departureAddressOf(
+  origin: ApproachOrigin | null,
+  deps: ScheduleDeps,
+  gpsAddress: { value: Promise<string> | null },
+): Promise<string> {
+  if (!origin) {
+    return "";
+  }
+  if (origin.label === null) {
+    if (gpsAddress.value === null) {
+      gpsAddress.value = originAddress(origin, deps);
+    }
+    return gpsAddress.value;
+  }
+  const known = origin.label.trim();
+  if (known.length > 0) {
+    return known;
+  }
+  return originAddress(origin, deps);
 }
 
 function isUniqueViolation(error: unknown): boolean {

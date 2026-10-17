@@ -138,7 +138,6 @@ export const sortie = pgTable("sortie", {
   actualEnd: timestamp("actual_end", { withTimezone: true, mode: "date" }),
   scheduleOriginLatitude: doublePrecision("schedule_origin_latitude"),
   scheduleOriginLongitude: doublePrecision("schedule_origin_longitude"),
-  scheduleOriginLabel: text("schedule_origin_label"),
   scheduleFailedAt: timestamp("schedule_failed_at", { withTimezone: true, mode: "date" }),
   passengerName: text("passenger_name"),
   passengerPhone: text("passenger_phone"),

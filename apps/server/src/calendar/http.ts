@@ -163,7 +163,7 @@ export function registerCalendarRoutes(
     if (!active) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    return reply.send(await readActivity(active.user));
+    return reply.send(await readActivity(active.user, deps));
   });
 
   app.put("/meter-reading", async (request, reply) => {
@@ -216,7 +216,7 @@ export function registerCalendarRoutes(
     }
     const from = new Date(parsed.data.from);
     const to = new Date(parsed.data.to);
-    const result = await readCalendar(active.user, from, to);
+    const result = await readCalendar(active.user, from, to, deps);
     if (result === "invalid-range") {
       return reply.code(400).send({ error: "invalid request" });
     }
