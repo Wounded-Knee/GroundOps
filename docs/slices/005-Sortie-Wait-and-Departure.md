@@ -74,7 +74,7 @@ The sortie keeps `scheduledStart` as the estimated leave time from schedule comp
 
 When the driver starts Guide for that sortie on iOS or Android, after a successful driving-route response, the client calls `POST /sorties/:id/commence`. The server sets `actualStart` to now, refreshes `scheduledEnd` (an authored arrival stays; a computed arrival is recomputed as an immediate departure from now), appends `sortie.commenced`, and aligns following open sorties. A second commence is idempotent. Location-based schedule recompute skips a sortie that already has `actualStart`. Revising the sortie clears `actualStart` so the window is an estimate again.
 
-Where to? that authors a one-stop passenger immediate sortie and starts guidance calls the same commence after the route succeeds.
+Where to? that starts guidance calls the same commence after the driver chooses Passenger or Reposition and the route has succeeded. Accrual follows that passenger flag.
 
 Calendar month, week, and day draw each sortie from `actualStart` when present, otherwise `scheduledStart`, through `scheduledEnd`.
 

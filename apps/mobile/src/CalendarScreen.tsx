@@ -720,6 +720,7 @@ export function CalendarScreen({
                         <MonthChip
                           key={sortie.id}
                           label={sortieTitle(sortie)}
+                          reposition={sortieIsReposition(sortie)}
                           enabled={ready.live && !ready.dialog && !ready.summary}
                           onOpen={() => openSummary(ready, sortie)}
                           onMove={(pageX, pageY) => {
@@ -865,6 +866,7 @@ export function CalendarScreen({
                           <HourBlock
                             key={sortie.id}
                             label={sortieTitle(sortie)}
+                            reposition={sortieIsReposition(sortie)}
                             top={block.top}
                             height={block.height}
                             lane={lane}
@@ -1109,13 +1111,19 @@ function webPinchWheelProps(onZoom: (deltaY: number) => void): Record<string, un
   };
 }
 
+function sortieIsReposition(sortie: Sortie): boolean {
+  return sortie.stops.length > 0 && sortie.stops.every((stop) => !stop.passenger);
+}
+
 function MonthChip({
   label,
+  reposition,
   enabled,
   onOpen,
   onMove,
 }: {
   label: string;
+  reposition: boolean;
   enabled: boolean;
   onOpen: () => void;
   onMove: (pageX: number, pageY: number) => void;
@@ -1144,8 +1152,11 @@ function MonthChip({
     }),
   ).current;
   return (
-    <View {...(enabled ? responder.panHandlers : {})} style={[styles.chip, enabled ? null : styles.chipPassthrough]}>
-      <Text numberOfLines={1} style={styles.chipText}>
+    <View
+      {...(enabled ? responder.panHandlers : {})}
+      style={[styles.chip, reposition ? styles.chipReposition : null, enabled ? null : styles.chipPassthrough]}
+    >
+      <Text numberOfLines={1} style={[styles.chipText, reposition ? styles.chipTextReposition : null]}>
         {label}
       </Text>
     </View>
@@ -1224,6 +1235,7 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 
 function HourBlock({
   label,
+  reposition,
   top,
   height,
   lane,
@@ -1237,6 +1249,7 @@ function HourBlock({
   onMove,
 }: {
   label: string;
+  reposition: boolean;
   top: number;
   height: number;
   lane: LanePlacement;
@@ -1364,8 +1377,8 @@ function HourBlock({
         },
       ]}
     >
-      <View {...moveResponder.panHandlers} style={styles.blockBody}>
-        <Text numberOfLines={2} style={styles.blockText}>
+      <View {...moveResponder.panHandlers} style={[styles.blockBody, reposition ? styles.blockBodyReposition : null]}>
+        <Text numberOfLines={2} style={[styles.blockText, reposition ? styles.blockTextReposition : null]}>
           {label}
         </Text>
       </View>
@@ -1469,6 +1482,12 @@ function createStyles(colors: ThemeColors) {
       color: colors.primaryText,
       fontSize: 11,
     },
+    chipReposition: {
+      backgroundColor: colors.reposition,
+    },
+    chipTextReposition: {
+      color: colors.repositionText,
+    },
     hourFrame: {
       flex: 1,
       marginTop: 12,
@@ -1556,6 +1575,12 @@ function createStyles(colors: ThemeColors) {
     blockText: {
       color: colors.primaryText,
       fontSize: 11,
+    },
+    blockBodyReposition: {
+      backgroundColor: colors.reposition,
+    },
+    blockTextReposition: {
+      color: colors.repositionText,
     },
     backdrop: {
       position: "absolute",

@@ -53,6 +53,23 @@ device_online() {
   adb devices | awk -v serial="$serial" 'NR > 1 && $1 == serial && $2 == "device" { found = 1 } END { exit found ? 0 : 1 }'
 }
 
+# Expo names a device from `adb devices -l` (`model:SM_G973U` -> SM_G973U) and,
+# with no --device, uses the first attached entry. That is the offline USB
+# serial when the phone is also connected over TCP.
+expo_device_name() {
+  local serial="$1"
+  adb devices -l | awk -v serial="$serial" '
+    $1 == serial {
+      for (i = 1; i <= NF; i++) {
+        if (index($i, "model:") == 1) {
+          print substr($i, 7)
+          exit
+        }
+      }
+    }
+  '
+}
+
 if [[ -z "$candidate" ]] || ! device_online "$candidate"; then
   "$root/scripts/adb-connect.sh" || true
 fi
@@ -118,10 +135,26 @@ if [[ -n "$gateway" ]]; then
 fi
 
 cd "$root/apps/mobile"
+expo_args=()
+user_chose_device=0
+for arg in "$@"; do
+  case "$arg" in
+    --device | --device=* | -d) user_chose_device=1 ;;
+  esac
+done
+if [[ "$mode" == "run" && "$user_chose_device" -eq 0 ]]; then
+  expo_name="$(expo_device_name "$ANDROID_SERIAL")"
+  if [[ -z "$expo_name" ]]; then
+    echo "Could not read an Expo device name for ${ANDROID_SERIAL}." >&2
+    exit 1
+  fi
+  expo_args=(--device "$expo_name")
+  echo "Expo device ${expo_name}" >&2
+fi
 set +e
 case "$mode" in
   run)
-    node --env-file=../../.env ./scripts/expo-with-env.mjs run:android "$@"
+    node --env-file=../../.env ./scripts/expo-with-env.mjs run:android "${expo_args[@]}" "$@"
     ;;
   start)
     node --env-file=../../.env ./scripts/expo-with-env.mjs start --android "$@"

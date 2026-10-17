@@ -22,7 +22,7 @@ After this slice, a person who is signed in, as slice 001 defines, and who has a
 4. On every platform, open Settings, see the driver's tariff — flag drop, dollars per mile, and dollars per wait minute — and save new rates. Those rates program the meter.
 5. Sign out, so that session can no longer be used, as slice 001 defines.
 
-Search that authors a one-stop passenger sortie and starts guidance uses the same meter (passenger on, so accrual starts with guidance). Before Start, the map route preview shows the same trip estimate from the tariff snapshot and the route distance. A route that is not a sortie does not show the meter. Web still has no driving guidance, so it has no Guide action and no meter panel. The tariff fields are editable on web.
+Search that authors a one-stop sortie and starts guidance uses the same meter. Accrual starts with guidance only when the driver chose Passenger. A Reposition choice leaves passenger off, so the meter panel shows and does not accrue. Before Start, the map route preview shows the trip estimate from the tariff snapshot and the route distance only after Passenger is chosen. A route that is not a sortie does not show the meter. Web still has no driving guidance, so it has no Guide action and no meter panel. The tariff fields are editable on web.
 
 Starting guidance is not responsibility, acceptance, or completion. Sealing the calendar’s actual departure when Guide starts is slice 005.
 
@@ -172,7 +172,7 @@ The slice works when all of the following are true on the local stack:
 3. While sortie guidance is in use, a meter panel about one quarter of the screen height appears directly above the bottom bar on Navigation, Calendar, Settings, and New Sortie — overlaying the map on Navigation and reserving column space on the other screens — showing Estimated (full trip miles, trip duration, trip fare estimate), a large centered running fare, and Actual (miles traveled, wait minutes, fare so far, right-aligned), with a thin next-turn progress bar and a 1em destination progress bar (remaining versus the route baseline) and no text on either bar.
 4. Tapping the panel swaps its contents for End Sortie; tapping again restores the meter. End Sortie ends guidance and removes the panel.
 5. Ending guidance clears the route and removes the panel. Sign-out does the same.
-6. Starting guidance for a one-stop passenger sortie authored from search shows the meter with accrual. A route that is not a sortie does not. A guided sortie with passenger off on the current leg shows the meter panel but does not accrue miles or wait until a passenger leg.
+6. Starting guidance for a one-stop sortie authored from search shows the meter. Accrual runs when that search choice was Passenger. A Reposition choice shows the meter panel and does not accrue miles or wait. A route that is not a sortie does not show the meter. A guided sortie with passenger off on the current leg shows the meter panel but does not accrue miles or wait until a passenger leg.
 7. On every platform, Settings shows flag drop, dollars per mile, and dollars per wait minute. Saving valid rates persists them. Reloading Settings, and opening Settings on a second session for the same user, shows the saved rates. Defaults are $3.00, $2.50, and $0.40 when none were saved.
 8. An empty or invalid tariff field does not save. Zero is allowed. Amounts are non-negative and at most two decimal places.
 9. A meter started under one tariff keeps that snapshot when Settings later saves different rates. The next Guide uses the new rates.

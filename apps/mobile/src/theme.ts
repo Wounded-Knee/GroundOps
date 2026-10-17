@@ -13,6 +13,8 @@ export type ThemeColors = {
   primaryText: string;
   accent: string;
   accentSoft: string;
+  reposition: string;
+  repositionText: string;
   overlay: string;
   inputDisabled: string;
 };
@@ -30,6 +32,8 @@ export const lightColors: ThemeColors = {
   primaryText: "#ffffff",
   accent: "#1A73E8",
   accentSoft: "#E8F0FE",
+  reposition: "#D7E8D4",
+  repositionText: "#1B3A1F",
   overlay: "rgba(0,0,0,0.35)",
   inputDisabled: "#f5f5f5",
 };
@@ -47,6 +51,8 @@ export const darkColors: ThemeColors = {
   primaryText: "#111111",
   accent: "#1A73E8",
   accentSoft: "#1a2a40",
+  reposition: "#1E3A24",
+  repositionText: "#E8F5E9",
   overlay: "rgba(0,0,0,0.55)",
   inputDisabled: "#2a2a2a",
 };

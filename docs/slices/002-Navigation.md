@@ -8,7 +8,7 @@
 
 **Purpose:** A signed-in person can search for a place on the phone and follow full-screen driving guidance to it.
 
-This document is the implementation boundary for the map and for guidance. A second routing provider stays outside this slice. Choosing a Where to? suggestion authors a destination-only immediate sortie as slice 003 defines, before this screen previews a route or starts guidance. Persisted location observations are written by the calendar slice, not by guidance, except that this selection reports the current fix so that sortie can depart immediately. Technical Architecture section 8 leaves the on-device map toolkit to the navigation slice. This slice chooses `expo-maps`.
+This document is the implementation boundary for the map and for guidance. A second routing provider stays outside this slice. Choosing a Where to? suggestion previews a route, then authors a destination-only immediate sortie as slice 003 defines once the driver chooses Passenger or Reposition. Persisted location observations are written by the calendar slice, not by guidance, except that this selection reports the current fix so that sortie can depart immediately. Technical Architecture section 8 leaves the on-device map toolkit to the navigation slice. This slice chooses `expo-maps`.
 
 A later slice that navigates a sortie reuses this screen and this route result. It does not introduce a second navigation model.
 
@@ -120,7 +120,7 @@ The states below are the phone's presentation of a route result. Selecting a sug
 
 | From | To | What happens |
 | --- | --- | --- |
-| Map | Route preview | The person selects a suggestion. The server authors a destination-only immediate sortie for that driver, then returns a driving route from the latest location fix. The map draws it. If the sortie is not created, the map stays and guidance does not start. |
+| Map | Route preview | The person selects a suggestion. The server returns a driving route from the latest location fix. The map draws it. The sortie is not written until the person chooses Passenger or Reposition. If the route fails, the map stays and guidance does not start. |
 | Route preview | Guiding | The person starts guidance. |
 | Guiding | Guiding | The current step advances, or a reroute replaces the route and guidance continues on the new route. |
 | Guiding | Arrived | The device has been inside 40 meters of the destination and stationary there for 30 seconds, as slice 007 defines for a sortie's final stop. A drive through that radius stays in guidance. |
@@ -149,7 +149,7 @@ On iOS and Android, the map is the Navigation destination after sign-in. A persi
 
 **Suggestions.** While the query is non-empty, up to five labels. Selecting a label requests the route. An empty query shows no suggestions.
 
-**Route preview.** The route is drawn, with the destination. The screen shows distance, expected duration, a fare estimate from the driver's tariff and the route distance, and two actions: start guidance, and dismiss.
+**Route preview.** The route is drawn, with the destination. The screen shows distance and expected duration, and two choices, neither selected: Passenger and Reposition. The fare estimate from the driver's tariff and the route distance appears only after Passenger is chosen. Start stays disabled until that choice is saved. Dismiss is available throughout. Dismiss before a choice leaves no sortie. Dismiss after a choice leaves the sortie.
 
 **Guiding.** The search field is not shown. A card shows the next maneuver (the upcoming step while the person is still on the current segment), the distance to that maneuver, and the instruction. After a step completes, the card immediately shows the following upcoming maneuver. The camera follows the device, heading-up and tilted, framed so the fix stays near the bottom center of the screen (Android map content padding; iOS look-ahead along the travel bearing). The bearing follows the device course when the fix includes one, otherwise the device heading. When neither is available, the camera still frames from the fix with a north bearing. End guidance is on the meter panel from slice 004 (End Sortie). Where the toolkit exposes a traffic layer, that layer is on. The spoken duration still comes only from the route response.
 
@@ -210,7 +210,7 @@ The slice works when all of the following are true on the local stack:
 
 1. A signed-in person on Android or iOS sees a full-screen map.
 2. A non-empty search shows at most five labeled suggestions. An empty query shows none, and the server does not call Google for it.
-3. With location available, selecting a suggestion authors a destination-only immediate sortie, then draws one driving route from the current location and shows distance and duration. If that sortie is not created, the route is not drawn and guidance does not start.
+3. With location available, selecting a suggestion draws one driving route from the current location and shows distance and duration. Passenger and Reposition are both unselected, and the fare estimate is hidden until Passenger is chosen. The sortie is written when the driver chooses. If the route fails, it is not drawn and guidance does not start. Start stays disabled until that write succeeds.
 4. Starting guidance shows the next maneuver and the distance to it, and the map follows the device heading-up.
 5. The phone announces each upcoming maneuver once when within the announce-lead distance (TTS when unmuted; VisualAlert `throb(10)` when muted), and speaks once on arrival when unmuted.
 6. A location fix within the step-advance distance of the current step's end advances to the next step (default 30 meters; Settings), and one fix changes at most one step. After that advance, the card shows the following upcoming maneuver immediately.

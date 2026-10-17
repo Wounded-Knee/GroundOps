@@ -25,6 +25,7 @@ import {
   authorSortie,
   commenceSortie,
   previewSortie,
+  reviseSortie,
   scheduleConflictMessage,
   clearMeterReading,
   completeSortie,
@@ -119,17 +120,24 @@ import { throb } from "./VisualAlert";
 
 export type { SortieGuideCommand } from "./sortieGuide";
 
+type PreviewNav = {
+  mode: "preview";
+  destination: PlaceSuggestion;
+  route: DrivingRoute;
+  sortieId: string | null;
+  stops: SortieStop[];
+  tariff: Tariff | null;
+  sortie: Sortie | null;
+  /** Last passenger flag the server accepted. Null until that write succeeds. */
+  passenger: boolean | null;
+  /** Choice in flight. Start stays disabled while this is set. */
+  pendingPassenger: boolean | null;
+  message: string | null;
+};
+
 type NavState =
   | { mode: "browse"; message: string | null; destination: PlaceSuggestion | null }
-  | {
-      mode: "preview";
-      destination: PlaceSuggestion;
-      route: DrivingRoute;
-      sortieId: string;
-      stops: SortieStop[];
-      tariff: Tariff | null;
-      sortie: Sortie;
-    }
+  | PreviewNav
   | {
       mode: "guiding";
       kind: "search" | "sortie";
@@ -264,6 +272,9 @@ export function NavigationScreen({
   const displayedPoseRef = useRef<MotionPose | null>(null);
   const centered = useRef(false);
   const routeRequest = useRef(0);
+  const choiceGeneration = useRef(0);
+  const choiceChain = useRef(Promise.resolve());
+  const previewCommitRef = useRef<PreviewNav | null>(null);
   const rerouteInFlight = useRef(false);
   const offRouteSinceRef = useRef<number | null>(null);
   const rerouteGeneration = useRef(0);
@@ -1225,6 +1236,7 @@ export function NavigationScreen({
   }, [nav, routeEpoch, fix, timingPrefs.announceLeadMeters]);
 
   async function onSelect(suggestion: PlaceSuggestion): Promise<void> {
+    abandonPreviewChoice();
     setQuery(suggestion.label);
     setPendingWhereTo(null);
     const origin = fixRef.current;
@@ -1272,7 +1284,10 @@ export function NavigationScreen({
       return;
     }
 
-    const preview = await previewSortie(apiUrl, token, { ...whereToWrite(suggestion), sortieId: null });
+    const preview = await previewSortie(apiUrl, token, {
+      ...whereToWrite(suggestion, false),
+      sortieId: null,
+    });
     if (requestId !== routeRequest.current) {
       return;
     }
@@ -1299,6 +1314,7 @@ export function NavigationScreen({
     if (!suggestion || permission !== "granted" || !origin) {
       return;
     }
+    abandonPreviewChoice();
     const requestId = ++routeRequest.current;
     setPendingWhereTo(null);
     setFinding(true);
@@ -1307,26 +1323,6 @@ export function NavigationScreen({
   }
 
   async function authorChosen(suggestion: PlaceSuggestion, origin: GeoCoordinate, requestId: number): Promise<void> {
-    const authored = await authorSortie(apiUrl, token, whereToWrite(suggestion));
-    if (requestId !== routeRequest.current) {
-      return;
-    }
-    if (authored === "unauthorized") {
-      setFinding(false);
-      onUnauthorized();
-      return;
-    }
-    if (authored === "no-location") {
-      setFinding(false);
-      setNav({ mode: "browse", destination: suggestion, message: "Location is required." });
-      return;
-    }
-    if (typeof authored === "string") {
-      setFinding(false);
-      setNav({ mode: "browse", destination: suggestion, message: "The sortie was not saved." });
-      return;
-    }
-
     const [result, tariffResult] = await Promise.all([
       requestDrivingRoute(apiUrl, token, origin, suggestion),
       requestTariff(apiUrl, token),
@@ -1344,32 +1340,106 @@ export function NavigationScreen({
       return;
     }
     const tariff = typeof tariffResult === "string" ? null : tariffResult;
-    setNav({
+    choiceGeneration.current += 1;
+    const next: PreviewNav = {
       mode: "preview",
       destination: suggestion,
       route: result,
-      sortieId: authored.id,
-      stops: authored.stops,
+      sortieId: null,
+      stops: [],
       tariff,
-      sortie: authored,
-    });
+      sortie: null,
+      passenger: null,
+      pendingPassenger: null,
+      message: null,
+    };
+    previewCommitRef.current = next;
+    setNav(next);
     const camera = overviewCamera(result.path);
     if (camera) {
       mapRef.current?.setCamera(camera);
     }
   }
 
+  function onChooseKind(passenger: boolean): void {
+    const generation = choiceGeneration.current;
+    choiceChain.current = choiceChain.current
+      .catch(() => undefined)
+      .then(() => applyChoice(passenger, generation));
+  }
+
+  async function applyChoice(passenger: boolean, generation: number): Promise<void> {
+    const current = previewCommitRef.current;
+    if (generation !== choiceGeneration.current || !current) {
+      return;
+    }
+    if (current.passenger === passenger && current.sortieId && current.pendingPassenger === null) {
+      return;
+    }
+    const pending: PreviewNav = { ...current, pendingPassenger: passenger, message: null };
+    previewCommitRef.current = pending;
+    setNav(pending);
+    const body = whereToWrite(current.destination, passenger);
+    const saved = current.sortieId
+      ? await reviseSortie(apiUrl, token, current.sortieId, body)
+      : await authorSortie(apiUrl, token, body);
+    if (generation !== choiceGeneration.current) {
+      return;
+    }
+    if (saved === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    const latest = previewCommitRef.current;
+    if (!latest) {
+      return;
+    }
+    if (saved === "no-location") {
+      const failed: PreviewNav = { ...latest, pendingPassenger: null, message: "Location is required." };
+      previewCommitRef.current = failed;
+      setNav(failed);
+      return;
+    }
+    if (typeof saved === "string") {
+      const failed: PreviewNav = { ...latest, pendingPassenger: null, message: "The sortie was not saved." };
+      previewCommitRef.current = failed;
+      setNav(failed);
+      return;
+    }
+    const committed: PreviewNav = {
+      ...latest,
+      passenger,
+      pendingPassenger: null,
+      sortieId: saved.id,
+      stops: saved.stops,
+      sortie: saved,
+      message: null,
+    };
+    previewCommitRef.current = committed;
+    setNav(committed);
+  }
+
+  function abandonPreviewChoice(): void {
+    choiceGeneration.current += 1;
+    previewCommitRef.current = null;
+  }
+
   async function onStart(): Promise<void> {
     if (nav.mode !== "preview") {
       return;
     }
+    const sortieId = nav.sortieId;
+    if (sortieId === null || nav.passenger === null || nav.pendingPassenger !== null) {
+      return;
+    }
     const preview = nav;
-    const commenced = await commenceSortie(apiUrl, token, preview.sortieId);
+    const commenced = await commenceSortie(apiUrl, token, sortieId);
     if (commenced === "unauthorized") {
       onUnauthorized();
       return;
     }
     if (typeof commenced === "string") {
+      abandonPreviewChoice();
       setNav({
         mode: "browse",
         destination: preview.destination,
@@ -1377,6 +1447,7 @@ export function NavigationScreen({
       });
       return;
     }
+    abandonPreviewChoice();
     rerouteInFlight.current = false;
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
@@ -1437,6 +1508,7 @@ export function NavigationScreen({
       }
     }
     await setActiveSortieObservation(null);
+    abandonPreviewChoice();
     routeRequest.current += 1;
     rerouteGeneration.current += 1;
     rerouteInFlight.current = false;
@@ -1617,6 +1689,7 @@ export function NavigationScreen({
               bias={fix}
               onQueryChange={(text) => {
                 routeRequest.current += 1;
+                abandonPreviewChoice();
                 setFinding(false);
                 setPendingWhereTo(null);
                 setQuery(text);
@@ -1721,13 +1794,41 @@ export function NavigationScreen({
         {preview ? (
           <View style={[styles.sheet, styles.startSheet]} pointerEvents="auto">
             <Text style={styles.destination}>{preview.destination.label}</Text>
-            <Text style={styles.summary}>
-              {formatSeconds(preview.route.durationSeconds)} · {formatMeters(preview.route.distanceMeters)}
-              {" · "}
-              {formatTripEstimate(preview.tariff, preview.route.distanceMeters)}
-            </Text>
+            <Text style={styles.summary}>{previewSummary(preview)}</Text>
+            <View style={styles.choiceRow}>
+              <Pressable
+                accessibilityLabel="Passenger"
+                accessibilityRole="button"
+                accessibilityState={{ selected: previewChoice(preview) === true }}
+                onPress={() => onChooseKind(true)}
+                style={[styles.choice, previewChoice(preview) === true ? styles.choiceSelected : null]}
+              >
+                <Text style={[styles.choiceText, previewChoice(preview) === true ? styles.choiceTextSelected : null]}>
+                  Passenger
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Reposition"
+                accessibilityRole="button"
+                accessibilityState={{ selected: previewChoice(preview) === false }}
+                onPress={() => onChooseKind(false)}
+                style={[styles.choice, previewChoice(preview) === false ? styles.choiceSelected : null]}
+              >
+                <Text style={[styles.choiceText, previewChoice(preview) === false ? styles.choiceTextSelected : null]}>
+                  Reposition
+                </Text>
+              </Pressable>
+            </View>
+            {preview.message ? <Text style={styles.message}>{preview.message}</Text> : null}
             <View style={styles.row}>
-              <Pressable style={styles.primary} onPress={onStart}>
+              <Pressable
+                accessibilityLabel="Start"
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !previewStartReady(preview) }}
+                disabled={!previewStartReady(preview)}
+                onPress={() => void onStart()}
+                style={[styles.primary, previewStartReady(preview) ? null : styles.primaryDisabled]}
+              >
                 <Text style={styles.primaryText}>Start</Text>
               </Pressable>
               <Pressable style={styles.secondary} onPress={onDismiss}>
@@ -1755,7 +1856,7 @@ export function NavigationScreen({
   );
 }
 
-function whereToWrite(suggestion: PlaceSuggestion): SortieWriteRequest {
+function whereToWrite(suggestion: PlaceSuggestion, passenger: boolean): SortieWriteRequest {
   return {
     label: "",
     arrivalAt: null,
@@ -1767,10 +1868,26 @@ function whereToWrite(suggestion: PlaceSuggestion): SortieWriteRequest {
         latitude: suggestion.latitude,
         longitude: suggestion.longitude,
         waitMinutes: 0,
-        passenger: true,
+        passenger,
       },
     ],
   };
+}
+
+function previewChoice(preview: PreviewNav): boolean | null {
+  return preview.pendingPassenger ?? preview.passenger;
+}
+
+function previewStartReady(preview: PreviewNav): boolean {
+  return preview.passenger !== null && preview.sortieId !== null && preview.pendingPassenger === null;
+}
+
+function previewSummary(preview: PreviewNav): string {
+  const trip = `${formatSeconds(preview.route.durationSeconds)} · ${formatMeters(preview.route.distanceMeters)}`;
+  if (previewChoice(preview) !== true) {
+    return trip;
+  }
+  return `${trip} · ${formatTripEstimate(preview.tariff, preview.route.distanceMeters)}`;
 }
 
 function placeFromStop(stop: SortieStop): PlaceSuggestion {
@@ -1924,6 +2041,29 @@ function createStyles(colors: ThemeColors) {
       marginTop: 6,
       color: colors.text,
     },
+    choiceRow: {
+      flexDirection: "row",
+      gap: 12,
+      marginTop: 16,
+    },
+    choice: {
+      flex: 1,
+      borderRadius: 10,
+      paddingVertical: 14,
+      alignItems: "center",
+      backgroundColor: colors.surfaceMuted,
+    },
+    choiceSelected: {
+      backgroundColor: colors.accent,
+    },
+    choiceText: {
+      fontSize: 18,
+      color: colors.text,
+    },
+    choiceTextSelected: {
+      color: "#fff",
+      fontWeight: "600",
+    },
     row: {
       flexDirection: "row",
       gap: 12,
@@ -1940,6 +2080,9 @@ function createStyles(colors: ThemeColors) {
       color: "#fff",
       fontSize: 18,
       fontWeight: "600",
+    },
+    primaryDisabled: {
+      opacity: 0.4,
     },
     secondary: {
       flex: 1,

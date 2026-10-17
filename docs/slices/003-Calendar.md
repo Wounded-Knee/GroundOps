@@ -24,7 +24,7 @@ After this slice, a person who is signed in, as slice 001 defines, can:
 6. See the last fetched calendar range when the server cannot be reached.
 7. Sign out, so that session can no longer be used, as slice 001 defines. Sign-out clears the local calendar cache.
 
-On every platform the calendar opens from the bottom bar in **day** view. While Calendar is already open, another tap on that Calendar control rotates the scope day → week → month → day. The calendar stays available during guidance and arrival. Authoring is also available from the New Sortie control on that bar. On iOS and Android, choosing a place in the navigation Where to? field authors an immediate one-stop sortie with passenger on for the signed-in driver before the map previews a route or starts guidance. That choice does not open this dialog.
+On every platform the calendar opens from the bottom bar in **day** view. While Calendar is already open, another tap on that Calendar control rotates the scope day → week → month → day. The calendar stays available during guidance and arrival. Authoring is also available from the New Sortie control on that bar. On iOS and Android, choosing a place in the navigation Where to? field previews a route, then asks Passenger or Reposition. The sortie is written when the driver chooses, as one immediate stop with that passenger flag. That flow does not open this dialog.
 
 Search and driving guidance from slice 002 stay as they are.
 
@@ -75,9 +75,9 @@ Creating a sortie does not make the driver responsible. This slice records no ac
 
 The visible scope is one of three. Opening the calendar starts in **day**.
 
-- **Month.** A month grid. Each sortie is a chip on the day of its cached start, showing the label. Today is marked.
-- **Week.** Seven day columns and an hour grid. Each sortie is a block from its cached start to its cached end. The hour grid jumps so the now-line is vertically centered when week is shown.
-- **Day.** The same hour grid for one date. The hour grid jumps so the now-line is vertically centered when day is shown.
+- **Month.** A month grid. Each sortie is a chip on the day of its cached start, showing the label. A sortie whose stops all have passenger off uses the reposition theme color. Any passenger stop keeps the usual chip color. Today is marked.
+- **Week.** Seven day columns and an hour grid. Each sortie is a block from its cached start to its cached end. A sortie whose stops all have passenger off uses the reposition theme color. Any passenger stop keeps the usual block color. The hour grid jumps so the now-line is vertically centered when week is shown.
+- **Day.** The same hour grid for one date, with the same block colors. The hour grid jumps so the now-line is vertically centered when day is shown.
 
 Previous, next, and today move the visible period. A scope control switches month, week, and day. While Calendar is open, another bottom-bar Calendar tap rotates day → week → month → day. Tapping a day in the month grid, or a day heading in the week, opens that day. Tapping a sortie opens a summary of that sortie. One create action is available in every scope. It opens the dialog with no arrival, so a save is an immediate departure. In week and day, tapping an empty hour opens create with that hour as the arrival.
 
@@ -169,11 +169,11 @@ A rejected session creates no driver and no sortie. No stops, a stop with no coo
 
 # 7. Interfaces
 
-**Month.** A month grid. A chip on the cached start day shows the label. Today is marked. Previous, next, and today move the month. Tapping a day opens that day. Dragging a chip onto another day shifts the arrival by whole days and keeps the clock time.
+**Month.** A month grid. A chip on the cached start day shows the label. A sortie whose stops all have passenger off uses the reposition theme color. Any passenger stop keeps the usual chip color. Today is marked. Previous, next, and today move the month. Tapping a day opens that day. Dragging a chip onto another day shifts the arrival by whole days and keeps the clock time.
 
-**Week.** Seven day columns and an hour grid. A block runs from the sortie's cached start to its cached end. Previous, next, and today move the week. Tapping a day heading opens that day. When week is activated, the hour grid jumps (no animation) so the now-line sits at the vertical center of the scroll viewport.
+**Week.** Seven day columns and an hour grid. A block runs from the sortie's cached start to its cached end, in the reposition theme color when every stop has passenger off, and in the usual color when any stop has passenger on. Previous, next, and today move the week. Tapping a day heading opens that day. When week is activated, the hour grid jumps (no animation) so the now-line sits at the vertical center of the scroll viewport.
 
-**Day.** One date and the same hour grid. Previous, next, and today move the day. When day is activated, the hour grid jumps so the now-line sits at the vertical center of the scroll viewport.
+**Day.** One date and the same hour grid and block colors. Previous, next, and today move the day. When day is activated, the hour grid jumps so the now-line sits at the vertical center of the scroll viewport.
 
 **Scope.** Month, week, and day. Switching scope reads the range that scope shows. Opening the calendar starts in day. The in-calendar scope control switches among the three. While Calendar is the active bottom-bar destination, another Calendar tap rotates day → week → month → day.
 
@@ -183,7 +183,7 @@ A rejected session creates no driver and no sortie. No stops, a stop with no coo
 
 **Dialog.** Used to author and to revise. Revise opens it filled from the sortie. The fields are a label, an arrival date, an arrival time, a passenger name, a passenger phone, and an ordered list of stop fieldsets. Arrival date and arrival time share one row when an arrival is set, and each takes half of that row. They use `@react-native-community/datetimepicker`. The author can clear the arrival, which shows Leave now and sends no arrival. The phone field uses a numeric keyboard: `phone-pad` on iOS and Android, and `tel` on web. As the person types, the field shows US format `(555) 123-4567`. Each stop fieldset has a passenger toggle and an address field. When a place is chosen, the fieldset also has wait minutes. A `+` control appends another stop. A stop may be removed when more than one remains. On create, the first stop is seeded from the device’s current GPS address when a fix is available. Unless the author edits the label, it follows the passenger name, or else the first passenger-flagged stop’s address. Save requires at least one chosen stop, and every listed stop must be chosen. One action: save.
 
-**Where to?** On iOS and Android, choosing a suggestion in the navigation search authors a sortie before route preview. The body is an empty label, no arrival, no passenger name or phone, and one stop for that suggestion with passenger on. The client ensures the signed-in user is a driver and reports the current fix first. Preview and guidance follow only after that write succeeds. A failure stays on the map and does not start guidance. Dismissing the preview leaves the sortie. Choosing another place authors another sortie.
+**Where to?** On iOS and Android, choosing a suggestion in the navigation search previews the route before a sortie exists. The preview asks Passenger or Reposition, neither selected. Choosing writes the sortie: an empty label, no arrival, no passenger name or phone, and one stop for that suggestion with passenger on for Passenger and passenger off for Reposition. Switching the choice revises that same sortie. Start stays disabled until the write succeeds. The client ensures the signed-in user is a driver and reports the current fix before the preview. A failure stays on the map and does not start guidance. Dismissing before a choice leaves no sortie. Dismissing after a choice leaves the sortie. Choosing another place leaves that sortie and can author another.
 
 **Move.** On week and day, dragging the hour grid scrolls it. Moving a block starts with a long-press, which gives haptic feedback, followed by a drag. Dropped times snap to 15 minutes. The block stays where it was dropped until the person confirms, and through the save; it returns if they cancel or the save fails. The duration is not edited. On month, dragging a chip to another day shifts the arrival by whole days and keeps the clock time.
 
@@ -273,7 +273,7 @@ The slice works when all of the following are true on the local stack:
 11. After a successful read, when the server cannot be reached, the person can switch month, week, and day, move previous, next, and today, and open a day from the month grid or a week day heading. Cached sorties that fall on the visible days stay visible. The device does not apply an author, revise, or drag.
 12. When the server cannot be reached and no range is cached, the grid is shown and the screen says the calendar could not be loaded.
 13. Sign-out revokes that session and clears the local calendar cache.
-14. On every platform the calendar opens from the bottom bar and stays available during guidance and arrival. Choosing a Where to? suggestion on iOS or Android authors an immediate one-stop passenger sortie before route preview or guidance, and does not open the dialog. New Sortie opens the author dialog from any destination. On web, Navigation still shows identity and live-connection state. Sign out is on Settings.
+14. On every platform the calendar opens from the bottom bar and stays available during guidance and arrival. Choosing a Where to? suggestion on iOS or Android previews the route, then writes an immediate one-stop sortie only after the driver chooses Passenger or Reposition, and does not open the dialog. A sortie whose stops all have passenger off is drawn with the reposition theme color on month chips and on day and week blocks. A sortie with any passenger stop keeps the usual color. New Sortie opens the author dialog from any destination. On web, Navigation still shows identity and live-connection state. Sign out is on Settings.
 15. The persisted sortie has its own id, type `task`, a company of record, an authoring driver, and its own stop rows. The database has no appointment table.
 16. The flow runs with `pnpm dev:server` and `pnpm dev:mobile` on web, and with the local development build on iOS and Android. No EAS build and no store build are required.
 17. Tapping a sortie opens a summary of the label, or the address when the label is empty, the arrival, the cached start, the address the start was driven from, the cached end, the passenger fields, and the stops. That address is the same place used to compute the start. Revise on that summary opens the dialog.
