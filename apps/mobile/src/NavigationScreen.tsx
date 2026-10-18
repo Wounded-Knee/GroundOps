@@ -16,6 +16,8 @@ import * as Speech from "expo-speech";
 import { useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { AppState, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
+import { NetworkStatusIcon } from "./NetworkStatusIcon";
+import type { NetworkFault } from "./networkStatus";
 import { meterPanelHeight } from "./MeterStrip";
 import { useTheme } from "./ThemeProvider";
 import { withAlpha, type ThemeColors } from "./theme";
@@ -204,6 +206,7 @@ export function NavigationScreen({
   meterCommenceRef,
   applySortieUpdateRef,
   accountView = null,
+  networkFault,
 }: {
   token: string;
   onUnauthorized: () => void;
@@ -219,6 +222,7 @@ export function NavigationScreen({
   meterOnwardRef?: MutableRefObject<(() => void) | null>;
   meterCommenceRef?: MutableRefObject<(() => void) | null>;
   applySortieUpdateRef?: MutableRefObject<((sortie: Sortie) => void) | null>;
+  networkFault: NetworkFault | null;
   accountView?: {
     user: User;
     live: "authenticated" | "closed";
@@ -1705,34 +1709,39 @@ export function NavigationScreen({
       >
         {showSearch ? (
           <View style={styles.searchCard} pointerEvents="auto">
-            <AddressPicker
-              placeholder="Where to?"
-              appearance="search"
-              query={query}
-              token={token}
-              bias={fix}
-              onQueryChange={(text) => {
-                routeRequest.current += 1;
-                abandonPreviewChoice();
-                setFinding(false);
-                setPendingWhereTo(null);
-                setQuery(text);
-                setNav((current) =>
-                  current.mode === "guiding" || current.mode === "arrived"
-                    ? current
-                    : { mode: "browse", destination: null, message: null },
-                );
-              }}
-              onSelect={(suggestion) => {
-                void onSelect(suggestion);
-              }}
-              onUnauthorized={onUnauthorized}
-              onSearchFailed={() => {
-                setNav((current) =>
-                  current.mode === "browse" ? { ...current, message: "Search failed." } : current,
-                );
-              }}
-            />
+            <View style={styles.searchHead}>
+              {networkFault ? <NetworkStatusIcon fault={networkFault} /> : null}
+              <View style={styles.searchField}>
+                <AddressPicker
+                  placeholder="Where to?"
+                  appearance="search"
+                  query={query}
+                  token={token}
+                  bias={fix}
+                  onQueryChange={(text) => {
+                    routeRequest.current += 1;
+                    abandonPreviewChoice();
+                    setFinding(false);
+                    setPendingWhereTo(null);
+                    setQuery(text);
+                    setNav((current) =>
+                      current.mode === "guiding" || current.mode === "arrived"
+                        ? current
+                        : { mode: "browse", destination: null, message: null },
+                    );
+                  }}
+                  onSelect={(suggestion) => {
+                    void onSelect(suggestion);
+                  }}
+                  onUnauthorized={onUnauthorized}
+                  onSearchFailed={() => {
+                    setNav((current) =>
+                      current.mode === "browse" ? { ...current, message: "Search failed." } : current,
+                    );
+                  }}
+                />
+              </View>
+            </View>
             {pendingWhereTo && browseMessage ? (
               <View style={styles.searchWarning}>
                 <Text style={styles.searchWarningText}>{browseMessage}</Text>
@@ -1974,6 +1983,13 @@ function createStyles(colors: ThemeColors) {
       borderColor: colors.borderStrong,
       borderRadius: 12,
       overflow: "hidden",
+    },
+    searchHead: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+    },
+    searchField: {
+      flex: 1,
     },
     searchWarning: {
       paddingHorizontal: 12,

@@ -325,6 +325,9 @@ export async function previewSortie(
       cachedStart,
       cachedEnd,
     };
+    if (row.actualEnd !== null) {
+      continue;
+    }
     if (row.actualStart !== null) {
       held.push({ ...base, start: cachedStart, end: cachedEnd, changed: false, failed: false });
       continue;

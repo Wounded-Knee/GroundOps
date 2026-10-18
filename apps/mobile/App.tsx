@@ -54,6 +54,8 @@ import {
 } from "./src/sessionClient";
 import { deleteStoredSession, readStoredSession, writeStoredSession } from "./src/sessionStore";
 import { stopLocationObservationUpdates } from "./src/locationObservationReporting";
+import type { SocketState } from "./src/networkStatus";
+import { useNetworkStatus } from "./src/useNetworkStatus";
 import { ThemeProvider, useTheme } from "./src/ThemeProvider";
 import type { ThemeColors } from "./src/theme";
 import { VisualAlert } from "./src/VisualAlert";
@@ -124,6 +126,8 @@ function AppContent() {
   const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
   const toggleAvailabilityRef = useRef<() => void>(() => undefined);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
+  const [socketLink, setSocketLink] = useState<SocketState>("idle");
+  const networkFault = useNetworkStatus(apiUrl, socketLink);
   const endGuidanceRef = useRef<(() => void) | null>(null);
   const meterArriveRef = useRef<(() => void) | null>(null);
   const meterPlusOneRef = useRef<(() => void) | null>(null);
@@ -213,10 +217,12 @@ function AppContent() {
 
   useEffect(() => {
     if (!sessionToken) {
+      setSocketLink("idle");
       return;
     }
 
     const token = sessionToken;
+    setSocketLink("connecting");
     const effectGeneration = generation.current;
     let cancelled = false;
     let connection = 0;
@@ -241,6 +247,7 @@ function AppContent() {
           return;
         }
         attempt = 0;
+        setSocketLink("open");
         setPhase((current) =>
           current.status === "signed-in" && current.token === token
             ? { ...current, live: "authenticated" }
@@ -320,6 +327,7 @@ function AppContent() {
         await onSessionRejected();
         return;
       }
+      setSocketLink("down");
       setPhase((existing) =>
         existing.status === "signed-in" && existing.token === token
           ? { ...existing, live: "closed" }
@@ -779,6 +787,7 @@ function AppContent() {
                   meterCommenceRef={meterCommenceRef}
                   applySortieUpdateRef={applySortieUpdateRef}
                   accountView={{ user: phase.user, live: phase.live, activity }}
+                  networkFault={networkFault}
                 />
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (
@@ -787,6 +796,7 @@ function AppContent() {
                     token={phase.token}
                     onUnauthorized={() => void onSessionRejected()}
                     accountView={{ user: phase.user, live: phase.live, activity }}
+                    networkFault={networkFault}
                   />
                 </View>
               ) : null}

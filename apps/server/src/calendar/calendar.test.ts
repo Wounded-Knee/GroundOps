@@ -2337,6 +2337,63 @@ describe("calendar", () => {
     }
   });
 
+  it("does not list a sortie that was just ended when previewing an immediate reposition", async () => {
+    const person = await createSession({
+      sub: `calendar-preview-ended-${crypto.randomUUID()}`,
+      displayName: "Preview ended",
+      email: null,
+    });
+
+    try {
+      await ensureDriver(person.user);
+      await placeDriver(person.user.id);
+      const arrival = new Date("2026-09-02T15:00:00.000Z");
+      const authored = await authorSortie(person.user, task("Trip", arrival), scheduleDeps);
+      assert.equal(typeof authored, "object");
+      if (typeof authored !== "object") {
+        return;
+      }
+
+      const commenceNow = new Date("2026-09-02T14:20:00.000Z");
+      const commenced = await commenceSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => commenceNow,
+      });
+      assert.equal(typeof commenced, "object");
+      if (typeof commenced !== "object") {
+        return;
+      }
+      assert.equal(commenced.scheduledEnd, "2026-09-02T16:00:00.000Z");
+
+      const completeNow = new Date("2026-09-02T15:10:00.000Z");
+      const completed = await completeSortie(person.user, authored.id, {
+        ...scheduleDeps,
+        now: () => completeNow,
+      });
+      assert.equal(typeof completed, "object");
+      if (typeof completed !== "object") {
+        return;
+      }
+      assert.equal(completed.actualEnd, completeNow.toISOString());
+
+      const preview = await previewSortie(
+        person.user,
+        {
+          label: "",
+          arrivalAt: null,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [lineStop({ latitude: 41, longitude: -73 }, "Elsewhere", false)],
+        },
+        null,
+        { ...scheduleDeps, now: () => completeNow },
+      );
+      assert.deepEqual(preview, { endangered: [] });
+    } finally {
+      await removeUser(person.user.id);
+    }
+  });
+
   it("requires a location to preview an immediate departure", async () => {
     const person = await createSession({
       sub: `calendar-preview-location-${crypto.randomUUID()}`,
