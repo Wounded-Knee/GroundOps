@@ -12,8 +12,16 @@ import { DirectoryScreen } from "./src/DirectoryScreen";
 import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
 import { clearCalendarCache } from "./src/calendarCache";
-import { authorSortie, ensureCurrentDriver, readActivity, reviseSortie } from "./src/calendarClient";
-import { applyEnvelope, applySnapshot, emptyActivity, readRealtimeEnvelope, type AccountActivity } from "./src/liveActivity";
+import { authorSortie, completeSortie, ensureCurrentDriver, readActivity, reviseSortie } from "./src/calendarClient";
+import {
+  applyEnvelope,
+  applySnapshot,
+  completedSortie,
+  emptyActivity,
+  meterDisplayForActivity,
+  readRealtimeEnvelope,
+  type AccountActivity,
+} from "./src/liveActivity";
 import { formatUsPhone } from "./src/calendarTime";
 import { AppWideStatus } from "./src/AppWideStatus";
 import type { MeterDisplay } from "./src/MeterStrip";
@@ -482,6 +490,27 @@ function AppContent() {
     setActivity(emptyActivity);
   }
 
+  function releaseSortie(completed: Sortie): void {
+    setActivity((current) =>
+      current.sortie?.id === completed.id ? { ...current, sortie: null, meter: null } : current,
+    );
+    setMeterReading(null);
+    setCalendarReload((current) => current + 1);
+  }
+
+  async function finishHeldSortie(token: string, sortieId: string): Promise<void> {
+    const result = await completeSortie(resolveApiUrl(), token, sortieId);
+    if (result === "unauthorized") {
+      await onSessionRejected();
+      return;
+    }
+    const completed = completedSortie(result);
+    if (completed === null) {
+      return;
+    }
+    releaseSortie(completed);
+  }
+
   async function onSignIn(): Promise<void> {
     setSubmitting(true);
     setPhase({ status: "signed-out", message: null });
@@ -676,9 +705,11 @@ function AppContent() {
 
   const signedIn = phase.status === "signed-in";
   const statusOverlaysMap = destination === "navigation" && compose === null;
+  const heldMeter = meterDisplayForActivity(activity.sortie, activity.meter);
+  const shownMeter = meterReading ?? heldMeter;
   const appWideStatus = (
     <AppWideStatus
-      reading={meterReading}
+      reading={shownMeter}
       current={availability.current}
       loaded={availabilityLoaded}
       busy={availabilityBusy}
@@ -687,7 +718,18 @@ function AppContent() {
         toggleAvailabilityRef.current();
       }}
       onEndSortie={() => {
-        endGuidanceRef.current?.();
+        if (endGuidanceRef.current) {
+          endGuidanceRef.current();
+          return;
+        }
+        if (phase.status !== "signed-in") {
+          return;
+        }
+        const open = activity.sortie;
+        if (open === null || open.actualStart === null || open.actualEnd !== null) {
+          return;
+        }
+        void finishHeldSortie(phase.token, open.id);
       }}
       onArrive={() => meterArriveRef.current?.()}
       onPlusOneMinute={() => meterPlusOneRef.current?.()}
@@ -726,8 +768,8 @@ function AppContent() {
                   onMeterEnded={() => {
                     setMeterReading(null);
                   }}
-                  onSortieCompleted={() => {
-                    setCalendarReload((current) => current + 1);
+                  onSortieCompleted={(completed) => {
+                    releaseSortie(completed);
                   }}
                   onOnwardDestination={openOnwardDialog}
                   endGuidanceRef={endGuidanceRef}

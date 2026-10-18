@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { RealtimeEnvelope, Sortie } from "@groundops/contracts";
+import type { MeterReading } from "@groundops/contracts";
 import {
   applyEnvelope,
   applySnapshot,
+  completedSortie,
   emptyActivity,
+  meterDisplayForActivity,
   overviewFitPoints,
   overviewFrameKey,
   overviewPathForUpload,
@@ -69,6 +72,41 @@ describe("account activity", () => {
     assert.equal(overviewPathForUpload("remaining-leg", 1, path), undefined);
     assert.equal(overviewPathForUpload("tick", 0, path), undefined);
     assert.deepEqual(overviewPathForUpload("stops-revised", 2, path), path);
+  });
+
+  it("keeps a meter for an in-progress sortie and drops it once the sortie is closed", () => {
+    const open = sampleSortie();
+    const reading: MeterReading = {
+      sortieId: open.id,
+      milesTraveled: 2.5,
+      waitSeconds: 90,
+      totalCents: 1100,
+      estimateCents: 1600,
+      remainingMeters: 400,
+      overviewPath: [],
+      updatedAt: "2026-10-09T12:10:00.000Z",
+    };
+    const shown = meterDisplayForActivity(open, reading);
+    assert.equal(shown?.milesTraveled, 2.5);
+    assert.equal(shown?.waitSeconds, 90);
+    assert.equal(shown?.remainingMeters, 400);
+    assert.equal(shown?.flagDropped, true);
+    assert.equal(shown?.tariff, null);
+
+    const zeroed = meterDisplayForActivity(open, null);
+    assert.equal(zeroed?.milesTraveled, 0);
+    assert.equal(zeroed?.flagDropped, false);
+
+    assert.equal(meterDisplayForActivity({ ...open, actualEnd: "2026-10-09T12:40:00.000Z" }, reading), null);
+    assert.equal(meterDisplayForActivity(null, reading), null);
+  });
+
+  it("hides the meter only when complete returns the sortie", () => {
+    const open = sampleSortie();
+    assert.equal(completedSortie("unreachable"), null);
+    assert.equal(completedSortie("rejected"), null);
+    assert.equal(completedSortie("unauthorized"), null);
+    assert.equal(completedSortie({ ...open, actualEnd: "2026-10-09T12:40:00.000Z" })?.id, open.id);
   });
 
   it("sends the first meter report immediately and throttles the next", () => {

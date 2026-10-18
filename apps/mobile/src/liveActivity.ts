@@ -7,6 +7,7 @@ import type {
   Sortie,
   SortieStop,
 } from "@groundops/contracts";
+import type { MeterDisplay } from "./MeterStrip";
 
 export type AccountActivity = {
   location: LocationFix | null;
@@ -26,6 +27,44 @@ export type EnvelopeApply = {
   state: AccountActivity;
   calendarChanged: boolean;
 };
+
+/** The meter stays up for a commenced sortie. A completed sortie, or no sortie, hides it. */
+export function meterDisplayForActivity(sortie: Sortie | null, meter: MeterReading | null): MeterDisplay | null {
+  if (sortie === null || sortie.actualStart === null || sortie.actualEnd !== null) {
+    return null;
+  }
+  const milesTraveled = meter?.milesTraveled ?? 0;
+  const waitSeconds = meter?.waitSeconds ?? 0;
+  const remainingMeters = meter?.remainingMeters ?? 0;
+  const flagDropped = milesTraveled > 0 || waitSeconds > 0 || (meter?.totalCents ?? 0) > 0;
+  return {
+    milesTraveled,
+    waitSeconds,
+    remainingMeters,
+    baselineRemainingMeters: remainingMeters,
+    estimatedDurationSeconds: 0,
+    turnRemainingMeters: 0,
+    turnBaselineMeters: 0,
+    tariff: null,
+    canArrive: false,
+    dwelling: false,
+    waitEndsAt: null,
+    meterPaused: false,
+    flashFare: false,
+    showOnward: false,
+    showCommence: false,
+    pendingNextLeg: false,
+    flagDropped,
+  };
+}
+
+/** End Sortie hides the meter only when the server returns the completed sortie. */
+export function completedSortie(result: Sortie | string): Sortie | null {
+  if (typeof result === "object" && result !== null && "id" in result) {
+    return result;
+  }
+  return null;
+}
 
 export function applySnapshot(activity: ActivityResponse): AccountActivity {
   return {

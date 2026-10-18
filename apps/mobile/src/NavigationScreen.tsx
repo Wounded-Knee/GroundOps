@@ -100,7 +100,7 @@ import {
   type MeterState,
 } from "./meter";
 import type { AccountActivity } from "./liveActivity";
-import { overviewPathForUpload, reportDelayMs, stopListKey } from "./liveActivity";
+import { completedSortie, overviewPathForUpload, reportDelayMs, stopListKey } from "./liveActivity";
 import type { MeterDisplay } from "./MeterStrip";
 import { PlatformMap, type MapCamera, type MapCameraMove, type MapHandle } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
@@ -211,7 +211,7 @@ export function NavigationScreen({
   onSortieGuideConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
-  onSortieCompleted?: () => void;
+  onSortieCompleted?: (sortie: Sortie) => void;
   onOnwardDestination?: (sortie: Sortie) => void;
   endGuidanceRef?: MutableRefObject<(() => void) | null>;
   meterArriveRef?: MutableRefObject<(() => void) | null>;
@@ -1485,28 +1485,57 @@ export function NavigationScreen({
     void endGuidance();
   }
 
+  function dismissPreview(): void {
+    const current = navRef.current;
+    if (current.mode !== "preview") {
+      return;
+    }
+    abandonPreviewChoice();
+    routeRequest.current += 1;
+    setFinding(false);
+    setPendingWhereTo(null);
+    setQuery("");
+    const browse = { mode: "browse" as const, destination: null, message: null };
+    navRef.current = browse;
+    setNav(browse);
+  }
+
   async function endGuidance(): Promise<void> {
     if (endingSortieRef.current) {
       return;
     }
-    endingSortieRef.current = true;
     const current = navRef.current;
-    const apiUrl = resolveApiUrl();
-    if (
-      (current.mode === "guiding" || current.mode === "arrived") &&
-      current.kind === "sortie" &&
-      current.sortieId
-    ) {
-      const completed = await completeSortie(apiUrl, token, current.sortieId);
-      if (completed === "unauthorized") {
-        endingSortieRef.current = false;
-        onUnauthorized();
-        return;
-      }
-      if (typeof completed === "object") {
-        onSortieCompleted?.();
-      }
+    const guidingId =
+      (current.mode === "guiding" || current.mode === "arrived") && current.kind === "sortie"
+        ? current.sortieId
+        : null;
+    const held = accountView?.activity.sortie;
+    const heldId = held && held.actualStart !== null && held.actualEnd === null ? held.id : null;
+    const sortieId = guidingId ?? heldId;
+    if (!sortieId) {
+      return;
     }
+    endingSortieRef.current = true;
+    const apiUrl = resolveApiUrl();
+    const result = await completeSortie(apiUrl, token, sortieId);
+    if (result === "unauthorized") {
+      endingSortieRef.current = false;
+      onUnauthorized();
+      return;
+    }
+    const completed = completedSortie(result);
+    if (completed === null) {
+      endingSortieRef.current = false;
+      return;
+    }
+    onSortieCompleted?.(completed);
+    if (guidingId === null) {
+      endingSortieRef.current = false;
+      return;
+    }
+    const browse = { mode: "browse" as const, destination: null, message: null };
+    navRef.current = browse;
+    setNav(browse);
     await setActiveSortieObservation(null);
     abandonPreviewChoice();
     routeRequest.current += 1;
@@ -1525,20 +1554,15 @@ export function NavigationScreen({
     }
     pendingMeterRef.current = null;
     meterSentAtRef.current = null;
-    if (
-      (current.mode === "guiding" || current.mode === "arrived") &&
-      current.kind === "sortie" &&
-      current.sortieId
-    ) {
-      const cleared = await clearMeterReading(apiUrl, token);
-      if (cleared === "unauthorized") {
-        endingSortieRef.current = false;
-        onUnauthorized();
-        return;
-      }
+    const cleared = await clearMeterReading(apiUrl, token);
+    if (cleared === "unauthorized") {
+      endingSortieRef.current = false;
+      onMeterReading?.(null);
+      onMeterEnded?.();
+      onUnauthorized();
+      return;
     }
     resetArrivalDwell();
-    setNav({ mode: "browse", destination: null, message: null });
     endingSortieRef.current = false;
     onMeterReading?.(null);
     onMeterEnded?.();
@@ -1831,7 +1855,7 @@ export function NavigationScreen({
               >
                 <Text style={styles.primaryText}>Start</Text>
               </Pressable>
-              <Pressable style={styles.secondary} onPress={onDismiss}>
+              <Pressable style={styles.secondary} onPress={dismissPreview}>
                 <Text style={styles.secondaryText}>Dismiss</Text>
               </Pressable>
             </View>

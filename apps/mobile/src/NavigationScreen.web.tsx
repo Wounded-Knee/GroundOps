@@ -58,7 +58,7 @@ export function NavigationScreen({
   onSortieGuideConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
-  onSortieCompleted?: () => void;
+  onSortieCompleted?: (sortie: Sortie) => void;
   onOnwardDestination?: (sortie: Sortie) => void;
   endGuidanceRef?: MutableRefObject<(() => void) | null>;
   meterArriveRef?: MutableRefObject<(() => void) | null>;
