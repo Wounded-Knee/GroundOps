@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { MeterDisplay } from "./MeterStrip";
 import type { SortieGuideCommand } from "./sortieGuide";
+import type { PlaceGuideCommand } from "./placeGuide";
 import { useTheme } from "./ThemeProvider";
 import { formatMiles, formatMoney, formatWaitMinutes } from "./meter";
 import { overviewFitPoints, overviewFrameKey, type AccountActivity } from "./liveActivity";
@@ -56,6 +57,8 @@ export function NavigationScreen({
   onUnauthorized: () => void;
   sortieGuide?: SortieGuideCommand | null;
   onSortieGuideConsumed?: () => void;
+  placeGuide?: PlaceGuideCommand | null;
+  onPlaceGuideConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
   onSortieCompleted?: (sortie: Sortie) => void;

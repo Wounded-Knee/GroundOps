@@ -1,4 +1,4 @@
-import type { AvailabilityInterval, Sortie, SortieWriteRequest } from "@groundops/contracts";
+import type { AvailabilityInterval, PlaceSuggestion, Sortie, SortieWriteRequest } from "@groundops/contracts";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
@@ -19,6 +19,7 @@ import {
   type NativeScrollEvent,
 } from "react-native";
 import { availableYellow } from "./AvailabilityStatus";
+import { saveChosenPlace } from "./addressBookStore";
 import { resolveApiUrl } from "./apiUrl";
 import { readCalendarCache, writeCalendarCache } from "./calendarCache";
 import {
@@ -592,6 +593,16 @@ export function CalendarScreen({
     });
   }
 
+  async function saveStopAddress(place: PlaceSuggestion): Promise<void> {
+    const result = await saveChosenPlace(apiUrl, token, place);
+    if (result === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    const text = result === "ok" ? "Saved." : result === "exists" ? "Already saved." : "The address was not saved.";
+    setScreen((current) => ({ ...current, message: text }));
+  }
+
   const ready = screen;
   const days = ready
     ? ready.scope === "month"
@@ -785,6 +796,7 @@ export function CalendarScreen({
               }
               onUnauthorized={onUnauthorized}
               onScrollLock={setAgendaScrollLocked}
+              onSaveAddress={(place) => void saveStopAddress(place)}
             />
           ) : (
             <View
@@ -973,6 +985,7 @@ export function CalendarScreen({
                   : null
               }
               onUnauthorized={onUnauthorized}
+              onSaveAddress={(place) => void saveStopAddress(place)}
               onSave={(body) => {
                 if (body === "invalid") {
                   setScreen({ ...ready, message: notSaved });
@@ -1051,6 +1064,7 @@ function AgendaList({
   onCollapse,
   onSave,
   onGuide,
+  onSaveAddress,
   onUnauthorized,
   onScrollLock,
 }: {
@@ -1067,6 +1081,7 @@ function AgendaList({
   onCollapse: () => void;
   onSave: (sortieId: string, body: SortieWriteRequest | "invalid") => void;
   onGuide: ((sortie: Sortie) => void) | null;
+  onSaveAddress: (place: PlaceSuggestion) => void;
   onUnauthorized: () => void;
   onScrollLock: (locked: boolean) => void;
 }) {
@@ -1155,6 +1170,7 @@ function AgendaList({
                   onCancel={onCollapse}
                   onScrollLock={onScrollLock}
                   onUnauthorized={onUnauthorized}
+                  onSaveAddress={onSaveAddress}
                   onGuide={onGuide ? () => onGuide(sortie) : null}
                   onSave={(body) => onSave(sortie.id, body)}
                 />

@@ -118,6 +118,7 @@ import {
   waitEndsAtFromStop,
 } from "./sortieDwell";
 import type { SortieGuideCommand } from "./sortieGuide";
+import type { PlaceGuideCommand } from "./placeGuide";
 import { throb } from "./VisualAlert";
 
 export type { SortieGuideCommand } from "./sortieGuide";
@@ -195,6 +196,8 @@ export function NavigationScreen({
   onUnauthorized,
   sortieGuide = null,
   onSortieGuideConsumed,
+  placeGuide = null,
+  onPlaceGuideConsumed,
   onMeterReading,
   onMeterEnded,
   onSortieCompleted,
@@ -212,6 +215,8 @@ export function NavigationScreen({
   onUnauthorized: () => void;
   sortieGuide?: SortieGuideCommand | null;
   onSortieGuideConsumed?: () => void;
+  placeGuide?: PlaceGuideCommand | null;
+  onPlaceGuideConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
   onSortieCompleted?: (sortie: Sortie) => void;
@@ -787,6 +792,41 @@ export function NavigationScreen({
     void setActiveSortieObservation(sortieGuide.sortieId);
     onSortieGuideConsumed?.();
   }, [sortieGuide]);
+
+  useEffect(() => {
+    if (!placeGuide) {
+      return;
+    }
+    const started = emptyMeter();
+    setMeter(started);
+    meterRef.current = started;
+    rerouteInFlight.current = false;
+    stopAdvanceInFlight.current = false;
+    offRouteSinceRef.current = null;
+    resetArrivalDwell();
+    const origin = fixRef.current;
+    snapshotProgressBaseline(origin, placeGuide.route);
+    const next: NavState = {
+      mode: "guiding",
+      kind: "search",
+      destination: placeGuide.destination,
+      route: placeGuide.route,
+      stepIndex: 0,
+      muted: getGuidanceMutePrefs().muted,
+      offRouteSince: null,
+      rerouteMessage: null,
+      sortieId: null,
+      stops: [],
+      firstStopPosition: 0,
+      tariff: null,
+      sortie: null,
+    };
+    setNav(next);
+    setRouteEpoch((epoch) => epoch + 1);
+    publishMeter(started, next, origin);
+    void setActiveSortieObservation(null);
+    onPlaceGuideConsumed?.();
+  }, [placeGuide]);
 
   const accountSortie = accountView?.activity.sortie ?? null;
   const accountStops = accountSortie ? stopListKey(accountSortie.stops) : "";
@@ -1489,6 +1529,26 @@ export function NavigationScreen({
     void endGuidance();
   }
 
+  function endSearchGuidance(): void {
+    const current = navRef.current;
+    if ((current.mode !== "guiding" && current.mode !== "arrived") || current.kind !== "search") {
+      return;
+    }
+    const browse = { mode: "browse" as const, destination: null, message: null };
+    navRef.current = browse;
+    setNav(browse);
+    abandonPreviewChoice();
+    routeRequest.current += 1;
+    rerouteGeneration.current += 1;
+    rerouteInFlight.current = false;
+    offRouteSinceRef.current = null;
+    resetArrivalDwell();
+    setFinding(false);
+    setQuery("");
+    speechGeneration.current += 1;
+    void Speech.stop();
+  }
+
   function dismissPreview(): void {
     const current = navRef.current;
     if (current.mode !== "preview") {
@@ -1789,6 +1849,17 @@ export function NavigationScreen({
                 <View style={{ transform: [{ rotate: `${-mapBearing}deg` }] }}>
                   <Ionicons name="compass" size={24} color={colors.text} />
                 </View>
+              </Pressable>
+            ) : null}
+            {guiding?.kind === "search" || arrived?.kind === "search" ? (
+              <Pressable
+                accessibilityLabel="End guidance"
+                accessibilityRole="button"
+                onPress={endSearchGuidance}
+                style={styles.mapButton}
+                pointerEvents="auto"
+              >
+                <Ionicons name="close" size={24} color={colors.text} />
               </Pressable>
             ) : null}
             {guiding || arrived ? (

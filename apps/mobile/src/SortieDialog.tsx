@@ -62,6 +62,7 @@ export function SortieDialog({
   onSave,
   onCancel,
   onGuide = null,
+  onSaveAddress = null,
   onUnauthorized,
   layout = "modal",
   onScrollLock,
@@ -72,6 +73,7 @@ export function SortieDialog({
   onSave: (body: SortieWriteRequest | "invalid") => void;
   onCancel: () => void;
   onGuide?: (() => void) | null;
+  onSaveAddress?: ((place: PlaceSuggestion) => void) | null;
   onUnauthorized: () => void;
   layout?: "modal" | "inline";
   onScrollLock?: (locked: boolean) => void;
@@ -284,6 +286,7 @@ export function SortieDialog({
               onDragMove={(dy) => moveDrag(index, dy)}
               onDragRelease={endDrag}
               onUnauthorized={onUnauthorized}
+              onSaveAddress={onSaveAddress}
             />
           ))}
         </View>
@@ -444,6 +447,7 @@ function WaypointRow({
   onDragMove,
   onDragRelease,
   onUnauthorized,
+  onSaveAddress,
 }: {
   stop: StopDraft;
   index: number;
@@ -466,6 +470,7 @@ function WaypointRow({
   onDragMove: (dy: number) => void;
   onDragRelease: (dy: number | null) => void;
   onUnauthorized: () => void;
+  onSaveAddress: ((place: PlaceSuggestion) => void) | null;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -522,6 +527,15 @@ function WaypointRow({
             {canRemove ? (
               <Pressable onPress={onRemove} accessibilityRole="button" accessibilityLabel="Remove stop">
                 <Text style={styles.removeText}>Remove</Text>
+              </Pressable>
+            ) : null}
+            {onSaveAddress ? (
+              <Pressable
+                onPress={() => onSaveAddress(stop.chosen!)}
+                accessibilityRole="button"
+                accessibilityLabel="Save address"
+              >
+                <Text style={styles.removeText}>Save address</Text>
               </Pressable>
             ) : null}
           </View>
@@ -733,6 +747,24 @@ function draftFromStop(stop: SortieStop): StopDraft {
 
 export function emptyPlaces(): Pick<DialogDraft, "stops"> {
   return { stops: [blankStop()] };
+}
+
+export function draftForPlace(place: PlaceSuggestion): DialogDraft {
+  return {
+    sortieId: null,
+    label: "",
+    arrival: null,
+    passengerName: "",
+    phone: "",
+    stops: [
+      {
+        query: place.label,
+        chosen: place,
+        waitMinutes: 0,
+        passenger: false,
+      },
+    ],
+  };
 }
 
 export function placesFromSortie(stops: SortieStop[]): Pick<DialogDraft, "stops"> {

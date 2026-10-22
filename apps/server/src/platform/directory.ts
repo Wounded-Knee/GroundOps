@@ -2,6 +2,8 @@ import type { DirectoryCompany, DirectoryFacility, DirectoryUser } from "@ground
 import { asc, eq } from "drizzle-orm";
 import { db } from "../db.js";
 import {
+  addressBookEntry,
+  addressBookPhoneStar,
   company,
   driver,
   driverAvailabilityEvent,
@@ -198,6 +200,8 @@ export async function deleteDirectoryUser(callerId: string, userId: string): Pro
       return "in-use";
     }
     if (driverRow) {
+      await tx.delete(addressBookEntry).where(eq(addressBookEntry.driverId, driverRow.id));
+      await tx.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, driverRow.id));
       await tx.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, driverRow.id));
       await tx.delete(driverCompany).where(eq(driverCompany.driverId, driverRow.id));
       await tx.delete(driver).where(eq(driver.id, driverRow.id));

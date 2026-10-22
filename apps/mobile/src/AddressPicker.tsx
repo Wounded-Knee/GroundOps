@@ -1,8 +1,24 @@
 import type { GeoCoordinate, PlaceSuggestion } from "@groundops/contracts";
 import * as Location from "expo-location";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  matchLocalAddresses,
+  samePlace,
+  withoutDuplicatePlaces,
+  type LocalSuggestion,
+} from "./addressBookMatch";
+import {
+  ensureAddressBookLoaded,
+  getAddressBookSnapshot,
+  refreshDeviceAddresses,
+  subscribeAddressBook,
+  type AddressBookSnapshot,
+} from "./addressBookStore";
 import { resolveApiUrl } from "./apiUrl";
+import { phoneAddressSubtitle } from "./phoneAddress";
+import { geocodePostal } from "./phoneGeocode";
+import { parsePlaceQuery } from "./placeQuery";
 import { requestPlaceSuggestions } from "./routingClient";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
@@ -50,7 +66,8 @@ export function AddressPicker({
   onUnauthorizedRef.current = onUnauthorized;
   const onSearchFailedRef = useRef(onSearchFailed);
   onSearchFailedRef.current = onSearchFailed;
-  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const book = useSyncExternalStore(subscribeAddressBook, getAddressBookSnapshot, getAddressBookSnapshot);
+  const [rows, setRows] = useState<ShownRow[]>([]);
 
   useEffect(() => {
     if (biasProvided) {
@@ -100,54 +117,91 @@ export function AddressPicker({
   }, [autoFocus]);
 
   useEffect(() => {
+    void ensureAddressBookLoaded(apiUrl, token);
+    void refreshDeviceAddresses();
+  }, [token]);
+
+  useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length === 0) {
       generation.current += 1;
       settledLabel.current = null;
-      setSuggestions([]);
+      setRows([]);
       return;
     }
     if (query === settledLabel.current) {
       generation.current += 1;
-      setSuggestions([]);
+      setRows([]);
       return;
     }
     settledLabel.current = null;
     const requestId = ++generation.current;
+    const direct = parsePlaceQuery(trimmed, biasRef.current);
+    const local = matchLocalAddresses(trimmed, book.entries, phoneSources(book));
+    setRows(shownRows(direct, local));
     const handle = setTimeout(() => {
       void (async () => {
         const result = await requestPlaceSuggestions(apiUrl, token, trimmed, biasRef.current);
         if (generation.current !== requestId) {
           return;
         }
+        const currentBook = getAddressBookSnapshot();
+        const freshDirect = parsePlaceQuery(trimmed, biasRef.current);
+        const fresh = matchLocalAddresses(trimmed, currentBook.entries, phoneSources(currentBook));
         if (result === "unauthorized") {
           onUnauthorizedRef.current();
           return;
         }
         if (result === "failed") {
-          setSuggestions([]);
-          onSearchFailedRef.current?.();
+          setRows(shownRows(freshDirect, fresh));
+          if (!freshDirect && fresh.length === 0) {
+            onSearchFailedRef.current?.();
+          }
           return;
         }
-        setSuggestions(result);
+        const remote = withoutDuplicatePlaces(result, fresh).filter(
+          (place) => !freshDirect || !samePlace(place, freshDirect),
+        );
+        setRows(shownRows(freshDirect, fresh, remote));
       })();
     }, 300);
     return () => {
       clearTimeout(handle);
     };
-  }, [query, token, biasEpoch]);
+  }, [query, token, biasEpoch, book]);
 
   function choose(suggestion: PlaceSuggestion): void {
     settledLabel.current = suggestion.label;
     generation.current += 1;
-    setSuggestions([]);
+    setRows([]);
     onSelect(suggestion);
+  }
+
+  function choosePhone(row: Extract<ShownRow, { kind: "phone" }>): void {
+    const requestId = generation.current;
+    void (async () => {
+      const coordinate = await geocodePostal(row.contactId, row.addressId, row.postal);
+      if (generation.current !== requestId) {
+        return;
+      }
+      if (coordinate === "failed") {
+        onSearchFailedRef.current?.();
+        return;
+      }
+      choose({
+        name: row.name,
+        label: row.postal,
+        detail: row.detail,
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+      });
+    })();
   }
 
   function clear(): void {
     settledLabel.current = null;
     generation.current += 1;
-    setSuggestions([]);
+    setRows([]);
     onQueryChange("");
     inputRef.current?.focus();
     requestAnimationFrame(() => {
@@ -163,6 +217,12 @@ export function AddressPicker({
           ref={inputRef}
           value={query}
           onChangeText={onQueryChange}
+          onSubmitEditing={() => {
+            const direct = parsePlaceQuery(query, biasRef.current);
+            if (direct) {
+              choose(direct);
+            }
+          }}
           placeholder={placeholder}
           placeholderTextColor={colors.textMuted}
           autoCorrect={false}
@@ -173,18 +233,69 @@ export function AddressPicker({
           <Text style={styles.clearText}>x</Text>
         </Pressable>
       </View>
-      {suggestions.map((suggestion) => (
+      {rows.map((row) => (
         <Pressable
-          key={`${suggestion.label}:${suggestion.latitude}:${suggestion.longitude}`}
-          onPress={() => choose(suggestion)}
+          key={row.key}
+          onPress={() => (row.kind === "phone" ? choosePhone(row) : choose(row.suggestion))}
           style={appearance === "field" ? styles.fieldSuggestion : styles.searchSuggestion}
         >
-          <Text style={styles.suggestionText}>{suggestion.name}</Text>
-          {suggestion.detail.length > 0 ? <Text style={styles.suggestionDetail}>{suggestion.detail}</Text> : null}
+          <Text style={styles.suggestionText}>{row.name}</Text>
+          {row.detail.length > 0 ? <Text style={styles.suggestionDetail}>{row.detail}</Text> : null}
         </Pressable>
       ))}
     </View>
   );
+}
+
+type ShownRow =
+  | { kind: "place"; key: string; name: string; detail: string; suggestion: PlaceSuggestion }
+  | { kind: "phone"; key: string; name: string; detail: string; contactId: string; addressId: string; postal: string };
+
+function phoneSources(book: AddressBookSnapshot) {
+  const stars = new Set(book.phoneStars.map((star) => `${star.contactId}\n${star.addressId}`));
+  return book.phones.map((phone) => ({
+    contactId: phone.contactId,
+    addressId: phone.addressId,
+    name: phone.name,
+    postal: phone.postal,
+    addressLabel: phone.addressLabel,
+    starred: stars.has(`${phone.contactId}\n${phone.addressId}`),
+  }));
+}
+
+function shownRows(
+  direct: PlaceSuggestion | null,
+  local: LocalSuggestion[],
+  remote: PlaceSuggestion[] = [],
+): ShownRow[] {
+  return [...(direct ? [placeRow(direct)] : []), ...rowsFromLocal(local), ...remote.map(placeRow)];
+}
+
+function rowsFromLocal(local: LocalSuggestion[]): ShownRow[] {
+  return local.map((hit) => {
+    if (hit.source === "entry") {
+      return placeRow(hit.suggestion);
+    }
+    return {
+      kind: "phone",
+      key: `phone:${hit.contactId}:${hit.addressId}`,
+      name: hit.name,
+      detail: phoneAddressSubtitle(hit),
+      contactId: hit.contactId,
+      addressId: hit.addressId,
+      postal: hit.postal,
+    };
+  });
+}
+
+function placeRow(suggestion: PlaceSuggestion): ShownRow {
+  return {
+    kind: "place",
+    key: `${suggestion.label}:${suggestion.latitude}:${suggestion.longitude}`,
+    name: suggestion.name,
+    detail: suggestion.detail,
+    suggestion,
+  };
 }
 
 function createStyles(colors: ThemeColors) {

@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
 
-export type SignedInDestination = "navigation" | "calendar" | "settings" | "directory";
+export type SignedInDestination = "navigation" | "addresses" | "calendar" | "settings" | "directory";
 
 export function BottomNav({
   destination,
@@ -30,6 +30,18 @@ export function BottomNav({
         icon={(color) => (
           <Ionicons
             name={destination === "navigation" && !composeOpen ? "map" : "map-outline"}
+            size={24}
+            color={color}
+          />
+        )}
+      />
+      <Tab
+        label="Addresses"
+        active={destination === "addresses" && !composeOpen}
+        onPress={() => onNavigate("addresses")}
+        icon={(color) => (
+          <Ionicons
+            name={destination === "addresses" && !composeOpen ? "book" : "book-outline"}
             size={24}
             color={color}
           />

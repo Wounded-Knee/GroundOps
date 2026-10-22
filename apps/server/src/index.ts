@@ -14,6 +14,7 @@ import { registerLocalCors } from "./cors.js";
 import { registerPlatformRoutes } from "./platform/http.js";
 import { registerSessionRoutes } from "./routes.js";
 import { registerAvailabilityRoutes } from "./availability/http.js";
+import { registerAddressBookRoutes } from "./addressBook/http.js";
 import { startAvailabilityMaintenance } from "./availability/maintenance.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -37,6 +38,7 @@ registerSessionRoutes(app);
 registerAvailabilityRoutes(app);
 registerPlatformRoutes(app);
 registerCalendarRoutes(app);
+registerAddressBookRoutes(app);
 registerRoutingRoutes(app, {
   findSession: async (authorization) => {
     const token = readBearer(authorization);

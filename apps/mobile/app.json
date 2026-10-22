@@ -26,7 +26,13 @@
     "plugins": [
       "expo-web-browser",
       "expo-secure-store",
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow Groundops to show addresses from your contacts so you can navigate to them."
+        }
+      ]
     ]
   }
 }

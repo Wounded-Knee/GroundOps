@@ -6,6 +6,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -229,6 +230,38 @@ export const driverTariff = pgTable("driver_tariff", {
   perWaitMinuteCents: integer("per_wait_minute_cents").notNull(),
 });
 
+/** A place the driver saved. Favorites sort ahead of the rest. */
+export const addressBookEntry = pgTable(
+  "address_book_entry",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    driverId: uuid("driver_id")
+      .notNull()
+      .references(() => driver.id),
+    nickname: text("nickname").notNull(),
+    placeName: text("place_name").notNull().default(""),
+    label: text("label").notNull(),
+    latitude: doublePrecision("latitude").notNull(),
+    longitude: doublePrecision("longitude").notNull(),
+    favorite: boolean("favorite").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (table) => [index("address_book_entry_driver_id_idx").on(table.driverId)],
+);
+
+/** A star on a phone contact's postal address. The row stores no contact fields. */
+export const addressBookPhoneStar = pgTable(
+  "address_book_phone_star",
+  {
+    driverId: uuid("driver_id")
+      .notNull()
+      .references(() => driver.id),
+    contactId: text("contact_id").notNull(),
+    addressId: text("address_id").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.driverId, table.contactId, table.addressId] })],
+);
+
 export const schema = {
   user,
   userCredential,
@@ -244,4 +277,6 @@ export const schema = {
   locationObservation,
   driverMeterReading,
   driverTariff,
+  addressBookEntry,
+  addressBookPhoneStar,
 };

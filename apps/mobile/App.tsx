@@ -1,4 +1,4 @@
-import type { RealtimeEnvelope, Sortie, SortieWriteRequest, User } from "@groundops/contracts";
+import type { RealtimeEnvelope, PlaceSuggestion, Sortie, SortieWriteRequest, User } from "@groundops/contracts";
 import * as AuthSession from "expo-auth-session";
 import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
+import { AddressBookScreen } from "./src/AddressBookScreen";
+import { clearAddressBookCache, saveChosenPlace } from "./src/addressBookStore";
 import { BottomNav, type SignedInDestination } from "./src/BottomNav";
 import { DirectoryScreen } from "./src/DirectoryScreen";
 import { CalendarScreen } from "./src/CalendarScreen";
@@ -38,10 +40,12 @@ import { checkInAvailability, putAvailability, readAvailability } from "./src/av
 import { recordAvailabilityCheckIn } from "./src/availabilityKeepalive";
 import { NavigationScreen } from "./src/NavigationScreen";
 import type { SortieGuideCommand } from "./src/sortieGuide";
+import type { PlaceGuideCommand } from "./src/placeGuide";
 import { SettingsScreen } from "./src/SettingsScreen";
 import {
   SortieDialog,
   blankStop,
+  draftForPlace,
   emptyPlaces,
   placesFromSortie,
   type DialogDraft,
@@ -119,6 +123,7 @@ function AppContent() {
   const [activity, setActivity] = useState<AccountActivity>(emptyActivity);
   const [calendarScopeCycle, setCalendarScopeCycle] = useState(0);
   const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
+  const [placeGuide, setPlaceGuide] = useState<PlaceGuideCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
   const [availability, setAvailability] = useState<AvailabilityView>(emptyAvailability);
   const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
@@ -494,6 +499,8 @@ function AppContent() {
     setCompose(null);
     setComposeMessage(null);
     setSortieGuide(null);
+    setPlaceGuide(null);
+    clearAddressBookCache();
     setMeterReading(null);
     setActivity(emptyActivity);
   }
@@ -642,6 +649,20 @@ function AppContent() {
     });
   }
 
+  function openComposeForPlace(place: PlaceSuggestion): void {
+    setComposeMessage(null);
+    setCompose(draftForPlace(place));
+  }
+
+  async function saveComposeAddress(token: string, place: PlaceSuggestion): Promise<void> {
+    const result = await saveChosenPlace(apiUrl, token, place);
+    if (result === "unauthorized") {
+      await onSessionRejected();
+      return;
+    }
+    setComposeMessage(result === "ok" ? "Saved." : result === "exists" ? "Already saved." : "The address was not saved.");
+  }
+
   function onNavigate(next: SignedInDestination): void {
     if (next === "calendar" && destination === "calendar" && compose === null) {
       setCalendarScopeCycle((count) => count + 1);
@@ -772,6 +793,8 @@ function AppContent() {
                   onUnauthorized={() => void onSessionRejected()}
                   sortieGuide={sortieGuide}
                   onSortieGuideConsumed={() => setSortieGuide(null)}
+                  placeGuide={placeGuide}
+                  onPlaceGuideConsumed={() => setPlaceGuide(null)}
                   onMeterReading={setMeterReading}
                   onMeterEnded={() => {
                     setMeterReading(null);
@@ -797,6 +820,8 @@ function AppContent() {
                     onUnauthorized={() => void onSessionRejected()}
                     accountView={{ user: phase.user, live: phase.live, activity }}
                     networkFault={networkFault}
+                    placeGuide={placeGuide}
+                    onPlaceGuideConsumed={() => setPlaceGuide(null)}
                   />
                 </View>
               ) : null}
@@ -812,6 +837,19 @@ function AppContent() {
                       setSortieGuide(command);
                       setDestination("navigation");
                     }}
+                  />
+                </View>
+              ) : null}
+              {destination === "addresses" ? (
+                <View style={styles.cover}>
+                  <AddressBookScreen
+                    token={phase.token}
+                    onUnauthorized={() => void onSessionRejected()}
+                    onGuide={(command) => {
+                      setPlaceGuide(command);
+                      setDestination("navigation");
+                    }}
+                    onCreateSortie={openComposeForPlace}
                   />
                 </View>
               ) : null}
@@ -840,6 +878,7 @@ function AppContent() {
                     setComposeMessage(null);
                   }}
                   onUnauthorized={() => void onSessionRejected()}
+                  onSaveAddress={(place) => void saveComposeAddress(phase.token, place)}
                   onSave={(body) => void saveCompose(phase.token, body)}
                 />
               ) : null}

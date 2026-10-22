@@ -39,6 +39,8 @@ module.exports = () => {
           ...(android.permissions ?? []),
           "ACCESS_COARSE_LOCATION",
           "ACCESS_FINE_LOCATION",
+          "READ_CONTACTS",
+          "WRITE_CONTACTS",
           "ACCESS_BACKGROUND_LOCATION",
           "FOREGROUND_SERVICE",
           "FOREGROUND_SERVICE_LOCATION",

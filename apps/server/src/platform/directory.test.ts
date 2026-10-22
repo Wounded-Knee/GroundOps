@@ -7,6 +7,8 @@ import { closeDatabase, db } from "../db.js";
 import { findActiveSession, createSession } from "../identity/sessions.js";
 import { migrateDatabase } from "../migrate.js";
 import {
+  addressBookEntry,
+  addressBookPhoneStar,
   company,
   driver,
   driverAvailabilityEvent,
@@ -347,6 +349,8 @@ async function userById(id: string) {
 async function removeUser(userId: string): Promise<void> {
   const drivers = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId));
   for (const row of drivers) {
+    await db.delete(addressBookEntry).where(eq(addressBookEntry.driverId, row.id));
+    await db.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, row.id));
     await db.delete(driverMeterReading).where(eq(driverMeterReading.driverId, row.id));
     const sorties = await db.select({ id: sortie.id }).from(sortie).where(eq(sortie.authorDriverId, row.id));
     for (const item of sorties) {

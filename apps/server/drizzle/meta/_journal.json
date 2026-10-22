@@ -113,6 +113,20 @@
       "when": 1791600000000,
       "tag": "0015_drop_schedule_origin_label",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791700000000,
+      "tag": "0016_address_book",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791800000000,
+      "tag": "0017_address_place_name",
+      "breakpoints": true
     }
   ]
 }

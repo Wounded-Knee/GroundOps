@@ -9,6 +9,8 @@ import { migrateDatabase } from "../migrate.js";
 import { deleteDirectoryUser } from "../platform/directory.js";
 import { withRealtimePublisher } from "../realtime.js";
 import {
+  addressBookEntry,
+  addressBookPhoneStar,
   company,
   driver,
   driverAvailabilityEvent,
@@ -272,13 +274,25 @@ async function eventsFor(userId: string): Promise<{ available: boolean; current:
 async function removeUser(userId: string): Promise<void> {
   const drivers = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId));
   for (const row of drivers) {
-    await db.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, row.id));
     const links = await db
       .select({ companyId: driverCompany.companyId })
       .from(driverCompany)
       .where(eq(driverCompany.driverId, row.id));
     await db.delete(driverCompany).where(eq(driverCompany.driverId, row.id));
-    await db.delete(driver).where(eq(driver.id, row.id));
+    // A parallel lapse can insert an event after the first delete and before the driver goes.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await db.delete(addressBookEntry).where(eq(addressBookEntry.driverId, row.id));
+      await db.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, row.id));
+      await db.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, row.id));
+      try {
+        await db.delete(driver).where(eq(driver.id, row.id));
+        break;
+      } catch (error) {
+        if (attempt === 4) {
+          throw error;
+        }
+      }
+    }
     for (const link of links) {
       await db.delete(company).where(eq(company.id, link.companyId));
     }
