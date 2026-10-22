@@ -40,6 +40,10 @@ type PlatformMapProps = {
   followUser: boolean;
   /** Zoom at which the route keeps its design thickness. */
   navigationZoom?: number;
+  /** Multiplier on the route stroke. The floating window uses a thinner line. */
+  routeScale?: number;
+  /** Map artwork only: no toolbar, compass, scale, or marker callout. */
+  bare?: boolean;
   onCameraMove?: (camera: MapCameraMove) => void;
 };
 
@@ -54,7 +58,7 @@ function routeStrokeWidth(dp: number): number {
 }
 
 export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function PlatformMap(
-  { path, destination, user, showTraffic, followUser, navigationZoom = guidanceZoom, onCameraMove },
+  { path, destination, user, showTraffic, followUser, navigationZoom = guidanceZoom, routeScale = 1, bare = false, onCameraMove },
   ref,
 ) {
   const googleRef = useRef<GoogleMaps.MapView | null>(null);
@@ -133,20 +137,20 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
               id: "route-casing",
               coordinates: path,
               color: routeCasingColor,
-              width: routeStrokeWidth(Math.max(1, routeCasingWidthDp * strokeScale)),
+              width: routeStrokeWidth(Math.max(1, routeCasingWidthDp * strokeScale * routeScale)),
             },
             {
               id: "route",
               coordinates: path,
               color: routeColor,
-              width: routeStrokeWidth(Math.max(1, routeWidthDp * strokeScale)),
+              width: routeStrokeWidth(Math.max(1, routeWidthDp * strokeScale * routeScale)),
             },
           ]
         : [],
-    [path, strokeScale],
+    [path, strokeScale, routeScale],
   );
   const markers = destination
-    ? [{ id: "destination", coordinates: destination, title: "Destination" }]
+    ? [{ id: "destination", coordinates: destination, ...(bare ? {} : { title: "Destination" }) }]
     : [];
   const hasUser = user !== null;
   const properties = useMemo(
@@ -154,8 +158,9 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
       // Android draws its own yellow puck from userLocation. iOS keeps the system dot.
       isMyLocationEnabled: Platform.OS === "ios" && hasUser,
       isTrafficEnabled: showTraffic,
+      selectionEnabled: !bare,
     }),
-    [hasUser, showTraffic],
+    [hasUser, showTraffic, bare],
   );
 
   function handleCameraMove(event: CameraMoveEvent) {
@@ -184,7 +189,12 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
         polylines={polylines}
         properties={properties}
         onCameraMove={handleCameraMove}
-        uiSettings={{ myLocationButtonEnabled: false, compassEnabled: false }}
+        uiSettings={{
+          myLocationButtonEnabled: false,
+          compassEnabled: false,
+          scaleBarEnabled: !bare,
+          togglePitchEnabled: !bare,
+        }}
       />
     );
   }
@@ -198,7 +208,14 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
       polylines={polylines}
       properties={properties}
       onCameraMove={handleCameraMove}
-      uiSettings={{ myLocationButtonEnabled: false, compassEnabled: false, zoomControlsEnabled: false }}
+      uiSettings={{
+        myLocationButtonEnabled: false,
+        compassEnabled: false,
+        zoomControlsEnabled: false,
+        mapToolbarEnabled: !bare,
+        indoorLevelPickerEnabled: !bare,
+        scaleBarEnabled: !bare,
+      }}
       {...(puck
         ? {
             userLocation: {

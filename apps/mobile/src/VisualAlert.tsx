@@ -8,10 +8,8 @@ import {
   View,
   type ViewStyle,
 } from "react-native";
-import { withAlpha } from "./theme";
-import { alertEdges, normalizeThrobCount, THROB_MS, type AlertSide } from "./visualAlertThrob";
-
-const STOPS = 8;
+import { isNativeOverlayActive, playNativeThrob } from "./alwaysOnTop";
+import { alertEdges, edgeFadeGradient, normalizeThrobCount, throbBrightness, throbIntensity, THROB_MS, type AlertSide } from "./visualAlertThrob";
 
 type ThrobHandler = (count: number, side: AlertSide) => void;
 
@@ -21,6 +19,9 @@ let throbHandler: ThrobHandler | null = null;
 export function throb(count: number, side: AlertSide = "all"): void {
   const n = normalizeThrobCount(count);
   if (n === 0) {
+    return;
+  }
+  if (isNativeOverlayActive() && playNativeThrob(n, side)) {
     return;
   }
   throbHandler?.(n, side);
@@ -33,11 +34,14 @@ export function VisualAlert({
   intensity,
   brightness,
   enabled,
+  suppressed = false,
 }: {
   color: string;
   intensity: number;
   brightness: number;
   enabled: boolean;
+  /** The full-screen Android overlay is drawing this alert. */
+  suppressed?: boolean;
 }) {
   const { width, height } = useWindowDimensions();
   const [throbbing, setThrobbing] = useState(false);
@@ -85,12 +89,12 @@ export function VisualAlert({
     };
   }, [opacity]);
 
-  if (!enabled && !throbbing) {
+  if (suppressed || (!enabled && !throbbing)) {
     return null;
   }
 
-  const displayIntensity = throbbing ? 0.5 : Math.max(0, Math.min(1, intensity));
-  const displayBrightness = throbbing ? 1 : Math.max(0, Math.min(1, brightness));
+  const displayIntensity = throbbing ? throbIntensity : Math.max(0, Math.min(1, intensity));
+  const displayBrightness = throbbing ? throbBrightness : Math.max(0, Math.min(1, brightness));
   const depth = displayIntensity * (Math.min(width, height) / 2);
   if (depth <= 0 || displayBrightness <= 0) {
     return null;
@@ -107,7 +111,7 @@ export function VisualAlert({
           style={[
             styles.edge,
             { top: 0, left: 0, right: 0, height: depth },
-            gradientStyle(edgeFade(color, displayBrightness, "to bottom")),
+            gradientStyle(edgeFadeGradient(color, displayBrightness, "to bottom")),
           ]}
         />
       ) : null}
@@ -117,7 +121,7 @@ export function VisualAlert({
           style={[
             styles.edge,
             { bottom: 0, left: 0, right: 0, height: depth },
-            gradientStyle(edgeFade(color, displayBrightness, "to top")),
+            gradientStyle(edgeFadeGradient(color, displayBrightness, "to top")),
           ]}
         />
       ) : null}
@@ -127,7 +131,7 @@ export function VisualAlert({
           style={[
             styles.edge,
             { top: 0, bottom: 0, left: 0, width: depth },
-            gradientStyle(edgeFade(color, displayBrightness, "to right")),
+            gradientStyle(edgeFadeGradient(color, displayBrightness, "to right")),
           ]}
         />
       ) : null}
@@ -137,27 +141,12 @@ export function VisualAlert({
           style={[
             styles.edge,
             { top: 0, bottom: 0, right: 0, width: depth },
-            gradientStyle(edgeFade(color, displayBrightness, "to left")),
+            gradientStyle(edgeFadeGradient(color, displayBrightness, "to left")),
           ]}
         />
       ) : null}
     </Animated.View>
   );
-}
-
-/** Quadratic rim fade: full brightness at the outer edge, transparent at the inner edge. */
-function edgeFade(
-  color: string,
-  brightness: number,
-  direction: "to bottom" | "to top" | "to right" | "to left",
-): string {
-  const stops = Array.from({ length: STOPS }, (_, index) => {
-    const t = 1 - index / (STOPS - 1);
-    const alpha = brightness * t * t;
-    const pct = (index / (STOPS - 1)) * 100;
-    return `${withAlpha(color, alpha)} ${pct}%`;
-  });
-  return `linear-gradient(${direction}, ${stops.join(", ")})`;
 }
 
 function gradientStyle(image: string): ViewStyle {

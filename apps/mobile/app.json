@@ -27,6 +27,7 @@
       "expo-web-browser",
       "expo-secure-store",
       "expo-notifications",
+      "./modules/always-on-top/app.plugin.js",
       [
         "expo-contacts",
         {

@@ -3,8 +3,8 @@ import * as AuthSession from "expo-auth-session";
 import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useRef, useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
 import { AddressBookScreen } from "./src/AddressBookScreen";
@@ -63,6 +63,21 @@ import { useNetworkStatus } from "./src/useNetworkStatus";
 import { ThemeProvider, useTheme } from "./src/ThemeProvider";
 import type { ThemeColors } from "./src/theme";
 import { VisualAlert } from "./src/VisualAlert";
+import {
+  armNativeAlert,
+  canDrawOverlays,
+  clearNativeAlert,
+  dismissAlwaysOnTop,
+  isAlwaysOnTopActive,
+  promptOverlayPermission,
+  rememberAlertPrefs,
+  setAlwaysOnTopEligible,
+  setNativeOverlayActive,
+  subscribeAlwaysOnTop,
+  subscribeOverlayUnavailable,
+} from "./src/alwaysOnTop";
+import { ensureAlwaysOnTopConsentLoaded, rememberAlwaysOnTopConsentAsked } from "./src/alwaysOnTopConsent";
+import { shouldAskAlwaysOnTopConsent } from "./src/alwaysOnTopLogic";
 import {
   ensureVisualAlertPrefsLoaded,
   getVisualAlertPrefs,
@@ -131,6 +146,19 @@ function AppContent() {
   const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
   const toggleAvailabilityRef = useRef<() => void>(() => undefined);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
+  const [navigationActive, setNavigationActive] = useState(false);
+  const [floating, setFloating] = useState(false);
+  const [overlayGranted, setOverlayGranted] = useState(false);
+  const [overlayChecked, setOverlayChecked] = useState(false);
+  const [overlayReady, setOverlayReady] = useState(false);
+  const [consentAsked, setConsentAsked] = useState(false);
+  const [consentReady, setConsentReady] = useState(false);
+  const askedConsent = useRef(false);
+  const promptingConsent = useRef(false);
+  const floatingRef = useRef(false);
+  const navigationActiveRef = useRef(false);
+  floatingRef.current = floating;
+  navigationActiveRef.current = navigationActive;
   const [socketLink, setSocketLink] = useState<SocketState>("idle");
   const networkFault = useNetworkStatus(apiUrl, socketLink);
   const endGuidanceRef = useRef<(() => void) | null>(null);
@@ -148,6 +176,102 @@ function AppContent() {
       setVisualAlert(getVisualAlertPrefs());
     });
   }, []);
+
+  const onActiveNavigationChange = useCallback((active: boolean) => {
+    setNavigationActive(active);
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      return;
+    }
+    setOverlayGranted(canDrawOverlays());
+    setOverlayChecked(true);
+    setFloating(isAlwaysOnTopActive());
+    void ensureAlwaysOnTopConsentLoaded().then((asked) => {
+      setConsentAsked(asked);
+      setConsentReady(true);
+    });
+    const appState = AppState.addEventListener("change", (state) => {
+      setFloating(isAlwaysOnTopActive());
+      if (state !== "active") {
+        return;
+      }
+      promptingConsent.current = false;
+      const granted = canDrawOverlays();
+      setOverlayGranted(granted);
+      if (navigationActiveRef.current && granted) {
+        setAlwaysOnTopEligible(true);
+      }
+    });
+    const unsubscribe = subscribeAlwaysOnTop(setFloating);
+    const unsubscribeOverlay = subscribeOverlayUnavailable(() => {
+      setOverlayReady(false);
+    });
+    return () => {
+      appState.remove();
+      unsubscribe();
+      unsubscribeOverlay();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "android" || !navigationActive) {
+      return;
+    }
+    const sync = () => {
+      const active = isAlwaysOnTopActive();
+      setFloating((current) => (current === active ? current : active));
+    };
+    sync();
+    const timer = setInterval(sync, 200);
+    return () => clearInterval(timer);
+  }, [navigationActive]);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      return;
+    }
+    if (promptingConsent.current || !overlayGranted) {
+      setAlwaysOnTopEligible(false);
+    } else {
+      setAlwaysOnTopEligible(navigationActive);
+    }
+    if (floatingRef.current && (!navigationActive || !overlayGranted)) {
+      dismissAlwaysOnTop();
+    }
+  }, [navigationActive, overlayGranted]);
+
+  useEffect(() => {
+    if (Platform.OS !== "android" || !overlayChecked || !consentReady || phase.status === "loading") {
+      return;
+    }
+    if (!shouldAskAlwaysOnTopConsent({ granted: overlayGranted, asked: consentAsked || askedConsent.current })) {
+      return;
+    }
+    askedConsent.current = true;
+    setConsentAsked(true);
+    promptingConsent.current = true;
+    setAlwaysOnTopEligible(false);
+    void rememberAlwaysOnTopConsentAsked();
+    promptOverlayPermission();
+  }, [overlayChecked, consentReady, consentAsked, overlayGranted, phase.status]);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      return;
+    }
+    if (!floating || !overlayGranted) {
+      setNativeOverlayActive(false);
+      setOverlayReady(false);
+      clearNativeAlert();
+      return;
+    }
+    rememberAlertPrefs(visualAlert);
+    const armed = armNativeAlert(visualAlert);
+    setOverlayReady(armed);
+    setNativeOverlayActive(armed);
+  }, [floating, overlayGranted, visualAlert]);
 
   const [request, , promptAsync] = AuthSession.useAuthRequest(
     {
@@ -766,17 +890,25 @@ function AppContent() {
       onCommenceNext={() => meterCommenceRef.current?.()}
     />
   );
+  const floatingMap = Platform.OS === "android" && floating;
+  const fullScreenAlert = floatingMap && overlayGranted && overlayReady;
+  if (Platform.OS === "android") {
+    rememberAlertPrefs(visualAlert);
+    setNativeOverlayActive(fullScreenAlert);
+  }
+  const screenCover = floatingMap ? [styles.cover, styles.hidden] : styles.cover;
   const overlay = (
     <VisualAlert
       color={visualAlert.color}
       intensity={visualAlert.intensity}
       brightness={visualAlert.brightness}
       enabled={visualAlert.enabled}
+      suppressed={floatingMap}
     />
   );
 
   return (
-    <AppFrame overlay={overlay}>
+    <AppFrame overlay={overlay} edgeToEdge={floatingMap}>
       <View style={signedIn ? styles.signedIn : styles.container}>
         {phase.status === "loading" ? <Text style={styles.message}>Checking session…</Text> : null}
         {phase.status === "signed-out" ? (
@@ -811,6 +943,8 @@ function AppContent() {
                   applySortieUpdateRef={applySortieUpdateRef}
                   accountView={{ user: phase.user, live: phase.live, activity }}
                   networkFault={networkFault}
+                  minimal={floatingMap}
+                  onActiveNavigationChange={onActiveNavigationChange}
                 />
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (
@@ -826,7 +960,7 @@ function AppContent() {
                 </View>
               ) : null}
               {destination === "calendar" ? (
-                <View style={styles.cover}>
+                <View style={screenCover} pointerEvents={floatingMap ? "none" : "auto"}>
                   <CalendarScreen
                     userId={phase.user.id}
                     token={phase.token}
@@ -841,7 +975,7 @@ function AppContent() {
                 </View>
               ) : null}
               {destination === "addresses" ? (
-                <View style={styles.cover}>
+                <View style={screenCover} pointerEvents={floatingMap ? "none" : "auto"}>
                   <AddressBookScreen
                     token={phase.token}
                     onUnauthorized={() => void onSessionRejected()}
@@ -854,7 +988,7 @@ function AppContent() {
                 </View>
               ) : null}
               {destination === "settings" ? (
-                <View style={styles.cover}>
+                <View style={screenCover} pointerEvents={floatingMap ? "none" : "auto"}>
                   <SettingsScreen
                     token={phase.token}
                     signOutMessage={phase.signOutMessage}
@@ -864,41 +998,45 @@ function AppContent() {
                 </View>
               ) : null}
               {destination === "directory" && phase.user.platformAdministrator ? (
-                <View style={styles.cover}>
+                <View style={screenCover} pointerEvents={floatingMap ? "none" : "auto"}>
                   <DirectoryScreen token={phase.token} onUnauthorized={() => void onSessionRejected()} />
                 </View>
               ) : null}
               {compose ? (
-                <SortieDialog
-                  draft={compose}
-                  token={phase.token}
-                  message={composeMessage}
-                  onCancel={() => {
-                    setCompose(null);
-                    setComposeMessage(null);
-                  }}
-                  onUnauthorized={() => void onSessionRejected()}
-                  onSaveAddress={(place) => void saveComposeAddress(phase.token, place)}
-                  onSave={(body) => void saveCompose(phase.token, body)}
-                />
+                <View style={[styles.dialogCover, floatingMap ? styles.hidden : null]} pointerEvents="box-none">
+                  <SortieDialog
+                    draft={compose}
+                    token={phase.token}
+                    message={composeMessage}
+                    onCancel={() => {
+                      setCompose(null);
+                      setComposeMessage(null);
+                    }}
+                    onUnauthorized={() => void onSessionRejected()}
+                    onSaveAddress={(place) => void saveComposeAddress(phase.token, place)}
+                    onSave={(body) => void saveCompose(phase.token, body)}
+                  />
+                </View>
               ) : null}
-              {statusOverlaysMap ? (
+              {!floatingMap && statusOverlaysMap ? (
                 <View style={styles.meterOverlay} pointerEvents="box-none">
                   {appWideStatus}
                 </View>
               ) : null}
             </View>
-            {!statusOverlaysMap ? appWideStatus : null}
-            <BottomNav
-              destination={destination}
-              composeOpen={compose !== null}
-              showDirectory={phase.user.platformAdministrator}
-              onNavigate={onNavigate}
-              onCompose={openCompose}
-            />
+            {!floatingMap && !statusOverlaysMap ? appWideStatus : null}
+            {!floatingMap ? (
+              <BottomNav
+                destination={destination}
+                composeOpen={compose !== null}
+                showDirectory={phase.user.platformAdministrator}
+                onNavigate={onNavigate}
+                onCompose={openCompose}
+              />
+            ) : null}
           </>
         ) : null}
-        <StatusBar style={scheme === "dark" ? "light" : "dark"} />
+        <StatusBar style={scheme === "dark" ? "light" : "dark"} hidden={floatingMap} />
       </View>
     </AppFrame>
   );
@@ -1049,6 +1187,16 @@ function createStyles(colors: ThemeColors) {
       right: 0,
       bottom: 0,
       zIndex: 5,
+    },
+    hidden: {
+      display: "none",
+    },
+    dialogCover: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
     },
     message: {
       marginTop: 16,

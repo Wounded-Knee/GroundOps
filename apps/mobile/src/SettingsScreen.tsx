@@ -7,7 +7,8 @@ import {
 } from "@groundops/contracts";
 import Slider from "@react-native-community/slider";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { AppState, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { canDrawOverlays, promptOverlayPermission, setAlwaysOnTopEligible } from "./alwaysOnTop";
 import { resolveApiUrl } from "./apiUrl";
 import { readAvailabilitySettings, saveAvailabilitySettings } from "./availabilityClient";
 import type { AppearancePreference } from "./appearancePrefs";
@@ -110,6 +111,21 @@ export function SettingsScreen({
   const [geofenceOpen, setGeofenceOpen] = useState(false);
   const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
   const [hexText, setHexText] = useState(defaultVisualAlertPrefs.color);
+  const [alwaysOnTopAllowed, setAlwaysOnTopAllowed] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      return;
+    }
+    const refresh = () => setAlwaysOnTopAllowed(canDrawOverlays());
+    refresh();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        refresh();
+      }
+    });
+    return () => subscription.remove();
+  }, []);
 
   const visualAlertRef = useRef(visualAlert);
   const visualGeneration = useRef(0);
@@ -754,6 +770,22 @@ export function SettingsScreen({
         ) : null}
       </Section>
       {message ? <Text style={styles.message}>{message}</Text> : null}
+      {Platform.OS === "android" ? (
+        <Section title="Always on top">
+          <Text style={styles.previewHint}>{alwaysOnTopAllowed ? "Allowed" : "Not allowed"}</Text>
+          <Pressable
+            style={styles.button}
+            accessibilityRole="button"
+            accessibilityLabel="Set always on top permission"
+            onPress={() => {
+              setAlwaysOnTopEligible(false);
+              promptOverlayPermission();
+            }}
+          >
+            <Text style={styles.buttonText}>Set permission</Text>
+          </Pressable>
+        </Section>
+      ) : null}
       <Section title="Account">
         {signOutMessage ? <Text style={styles.message}>{signOutMessage}</Text> : null}
         <Pressable style={styles.button} onPress={onSignOut}>

@@ -120,6 +120,7 @@ import {
 import type { SortieGuideCommand } from "./sortieGuide";
 import type { PlaceGuideCommand } from "./placeGuide";
 import { throb } from "./VisualAlert";
+import { floatingRouteScale, isActiveNavigation } from "./alwaysOnTopLogic";
 
 export type { SortieGuideCommand } from "./sortieGuide";
 
@@ -210,6 +211,8 @@ export function NavigationScreen({
   applySortieUpdateRef,
   accountView = null,
   networkFault,
+  minimal = false,
+  onActiveNavigationChange,
 }: {
   token: string;
   onUnauthorized: () => void;
@@ -228,6 +231,9 @@ export function NavigationScreen({
   meterCommenceRef?: MutableRefObject<(() => void) | null>;
   applySortieUpdateRef?: MutableRefObject<((sortie: Sortie) => void) | null>;
   networkFault: NetworkFault | null;
+  /** Map only, while the Android picture-in-picture window is up. */
+  minimal?: boolean;
+  onActiveNavigationChange?: (active: boolean) => void;
   accountView?: {
     user: User;
     live: "authenticated" | "closed";
@@ -1751,6 +1757,10 @@ export function NavigationScreen({
   const meterChromeInset = meterActive ? meterPanelHeight(windowHeight) : 0;
   const compassVisible = Math.abs(bearingDeltaDegrees(0, mapBearing)) >= compassBearingEpsilonDegrees;
 
+  useEffect(() => {
+    onActiveNavigationChange?.(isActiveNavigation(nav.mode));
+  }, [nav.mode, onActiveNavigationChange]);
+
   return (
     <View style={styles.screen}>
       <PlatformMap
@@ -1762,7 +1772,10 @@ export function NavigationScreen({
         followUser={nav.mode === "browse" && permission === "granted"}
         navigationZoom={cameraPrefs.zoom}
         onCameraMove={noteMapCamera}
+        routeScale={minimal ? floatingRouteScale : 1}
+        bare={minimal}
       />
+      {minimal ? null : (
       <View
         style={[StyleSheet.absoluteFill, meterChromeInset > 0 ? { paddingBottom: meterChromeInset } : null]}
         pointerEvents="box-none"
@@ -1955,6 +1968,7 @@ export function NavigationScreen({
           </View>
         ) : null}
       </View>
+      )}
       {guiding || arrived ? <Awake /> : null}
     </View>
   );
