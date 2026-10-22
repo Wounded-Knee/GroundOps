@@ -420,7 +420,7 @@ export function CalendarScreen({
       sorties: calendar.sorties,
       availability: calendar.availability,
       live: true,
-      message: null,
+      message: saveFailureMessage(prev.message) ? prev.message : null,
       dialog: withFreshSortie(prev.dialog, calendar.sorties),
     }));
   }
@@ -461,6 +461,9 @@ export function CalendarScreen({
     if (!ready.live || saving.current) {
       if (!saving.current) {
         setHeld(null);
+        if (!ready.live) {
+          setScreen((prev) => (prev.message ? prev : { ...prev, message: notSaved }));
+        }
       }
       return;
     }
@@ -470,10 +473,6 @@ export function CalendarScreen({
       ? await reviseSortie(apiUrl, token, sortieId, body)
       : await authorSortie(apiUrl, token, body);
     saving.current = false;
-    if (generation.current !== current) {
-      setHeld(null);
-      return;
-    }
     if (saved === "unauthorized") {
       setHeld(null);
       onUnauthorized();
@@ -481,12 +480,23 @@ export function CalendarScreen({
     }
     if (saved === "no-location") {
       setHeld(null);
-      setScreen({ ...ready, message: locationRequired });
+      setScreen((prev) => ({ ...prev, message: locationRequired }));
       return;
     }
     if (typeof saved === "string") {
       setHeld(null);
-      setScreen({ ...ready, message: notSaved });
+      setScreen((prev) => ({ ...prev, message: notSaved }));
+      return;
+    }
+
+    // sortie.updated reloads the calendar and bumps generation before this fetch
+    // resolves. Close first so that reload cannot leave the dialog open with no error.
+    setExpandedSortieId(null);
+    setAgendaScrollLocked(false);
+    setScreen((prev) => ({ ...prev, dialog: null, message: null }));
+
+    if (generation.current !== current) {
+      setHeld(null);
       return;
     }
 
@@ -503,7 +513,7 @@ export function CalendarScreen({
     }
     if (typeof calendar === "string") {
       setHeld(null);
-      setScreen({ ...ready, dialog: null, live: false, message: couldNotRefresh });
+      setScreen((prev) => ({ ...prev, live: false, message: couldNotRefresh }));
       return;
     }
     await writeCalendarCache({
@@ -513,17 +523,18 @@ export function CalendarScreen({
       sorties: calendar.sorties,
       availability: calendar.availability,
     });
+    if (generation.current !== current) {
+      setHeld(null);
+      return;
+    }
     setHeld(null);
-    setExpandedSortieId(null);
-    setAgendaScrollLocked(false);
-    setScreen({
-      ...ready,
+    setScreen((prev) => ({
+      ...prev,
       sorties: calendar.sorties,
       availability: calendar.availability,
       live: true,
-      message: null,
-      dialog: null,
-    });
+      message: prev.dialog ? prev.message : null,
+    }));
   }
 
   function openDialog(ready: Ready, dialog: DialogDraft): void {
@@ -782,7 +793,7 @@ export function CalendarScreen({
               }}
               onSave={(sortieId, body) => {
                 if (body === "invalid") {
-                  setScreen({ ...ready, message: notSaved });
+                  setScreen((prev) => ({ ...prev, message: notSaved }));
                   return;
                 }
                 void commit(ready, sortieId, body);
@@ -988,7 +999,7 @@ export function CalendarScreen({
               onSaveAddress={(place) => void saveStopAddress(place)}
               onSave={(body) => {
                 if (body === "invalid") {
-                  setScreen({ ...ready, message: notSaved });
+                  setScreen((prev) => ({ ...prev, message: notSaved }));
                   return;
                 }
                 void commit(ready, ready.dialog?.sortieId ?? null, body);
@@ -1344,6 +1355,10 @@ function MonthChip({
       </Text>
     </View>
   );
+}
+
+function saveFailureMessage(message: string | null): boolean {
+  return message === notSaved || message === locationRequired;
 }
 
 function withFreshSortie(dialog: DialogDraft | null, sorties: Sortie[]): DialogDraft | null {
