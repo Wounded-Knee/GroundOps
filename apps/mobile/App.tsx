@@ -159,6 +159,7 @@ function AppContent() {
   const [placeGuide, setPlaceGuide] = useState<PlaceGuideCommand | null>(null);
   const [deadhead, setDeadhead] = useState<DeadheadCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
+  const [statusChromeHeight, setStatusChromeHeight] = useState(0);
   const [availability, setAvailability] = useState<AvailabilityView>(emptyAvailability);
   const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
   const [availabilityBusy, setAvailabilityBusy] = useState(false);
@@ -1122,6 +1123,7 @@ function AppContent() {
                   networkFault={networkFault}
                   minimal={floatingMap}
                   onActiveNavigationChange={onActiveNavigationChange}
+                  bottomInset={statusOverlaysMap && !floatingMap ? statusChromeHeight : 0}
                 />
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (
@@ -1197,7 +1199,14 @@ function AppContent() {
                 </View>
               ) : null}
               {!floatingMap && statusOverlaysMap ? (
-                <View style={styles.meterOverlay} pointerEvents="box-none">
+                <View
+                  style={styles.meterOverlay}
+                  pointerEvents="box-none"
+                  onLayout={(event) => {
+                    const next = Math.round(event.nativeEvent.layout.height);
+                    setStatusChromeHeight((current) => (current === next ? current : next));
+                  }}
+                >
                   {appWideStatus}
                 </View>
               ) : null}

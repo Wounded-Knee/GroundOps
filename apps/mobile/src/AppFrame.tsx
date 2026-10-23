@@ -21,12 +21,12 @@ export function AppFrame({
     if (Platform.OS !== "android") {
       return;
     }
-    if (!edgeToEdge) {
-      KeyboardController.setDefaultMode();
-      return;
-    }
+    // One inset: the avoiding view pads. adjustResize would shrink the window as well
+    // and push the bottom-anchored meter past the visible area.
     KeyboardController.setInputMode(AndroidSoftInputModes.SOFT_INPUT_ADJUST_NOTHING);
-    void KeyboardController.dismiss();
+    if (edgeToEdge) {
+      void KeyboardController.dismiss();
+    }
   }, [edgeToEdge]);
 
   return (
@@ -35,10 +35,10 @@ export function AppFrame({
         <View style={styles.frame}>
           <SafeAreaView style={styles.frame} edges={edgeToEdge ? [] : ["top", "right", "bottom", "left"]}>
             <KeyboardAvoidingView
-              style={[styles.frame, edgeToEdge ? styles.noKeyboardInset : null]}
+              style={styles.frame}
               behavior="padding"
               automaticOffset
-              keyboardVerticalOffset={edgeToEdge ? floatingKeyboardOffset : 0}
+              enabled={!edgeToEdge}
             >
               {children}
             </KeyboardAvoidingView>
@@ -50,14 +50,8 @@ export function AppFrame({
   );
 }
 
-/** Large enough that the avoiding view's overlap math stays at zero in the floating window. */
-const floatingKeyboardOffset = -1_000_000;
-
 const styles = StyleSheet.create({
   frame: {
     flex: 1,
-  },
-  noKeyboardInset: {
-    paddingBottom: 0,
   },
 });

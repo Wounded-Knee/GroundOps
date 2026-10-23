@@ -14,11 +14,10 @@ import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
-import { AppState, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { AppState, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { NetworkStatusIcon } from "./NetworkStatusIcon";
 import type { NetworkFault } from "./networkStatus";
-import { meterPanelHeight } from "./MeterStrip";
 import { useTheme } from "./ThemeProvider";
 import { withAlpha, type ThemeColors } from "./theme";
 import { resolveApiUrl } from "./apiUrl";
@@ -217,6 +216,7 @@ export function NavigationScreen({
   networkFault,
   minimal = false,
   onActiveNavigationChange,
+  bottomInset = 0,
 }: {
   token: string;
   onUnauthorized: () => void;
@@ -240,6 +240,8 @@ export function NavigationScreen({
   /** Map only, while the Android picture-in-picture window is up. */
   minimal?: boolean;
   onActiveNavigationChange?: (active: boolean) => void;
+  /** Height of the status stack overlaid on the map. Chrome stays above it. */
+  bottomInset?: number;
   accountView?: {
     user: User;
     live: "authenticated" | "closed";
@@ -247,7 +249,6 @@ export function NavigationScreen({
   } | null;
 }) {
   const { colors } = useTheme();
-  const { height: windowHeight } = useWindowDimensions();
   const styles = createStyles(colors);
   const mapRef = useRef<MapHandle>(null);
   const [cameraMode, setCameraMode] = useState<GuidanceCameraMode>("follow");
@@ -258,6 +259,8 @@ export function NavigationScreen({
   const [query, setQuery] = useState("");
   const [pendingWhereTo, setPendingWhereTo] = useState<PlaceSuggestion | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [sheetContentHeight, setSheetContentHeight] = useState(0);
+  const [chromeBox, setChromeBox] = useState(0);
   const deadheadContinueRef = useRef(false);
   const [finding, setFinding] = useState(false);
   const [permission, setPermission] = useState<"unknown" | "granted" | "denied">("unknown");
@@ -2024,8 +2027,10 @@ export function NavigationScreen({
   const departureRemainingMs = upcoming ? upcoming.departAt.getTime() - clock : null;
   const showCountdown =
     departureRemainingMs !== null && showDepartureCountdown(departureRemainingMs, countdownLeadMinutes);
-  const meterChromeInset = meterActive ? meterPanelHeight(windowHeight) : 0;
   const compassVisible = Math.abs(bearingDeltaDegrees(0, mapBearing)) >= compassBearingEpsilonDegrees;
+  const showFooter = showSearch && (finding || (browseMessage !== null && !pendingWhereTo));
+  const showBottomSheet = preview !== null || notice !== null || guiding?.rerouteMessage != null || showFooter;
+  const chromeHeight = Math.max(0, chromeBox - bottomInset);
 
   useEffect(() => {
     onActiveNavigationChange?.(isActiveNavigation(nav.mode));
@@ -2047,8 +2052,12 @@ export function NavigationScreen({
       />
       {minimal ? null : (
       <View
-        style={[StyleSheet.absoluteFill, meterChromeInset > 0 ? { paddingBottom: meterChromeInset } : null]}
+        style={[StyleSheet.absoluteFill, bottomInset > 0 ? { paddingBottom: bottomInset } : null]}
         pointerEvents="box-none"
+        onLayout={(event) => {
+          const next = Math.round(event.nativeEvent.layout.height);
+          setChromeBox((current) => (current === next ? current : next));
+        }}
       >
         {showSearch ? (
           <View style={styles.searchCard} pointerEvents="auto">
@@ -2078,6 +2087,7 @@ export function NavigationScreen({
                   onSelect={(suggestion) => {
                     void onSelect(suggestion);
                   }}
+                  listMaxHeight={chromeHeight > 0 ? Math.max(96, Math.round(chromeHeight * 0.4)) : undefined}
                   onUnauthorized={onUnauthorized}
                   onSearchFailed={() => {
                     setNav((current) =>
@@ -2119,8 +2129,7 @@ export function NavigationScreen({
           </View>
         ) : null}
 
-        <View style={styles.spacer} pointerEvents="none" />
-
+        <View style={styles.spacer} pointerEvents="box-none">
         {compassVisible || guiding || arrived ? (
           <View style={styles.controlColumn} pointerEvents="box-none">
             {compassVisible ? (
@@ -2179,7 +2188,29 @@ export function NavigationScreen({
             ) : null}
           </View>
         ) : null}
+        </View>
 
+        {showBottomSheet ? (
+        <ScrollView
+          style={[
+            styles.sheetScroll,
+            sheetContentHeight > 0
+              ? {
+                  height:
+                    chromeHeight > 0
+                      ? Math.min(sheetContentHeight, Math.max(160, chromeHeight - 200))
+                      : sheetContentHeight,
+                }
+              : null,
+          ]}
+          contentContainerStyle={styles.sheetScrollContent}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          onContentSizeChange={(_width, height) => {
+            const next = Math.ceil(height);
+            setSheetContentHeight((current) => (current === next ? current : next));
+          }}
+        >
         {preview ? (
           <View style={[styles.sheet, styles.startSheet]} pointerEvents="auto">
             <Text style={styles.destination}>{preview.destination.label}</Text>
@@ -2239,11 +2270,13 @@ export function NavigationScreen({
           </View>
         ) : null}
 
-        {showSearch ? (
-          <View style={styles.footer} pointerEvents="auto">
+        {showFooter ? (
+          <View style={styles.footer} pointerEvents="none">
             {finding ? <Text style={styles.message}>Finding route…</Text> : null}
             {browseMessage && !pendingWhereTo ? <Text style={styles.message}>{browseMessage}</Text> : null}
           </View>
+        ) : null}
+        </ScrollView>
         ) : null}
       </View>
       )}
@@ -2340,6 +2373,8 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.background,
     },
     searchCard: {
+      flexShrink: 1,
+      minHeight: 0,
       margin: 12,
       backgroundColor: mapChrome,
       borderWidth: 1,
@@ -2348,11 +2383,16 @@ function createStyles(colors: ThemeColors) {
       overflow: "hidden",
     },
     searchHead: {
+      flexShrink: 1,
+      minHeight: 0,
       flexDirection: "row",
       alignItems: "flex-start",
     },
     searchField: {
-      flex: 1,
+      flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
+      alignSelf: "stretch",
     },
     searchWarning: {
       paddingHorizontal: 12,
@@ -2406,15 +2446,22 @@ function createStyles(colors: ThemeColors) {
       color: colors.text,
     },
     spacer: {
-      flex: 1,
+      flexGrow: 1,
+      flexShrink: 0,
+      alignItems: "flex-end",
+      justifyContent: "center",
+      paddingRight: 12,
     },
     controlColumn: {
-      position: "absolute",
-      right: 12,
-      top: 0,
-      bottom: 0,
-      justifyContent: "center",
       gap: 12,
+    },
+    sheetScroll: {
+      flexGrow: 0,
+      flexShrink: 1,
+      minHeight: 0,
+    },
+    sheetScrollContent: {
+      flexGrow: 0,
     },
     mapButton: {
       width: 48,

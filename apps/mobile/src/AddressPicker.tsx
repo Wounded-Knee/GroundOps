@@ -1,7 +1,7 @@
 import type { GeoCoordinate, PlaceSuggestion } from "@groundops/contracts";
 import * as Location from "expo-location";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import {
   matchLocalAddresses,
   samePlace,
@@ -32,6 +32,7 @@ export function AddressPicker({
   token,
   bias,
   appearance,
+  listMaxHeight,
   autoFocus = false,
   onQueryChange,
   onSelect,
@@ -44,6 +45,8 @@ export function AddressPicker({
   token: string;
   bias?: GeoCoordinate | null;
   appearance: "field" | "search";
+  /** Caps the search suggestion list so it stays above the status stack. */
+  listMaxHeight?: number;
   autoFocus?: boolean;
   onQueryChange: (query: string) => void;
   onSelect: (suggestion: PlaceSuggestion) => void;
@@ -51,6 +54,7 @@ export function AddressPicker({
   onSearchFailed?: () => void;
 }) {
   const { colors } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
   const styles = createStyles(colors);
   const inputRef = useRef<TextInput>(null);
   const generation = useRef(0);
@@ -68,6 +72,7 @@ export function AddressPicker({
   onSearchFailedRef.current = onSearchFailed;
   const book = useSyncExternalStore(subscribeAddressBook, getAddressBookSnapshot, getAddressBookSnapshot);
   const [rows, setRows] = useState<ShownRow[]>([]);
+  const [suggestionContentHeight, setSuggestionContentHeight] = useState(0);
 
   useEffect(() => {
     if (biasProvided) {
@@ -209,8 +214,22 @@ export function AddressPicker({
     });
   }
 
+  const suggestionMax = listMaxHeight ?? Math.max(120, windowHeight * 0.35);
+  const suggestionHeight =
+    suggestionContentHeight > 0 ? Math.min(suggestionContentHeight, suggestionMax) : undefined;
+  const suggestions = rows.map((row) => (
+    <Pressable
+      key={row.key}
+      onPress={() => (row.kind === "phone" ? choosePhone(row) : choose(row.suggestion))}
+      style={appearance === "field" ? styles.fieldSuggestion : styles.searchSuggestion}
+    >
+      <Text style={styles.suggestionText}>{row.name}</Text>
+      {row.detail.length > 0 ? <Text style={styles.suggestionDetail}>{row.detail}</Text> : null}
+    </Pressable>
+  ));
+
   return (
-    <View>
+    <View style={appearance === "search" ? styles.searchRoot : null}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
       <View style={appearance === "field" ? styles.fieldRow : styles.searchRow}>
         <TextInput
@@ -233,16 +252,27 @@ export function AddressPicker({
           <Text style={styles.clearText}>x</Text>
         </Pressable>
       </View>
-      {rows.map((row) => (
-        <Pressable
-          key={row.key}
-          onPress={() => (row.kind === "phone" ? choosePhone(row) : choose(row.suggestion))}
-          style={appearance === "field" ? styles.fieldSuggestion : styles.searchSuggestion}
-        >
-          <Text style={styles.suggestionText}>{row.name}</Text>
-          {row.detail.length > 0 ? <Text style={styles.suggestionDetail}>{row.detail}</Text> : null}
-        </Pressable>
-      ))}
+      {appearance === "search" ? (
+        suggestions.length > 0 ? (
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            style={[
+              styles.suggestionScroll,
+              { maxHeight: suggestionMax },
+              suggestionHeight !== undefined ? { height: suggestionHeight } : null,
+            ]}
+            nestedScrollEnabled
+            onContentSizeChange={(_width, height) => {
+              const next = Math.ceil(height);
+              setSuggestionContentHeight((current) => (current === next ? current : next));
+            }}
+          >
+            {suggestions}
+          </ScrollView>
+        ) : null
+      ) : (
+        suggestions
+      )}
     </View>
   );
 }
@@ -300,6 +330,16 @@ function placeRow(suggestion: PlaceSuggestion): ShownRow {
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
+    searchRoot: {
+      flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
+    },
+    suggestionScroll: {
+      flexGrow: 0,
+      flexShrink: 1,
+      minHeight: 0,
+    },
     label: {
       color: colors.text,
       fontSize: 14,
