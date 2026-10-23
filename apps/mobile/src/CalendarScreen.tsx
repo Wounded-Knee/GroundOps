@@ -35,8 +35,12 @@ import {
   availabilityBlocksOnDay,
   blockOnDay,
   calendarDayDelta,
+  clipActivitiesToDay,
+  type ClippedActivityBand,
+  type ClippedStopArrival,
   type LanePlacement,
   clampHourHeight,
+  sortieActivitySegments,
   zoomedScrollY,
   dayDeltaFromPixels,
   formatUsPhone,
@@ -65,7 +69,7 @@ import type { SortieGuideCommand } from "./sortieGuide";
 import { requestSortieDrivingRoute } from "./routingClient";
 import { SortieDialog, emptyPlaces, placesFromSortie, sortieTitle, type DialogDraft } from "./SortieDialog";
 import { useTheme } from "./ThemeProvider";
-import type { ThemeColors } from "./theme";
+import { activitySegmentColor, type ThemeColors } from "./theme";
 
 const couldNotLoad = "The calendar could not be loaded.";
 const couldNotRefresh = "The calendar could not be refreshed.";
@@ -76,6 +80,9 @@ const departureFailed = "The departure could not be recorded.";
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hours = Array.from({ length: 24 }, (_, hour) => hour);
 const longPressMs = 500;
+const waypointLabelRoom = 12;
+const waypointLabelGap = 14;
+const waypointTitleClearance = 34;
 
 const apiUrl = resolveApiUrl();
 
@@ -926,11 +933,14 @@ export function CalendarScreen({
                         if (!block || !lane) {
                           return null;
                         }
+                        const painted = clipActivitiesToDay(sortieActivitySegments(sortie), start, end, day);
                         return (
                           <HourBlock
                             key={sortie.id}
                             label={sortieTitle(sortie)}
                             reposition={sortieIsReposition(sortie)}
+                            bands={painted.bands}
+                            arrivals={painted.arrivals}
                             top={block.top}
                             height={block.height}
                             lane={lane}
@@ -1372,9 +1382,31 @@ function withFreshSortie(dialog: DialogDraft | null, sorties: Sortie[]): DialogD
   return { ...dialog, sortie: fresh };
 }
 
+function markersOnBlock(
+  arrivals: ClippedStopArrival[],
+  height: number,
+): { lineTop: number; labelTop: number; label: string; showLabel: boolean }[] {
+  let lastLabeledTop: number | null = null;
+  return arrivals.map((arrival) => {
+    const lineTop = Math.min(arrival.fraction * height, Math.max(0, height - StyleSheet.hairlineWidth));
+    const naturalLabelTop = lineTop + StyleSheet.hairlineWidth;
+    const labelTop = naturalLabelTop < waypointTitleClearance ? waypointTitleClearance : naturalLabelTop;
+    const showLabel =
+      arrival.label.trim().length > 0 &&
+      height - labelTop >= waypointLabelRoom &&
+      (lastLabeledTop === null || lineTop - lastLabeledTop >= waypointLabelGap);
+    if (showLabel) {
+      lastLabeledTop = lineTop;
+    }
+    return { lineTop, labelTop, label: arrival.label, showLabel };
+  });
+}
+
 function HourBlock({
   label,
   reposition,
+  bands,
+  arrivals,
   top,
   height,
   lane,
@@ -1389,6 +1421,8 @@ function HourBlock({
 }: {
   label: string;
   reposition: boolean;
+  bands: ClippedActivityBand[];
+  arrivals: ClippedStopArrival[];
   top: number;
   height: number;
   lane: LanePlacement;
@@ -1501,6 +1535,9 @@ function HourBlock({
   ).current;
 
   const offset = drag ?? heldOffset ?? { x: 0, y: 0 };
+  const baseColor = reposition ? colors.reposition : colors.primary;
+  const textColor = reposition ? colors.repositionText : colors.primaryText;
+  const markers = markersOnBlock(arrivals, height);
 
   return (
     <View
@@ -1517,6 +1554,42 @@ function HourBlock({
       ]}
     >
       <View {...moveResponder.panHandlers} style={[styles.blockBody, reposition ? styles.blockBodyReposition : null]}>
+        {bands.length > 0 ? (
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.activityBands]}>
+            {bands.map((band, index) => (
+              <View
+                key={`${band.kind}-${index}`}
+                style={{ flex: band.fraction, backgroundColor: activitySegmentColor(baseColor, band.kind) }}
+              />
+            ))}
+          </View>
+        ) : null}
+        {markers.length > 0 ? (
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.waypointLayer]}>
+            {markers.map((marker, index) => (
+              <View key={`${marker.lineTop}-${index}`} style={[styles.waypointMark, { top: marker.lineTop }]}>
+                <View style={[styles.waypointLine, { backgroundColor: textColor }]} />
+                {marker.showLabel ? (
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.waypointLabel,
+                      {
+                        color: textColor,
+                        position: "absolute",
+                        top: marker.labelTop - marker.lineTop,
+                        left: 0,
+                        right: 0,
+                      },
+                    ]}
+                  >
+                    {marker.label}
+                  </Text>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        ) : null}
         <Text numberOfLines={2} style={[styles.blockText, reposition ? styles.blockTextReposition : null]}>
           {label}
         </Text>
@@ -1707,15 +1780,34 @@ function createStyles(colors: ThemeColors) {
     },
     blockBody: {
       flex: 1,
-      paddingHorizontal: 4,
-      paddingVertical: 2,
       backgroundColor: colors.primary,
       borderRadius: 4,
       overflow: "hidden",
     },
+    activityBands: {
+      flexDirection: "column",
+    },
+    waypointLayer: {
+      zIndex: 1,
+    },
+    waypointMark: {
+      position: "absolute",
+      left: 0,
+      right: 0,
+    },
+    waypointLine: {
+      height: StyleSheet.hairlineWidth,
+    },
+    waypointLabel: {
+      fontSize: 10,
+      paddingHorizontal: 4,
+    },
     blockText: {
       color: colors.primaryText,
       fontSize: 11,
+      paddingHorizontal: 4,
+      paddingVertical: 2,
+      zIndex: 2,
     },
     blockBodyReposition: {
       backgroundColor: colors.reposition,

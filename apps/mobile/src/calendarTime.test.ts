@@ -5,6 +5,7 @@ import {
   blockOnDay,
   calendarDayDelta,
   clampHourHeight,
+  clipActivitiesToDay,
   zoomedScrollY,
   formatUsPhone,
   hourHeightMax,
@@ -25,12 +26,15 @@ import {
   setCalendarTimeZoneOverride,
   shiftAnchor,
   shiftIntervalDays,
+  sortieActivitySegments,
   sortieIsPast,
   startOfDay,
   upcomingSorties,
   visibleRange,
 } from "./calendarTime.js";
+import { distanceMeters } from "./guidance.js";
 import { coalescedEndDate } from "./sortieStart.js";
+import { activitySegmentColor } from "./theme.js";
 
 describe("calendar time", () => {
   it("requests the visible month grid, week, and day", () => {
@@ -275,6 +279,209 @@ describe("calendar time", () => {
     );
   });
 });
+
+describe("sortie activity segments", () => {
+  it("draws one passenger band and keeps the arrival inside it", () => {
+    const start = new Date(2026, 8, 28, 9, 0);
+    const arrival = new Date(2026, 8, 28, 9, 40);
+    const end = new Date(2026, 8, 28, 10, 0);
+    const activities = sortieActivitySegments(
+      activitySortie(start, arrival, end, [stop("Pickup", true, 0, 40, -75)]),
+    );
+    assert.equal(activities.segments.length, 1);
+    assert.equal(activities.segments[0]?.kind, "passenger");
+    assert.equal(activities.segments[0]?.start.getTime(), start.getTime());
+    assert.equal(activities.segments[0]?.end.getTime(), end.getTime());
+    assert.equal(activities.arrivals.length, 1);
+    assert.equal(activities.arrivals[0]?.label, "Pickup");
+    assert.equal(activities.arrivals[0]?.at.getTime(), arrival.getTime());
+
+    const clipped = clipActivitiesToDay(activities, start, end, start);
+    assert.equal(clipped.bands.length, 1);
+    assert.equal(clipped.bands[0]?.fraction, 1);
+    assert.equal(clipped.arrivals[0]?.fraction, 40 / 60);
+  });
+
+  it("places a dead-head approach before the authored wait", () => {
+    const start = new Date(2026, 8, 28, 9, 0);
+    const arrival = new Date(2026, 8, 28, 10, 0);
+    const end = new Date(2026, 8, 28, 10, 30);
+    const activities = sortieActivitySegments(
+      activitySortie(start, arrival, end, [stop("Yard", false, 30, 40, -75)]),
+    );
+    assert.deepEqual(
+      activities.segments.map((segment) => segment.kind),
+      ["deadhead", "wait"],
+    );
+    assert.equal(activities.segments[0]?.end.getTime(), arrival.getTime());
+    assert.equal(activities.segments[1]?.start.getTime(), arrival.getTime());
+    assert.equal(activities.segments[1]?.end.getTime(), end.getTime());
+    assert.equal(activities.arrivals[0]?.at.getTime(), arrival.getTime());
+  });
+
+  it("splits the onward drive across later stops by distance", () => {
+    const start = new Date(2026, 8, 28, 9, 0);
+    const arrival = new Date(2026, 8, 28, 9, 30);
+    const end = new Date(2026, 8, 28, 11, 0);
+    const stops = [stop("Yard", false, 10, 40, -75), stop("Home", true, 20, 40, -74)];
+    const activities = sortieActivitySegments(activitySortie(start, arrival, end, stops));
+    assert.deepEqual(
+      activities.segments.map((segment) => segment.kind),
+      ["deadhead", "wait", "passenger", "wait"],
+    );
+    assert.equal(durationMs(activities.segments[0]), 30 * 60_000);
+    assert.equal(durationMs(activities.segments[1]), 10 * 60_000);
+    assert.equal(durationMs(activities.segments[2]), 60 * 60_000);
+    assert.equal(durationMs(activities.segments[3]), 20 * 60_000);
+    assert.equal(activities.arrivals[0]?.at.getTime(), arrival.getTime());
+    assert.equal(activities.arrivals[1]?.at.getTime(), new Date(2026, 8, 28, 10, 40).getTime());
+
+    const far = [
+      stop("A", false, 0, 40, -75),
+      stop("B", true, 0, 40, -74.9),
+      stop("C", true, 0, 40, -74.7),
+    ];
+    const splitStart = new Date(2026, 8, 28, 9, 0);
+    const splitArrival = new Date(2026, 8, 28, 10, 0);
+    const splitEnd = new Date(2026, 8, 28, 11, 0);
+    const split = sortieActivitySegments(activitySortie(splitStart, splitArrival, splitEnd, far));
+    const firstLeg = distanceMeters(
+      { latitude: 40, longitude: -75 },
+      { latitude: 40, longitude: -74.9 },
+    );
+    const secondLeg = distanceMeters(
+      { latitude: 40, longitude: -74.9 },
+      { latitude: 40, longitude: -74.7 },
+    );
+    const residual = 60 * 60_000;
+    assertClose(durationMs(split.segments[1]), (residual * firstLeg) / (firstLeg + secondLeg));
+    assertClose(durationMs(split.segments[2]), residual - durationMs(split.segments[1]));
+    assert.equal(split.segments[1]?.kind, "passenger");
+    assert.equal(split.segments[2]?.kind, "passenger");
+    assert.equal(split.arrivals.length, 3);
+  });
+
+  it("shrinks drives and scales waits when dwell already fills the window", () => {
+    const start = new Date(2026, 8, 28, 9, 0);
+    const arrival = new Date(2026, 8, 28, 9, 20);
+    const end = new Date(2026, 8, 28, 10, 0);
+    const activities = sortieActivitySegments(
+      activitySortie(start, arrival, end, [
+        stop("First", false, 30, 40, -75),
+        stop("Second", true, 30, 41, -75),
+      ]),
+    );
+    assert.deepEqual(
+      activities.segments.map((segment) => segment.kind),
+      ["deadhead", "wait", "wait"],
+    );
+    assert.equal(durationMs(activities.segments[0]), 20 * 60_000);
+    assert.equal(durationMs(activities.segments[1]), 20 * 60_000);
+    assert.equal(durationMs(activities.segments[2]), 20 * 60_000);
+    assert.equal(activities.arrivals[1]?.at.getTime(), new Date(2026, 8, 28, 9, 40).getTime());
+  });
+
+  it("drops a next-day arrival from the first day's slice", () => {
+    const start = new Date(2026, 8, 28, 22, 0);
+    const arrival = new Date(2026, 8, 28, 23, 0);
+    const end = new Date(2026, 8, 29, 2, 0);
+    const activities = sortieActivitySegments(
+      activitySortie(start, arrival, end, [
+        stop("Depot", false, 0, 40, -75),
+        stop("Terminal", true, 60, 41, -75),
+      ]),
+    );
+    assert.equal(activities.arrivals[0]?.at.getTime(), arrival.getTime());
+    assert.equal(activities.arrivals[1]?.at.getTime(), new Date(2026, 8, 29, 1, 0).getTime());
+
+    const firstDay = clipActivitiesToDay(activities, start, end, start);
+    assert.deepEqual(
+      firstDay.bands.map((band) => band.kind),
+      ["deadhead", "passenger"],
+    );
+    assertClose(firstDay.bands[0]?.fraction ?? 0, 0.5);
+    assertClose(firstDay.bands[1]?.fraction ?? 0, 0.5);
+    assert.deepEqual(
+      firstDay.arrivals.map((mark) => mark.label),
+      ["Depot"],
+    );
+    assertClose(firstDay.arrivals[0]?.fraction ?? 0, 0.5);
+
+    const secondDay = clipActivitiesToDay(activities, start, end, end);
+    assert.deepEqual(
+      secondDay.bands.map((band) => band.kind),
+      ["passenger", "wait"],
+    );
+    assert.deepEqual(
+      secondDay.arrivals.map((mark) => mark.label),
+      ["Terminal"],
+    );
+    assertClose(secondDay.arrivals[0]?.fraction ?? 0, 0.5);
+    assertClose(
+      secondDay.bands.reduce((sum, band) => sum + band.fraction, 0),
+      1,
+    );
+  });
+
+  it("shares one line when two stops arrive together", () => {
+    const start = new Date(2026, 8, 28, 9, 0);
+    const arrival = new Date(2026, 8, 28, 10, 0);
+    const activities = sortieActivitySegments(
+      activitySortie(start, arrival, arrival, [
+        stop("Gate", false, 0, 40, -75),
+        stop("Stand", false, 0, 40, -75),
+      ]),
+    );
+    assert.equal(activities.arrivals.length, 1);
+    assert.equal(activities.arrivals[0]?.label, "Gate · Stand");
+    assert.equal(activities.arrivals[0]?.at.getTime(), arrival.getTime());
+  });
+});
+
+describe("activity segment colors", () => {
+  it("keeps passenger on the base color and shades dead-head and wait", () => {
+    assert.equal(activitySegmentColor("#111111", "passenger"), "#111111");
+    assert.equal(activitySegmentColor("#111111", "deadhead"), "#646464");
+    assert.equal(activitySegmentColor("#111111", "wait"), "#8e7308");
+    assert.equal(activitySegmentColor("#f2f2f2", "deadhead"), "#9d9d9d");
+  });
+});
+
+function activitySortie(
+  start: Date,
+  arrival: Date,
+  end: Date,
+  stops: ReturnType<typeof stop>[],
+) {
+  return {
+    actualStart: null,
+    scheduledStart: start.toISOString(),
+    actualEnd: null,
+    scheduledEnd: end.toISOString(),
+    arrivalAt: arrival.toISOString(),
+    stops,
+  };
+}
+
+function stop(label: string, passenger: boolean, waitMinutes: number, latitude: number, longitude: number) {
+  return {
+    label,
+    latitude,
+    longitude,
+    waitMinutes,
+    passenger,
+    actualArrivedAt: null,
+    actualDepartedAt: null,
+  };
+}
+
+function durationMs(segment: { start: Date; end: Date } | undefined): number {
+  return (segment?.end.getTime() ?? 0) - (segment?.start.getTime() ?? 0);
+}
+
+function assertClose(actual: number, expected: number): void {
+  assert.ok(Math.abs(actual - expected) <= 1, `${actual} not close to ${expected}`);
+}
 
 function agendaSortie(
   id: string,

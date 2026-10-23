@@ -61,6 +61,71 @@ export function colorsForScheme(scheme: ThemeScheme): ThemeColors {
   return scheme === "dark" ? darkColors : lightColors;
 }
 
+const deadheadShade = 0.35;
+const waitShade = 0.55;
+const waitYellow = "#F5C400";
+
+export type ActivitySegmentKind = "deadhead" | "passenger" | "wait";
+
+/** Mix `amount` of `to` into `from`. `0` is `from`, `1` is `to`. */
+export function mixHex(from: string, to: string, amount: number): string {
+  const start = parseHex(from);
+  const end = parseHex(to);
+  if (!start || !end) {
+    return from;
+  }
+  const blend = Math.min(1, Math.max(0, amount));
+  const channel = (left: number, right: number) => Math.round(left + (right - left) * blend);
+  return `#${toHex(channel(start.r, end.r))}${toHex(channel(start.g, end.g))}${toHex(channel(start.b, end.b))}`;
+}
+
+/** Passenger keeps the block color. Dead-head is a lighter or darker shade. Wait is yellow-tinted. */
+export function activitySegmentColor(base: string, kind: ActivitySegmentKind): string {
+  if (kind === "passenger") {
+    return base;
+  }
+  if (kind === "deadhead") {
+    const toward = relativeLuminance(base) > 0.5 ? "#000000" : "#ffffff";
+    return mixHex(base, toward, deadheadShade);
+  }
+  return mixHex(base, waitYellow, waitShade);
+}
+
+function parseHex(hex: string): { r: number; g: number; b: number } | null {
+  const raw = hex.startsWith("#") ? hex.slice(1) : hex;
+  const full =
+    raw.length === 3
+      ? raw
+          .split("")
+          .map((ch) => `${ch}${ch}`)
+          .join("")
+      : raw;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) {
+    return null;
+  }
+  return {
+    r: Number.parseInt(full.slice(0, 2), 16),
+    g: Number.parseInt(full.slice(2, 4), 16),
+    b: Number.parseInt(full.slice(4, 6), 16),
+  };
+}
+
+function toHex(value: number): string {
+  return value.toString(16).padStart(2, "0");
+}
+
+function relativeLuminance(hex: string): number {
+  const parsed = parseHex(hex);
+  if (!parsed) {
+    return 0;
+  }
+  const channel = (value: number) => {
+    const scaled = value / 255;
+    return scaled <= 0.04045 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(parsed.r) + 0.7152 * channel(parsed.g) + 0.0722 * channel(parsed.b);
+}
+
 /** Hex color with alpha; leaves children at full opacity when used as backgroundColor. */
 export function withAlpha(hex: string, alpha: number): string {
   const raw = hex.startsWith("#") ? hex.slice(1) : hex;

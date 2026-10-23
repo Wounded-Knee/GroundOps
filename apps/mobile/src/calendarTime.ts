@@ -1,4 +1,5 @@
 import type { AvailabilityInterval, Sortie } from "@groundops/contracts";
+import { distanceMeters } from "./guidance";
 import { coalescedEndDate, coalescedStartDate } from "./sortieStart";
 
 export type CalendarScope = "month" | "week" | "day" | "agenda";
@@ -393,6 +394,268 @@ export function blockOnDay(
   const top = (startMinutes / 60) * pixelsPerHour;
   const height = ((endMinutes - startMinutes) / 60) * pixelsPerHour;
   return { top, height };
+}
+
+export type ActivityKind = "deadhead" | "passenger" | "wait";
+
+export type ActivitySegment = {
+  kind: ActivityKind;
+  start: Date;
+  end: Date;
+};
+
+export type StopArrivalMark = {
+  at: Date;
+  label: string;
+};
+
+export type SortieActivities = {
+  segments: ActivitySegment[];
+  arrivals: StopArrivalMark[];
+};
+
+export type ClippedActivityBand = {
+  kind: ActivityKind;
+  fraction: number;
+};
+
+export type ClippedStopArrival = {
+  label: string;
+  fraction: number;
+};
+
+const minuteMs = 60_000;
+
+/**
+ * Drive and wait bands for one sortie, plus a mark at each stop arrival.
+ * The approach is the gap from the coalesced start to arrival. Onward driving
+ * is whatever remains after authored waits, split by straight-line distance.
+ */
+export function sortieActivitySegments(
+  sortie: Pick<Sortie, "actualStart" | "scheduledStart" | "actualEnd" | "scheduledEnd" | "arrivalAt" | "stops">,
+): SortieActivities {
+  const start = coalescedStartDate(sortie);
+  const end = coalescedEndDate(sortie);
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  const windowMs = endMs - startMs;
+  const first = sortie.stops[0];
+  if (!(windowMs > 0) || !first) {
+    return { segments: [], arrivals: [] };
+  }
+
+  const parsedArrival = new Date(sortie.arrivalAt);
+  const arrivalMs = Number.isNaN(parsedArrival.getTime()) ? startMs : parsedArrival.getTime();
+  const approachMs = Math.min(endMs, Math.max(startMs, arrivalMs)) - startMs;
+  const remainingMs = windowMs - approachMs;
+  const authoredWaits = sortie.stops.map((stop) => Math.max(0, stop.waitMinutes) * minuteMs);
+  const totalWait = authoredWaits.reduce((sum, wait) => sum + wait, 0);
+  const laterCount = sortie.stops.length - 1;
+
+  let waits = authoredWaits;
+  let drives: number[] = [];
+  if (totalWait > remainingMs && totalWait > 0) {
+    const scale = remainingMs / totalWait;
+    waits = authoredWaits.map((wait) => wait * scale);
+    drives = Array.from({ length: laterCount }, () => 0);
+  } else if (laterCount === 0) {
+    drives = [];
+  } else {
+    const distances: number[] = [];
+    for (let index = 1; index < sortie.stops.length; index += 1) {
+      const previous = sortie.stops[index - 1];
+      const next = sortie.stops[index];
+      if (!previous || !next) {
+        distances.push(0);
+        continue;
+      }
+      distances.push(
+        distanceMeters(
+          { latitude: previous.latitude, longitude: previous.longitude },
+          { latitude: next.latitude, longitude: next.longitude },
+        ),
+      );
+    }
+    drives = splitDrive(remainingMs - totalWait, distances);
+  }
+
+  const segments: ActivitySegment[] = [];
+  const arrivals: StopArrivalMark[] = [];
+  let cursor = startMs;
+  if (approachMs > 0) {
+    segments.push({
+      kind: driveKind(first),
+      start: new Date(cursor),
+      end: new Date(cursor + approachMs),
+    });
+    cursor += approachMs;
+  }
+
+  for (let index = 0; index < sortie.stops.length; index += 1) {
+    const stop = sortie.stops[index];
+    if (!stop) {
+      continue;
+    }
+    if (index > 0) {
+      const drive = drives[index - 1] ?? 0;
+      if (drive > 0) {
+        segments.push({
+          kind: driveKind(stop),
+          start: new Date(cursor),
+          end: new Date(cursor + drive),
+        });
+        cursor += drive;
+      }
+    }
+    arrivals.push({
+      at: index === 0 ? new Date(arrivalMs) : new Date(cursor),
+      label: stop.label,
+    });
+    const wait = waits[index] ?? 0;
+    if (wait > 0) {
+      segments.push({
+        kind: "wait",
+        start: new Date(cursor),
+        end: new Date(cursor + wait),
+      });
+      cursor += wait;
+    }
+  }
+
+  if (segments.length === 0) {
+    segments.push({ kind: driveKind(first), start, end });
+  } else {
+    const last = segments[segments.length - 1];
+    if (last && last.start.getTime() < endMs) {
+      last.end = end;
+    }
+  }
+
+  return { segments, arrivals: mergeArrivals(arrivals) };
+}
+
+/** Band fractions and arrival offsets for the part of a sortie visible on one day. */
+export function clipActivitiesToDay(
+  activities: SortieActivities,
+  windowStart: Date,
+  windowEnd: Date,
+  day: Date,
+): { bands: ClippedActivityBand[]; arrivals: ClippedStopArrival[] } {
+  const visible = visibleWindowOnDay(windowStart, windowEnd, day);
+  if (!visible) {
+    return { bands: [], arrivals: [] };
+  }
+  const visibleStart = visible.start.getTime();
+  const visibleEnd = visible.end.getTime();
+  const visibleMs = visibleEnd - visibleStart;
+  if (!(visibleMs > 0)) {
+    return { bands: [], arrivals: [] };
+  }
+
+  const bands: ClippedActivityBand[] = [];
+  for (const segment of activities.segments) {
+    const overlapStart = Math.max(segment.start.getTime(), visibleStart);
+    const overlapEnd = Math.min(segment.end.getTime(), visibleEnd);
+    if (overlapEnd <= overlapStart) {
+      continue;
+    }
+    bands.push({ kind: segment.kind, fraction: (overlapEnd - overlapStart) / visibleMs });
+  }
+
+  const windowEndMs = windowEnd.getTime();
+  const arrivals: ClippedStopArrival[] = [];
+  for (const arrival of activities.arrivals) {
+    const at = arrival.at.getTime();
+    if (!arrivalInSlice(at, visibleStart, visibleEnd, windowEndMs)) {
+      continue;
+    }
+    const fraction = (at - visibleStart) / visibleMs;
+    const previous = arrivals[arrivals.length - 1];
+    if (previous && Math.abs(previous.fraction - fraction) < 1e-9) {
+      previous.label = joinLabels(previous.label, arrival.label);
+      continue;
+    }
+    arrivals.push({ label: arrival.label, fraction });
+  }
+  return { bands, arrivals };
+}
+
+function driveKind(stop: { passenger: boolean }): ActivityKind {
+  return stop.passenger ? "passenger" : "deadhead";
+}
+
+function splitDrive(residualMs: number, distances: number[]): number[] {
+  if (distances.length === 0) {
+    return [];
+  }
+  if (!(residualMs > 0)) {
+    return distances.map(() => 0);
+  }
+  const total = distances.reduce((sum, distance) => sum + Math.max(0, distance), 0);
+  if (!(total > 0)) {
+    const each = residualMs / distances.length;
+    return distances.map((_, index) =>
+      index === distances.length - 1 ? residualMs - each * (distances.length - 1) : each,
+    );
+  }
+  const drives: number[] = [];
+  let used = 0;
+  for (let index = 0; index < distances.length; index += 1) {
+    if (index === distances.length - 1) {
+      drives.push(residualMs - used);
+      break;
+    }
+    const share = (residualMs * Math.max(0, distances[index] ?? 0)) / total;
+    drives.push(share);
+    used += share;
+  }
+  return drives;
+}
+
+function mergeArrivals(arrivals: StopArrivalMark[]): StopArrivalMark[] {
+  const merged: StopArrivalMark[] = [];
+  for (const arrival of arrivals) {
+    const previous = merged[merged.length - 1];
+    if (previous && previous.at.getTime() === arrival.at.getTime()) {
+      previous.label = joinLabels(previous.label, arrival.label);
+      continue;
+    }
+    merged.push({ at: arrival.at, label: arrival.label });
+  }
+  return merged;
+}
+
+function joinLabels(left: string, right: string): string {
+  if (left.length === 0) {
+    return right;
+  }
+  if (right.length === 0 || right === left) {
+    return left;
+  }
+  return `${left} · ${right}`;
+}
+
+function visibleWindowOnDay(start: Date, end: Date, day: Date): { start: Date; end: Date } | null {
+  const dayStart = startOfDay(day);
+  const dayEnd = addDays(dayStart, 1);
+  if (end.getTime() <= dayStart.getTime() || start.getTime() >= dayEnd.getTime()) {
+    return null;
+  }
+  return {
+    start: start.getTime() < dayStart.getTime() ? dayStart : start,
+    end: end.getTime() > dayEnd.getTime() ? dayEnd : end,
+  };
+}
+
+/** An arrival on the midnight boundary stays with the day the sortie ends, otherwise the day it falls in. */
+function arrivalInSlice(at: number, visibleStart: number, visibleEnd: number, windowEnd: number): boolean {
+  if (at < visibleStart || at > visibleEnd) {
+    return false;
+  }
+  if (at < visibleEnd) {
+    return true;
+  }
+  return at === windowEnd;
 }
 
 export type LanePlacement = { column: number; span: number; columns: number };
