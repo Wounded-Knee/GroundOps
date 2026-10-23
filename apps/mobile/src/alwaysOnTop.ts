@@ -37,7 +37,6 @@ type AlwaysOnTopNative = {
 let native: AlwaysOnTopNative | null | undefined;
 let overlayActive = false;
 let remembered: VisualAlertPrefs | null = null;
-let overlayUnavailable: (() => void) | null = null;
 
 function module(): AlwaysOnTopNative | null {
   if (Platform.OS !== "android") {
@@ -60,21 +59,6 @@ export function setNativeOverlayActive(active: boolean): void {
 
 export function isNativeOverlayActive(): boolean {
   return overlayActive;
-}
-
-/** The full-screen overlay could not attach. The in-app alert should show instead. */
-export function subscribeOverlayUnavailable(listener: () => void): () => void {
-  overlayUnavailable = listener;
-  return () => {
-    if (overlayUnavailable === listener) {
-      overlayUnavailable = null;
-    }
-  };
-}
-
-function noteNativeOverlayFailed(): void {
-  overlayActive = false;
-  overlayUnavailable?.();
 }
 
 export function rememberAlertPrefs(prefs: VisualAlertPrefs): void {
@@ -101,7 +85,7 @@ export function promptOverlayPermission(): void {
   module()?.promptOverlayPermission();
 }
 
-/** Shows the steady rim while the map is floating. False when the overlay cannot attach. */
+/** Stores the rim and shows it while the map is floating. False when Display over other apps is missing. */
 export function armNativeAlert(prefs: VisualAlertPrefs): boolean {
   remembered = prefs;
   const current = module();
@@ -134,7 +118,7 @@ export function playNativeThrob(count: number, side: AlertSide): boolean {
     return false;
   }
   const edges = alertEdges(side);
-  const played = current.throb({
+  return current.throb({
     count,
     intensity: throbIntensity,
     top: edges.top,
@@ -143,10 +127,6 @@ export function playNativeThrob(count: number, side: AlertSide): boolean {
     right: edges.right,
     stops,
   });
-  if (!played) {
-    noteNativeOverlayFailed();
-  }
-  return played;
 }
 
 export function subscribeAlwaysOnTop(listener: (active: boolean) => void): () => void {

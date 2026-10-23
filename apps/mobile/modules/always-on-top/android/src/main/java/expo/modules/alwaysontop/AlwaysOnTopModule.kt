@@ -218,8 +218,11 @@ class AlwaysOnTopModule : Module() {
           overlay?.remove()
           false
         } else {
-          syncOverlay()
-          overlayAvailable()
+          if (pipActive) {
+            overlay()?.reattach()
+            syncOverlay()
+          }
+          true
         }
       }
     }
@@ -230,6 +233,7 @@ class AlwaysOnTopModule : Module() {
           return@onMainSync false
         }
         val current = overlay() ?: return@onMainSync false
+        current.reattach()
         current.playThrob(
           count = frame.count.toInt(),
           intensity = frame.intensity.toFloat(),
@@ -262,15 +266,16 @@ class AlwaysOnTopModule : Module() {
   private fun emit(active: Boolean) {
     val changed = pipActive != active
     pipActive = active
-    if (changed) {
-      if (!active) {
-        overlay?.cancelThrob()
-        overlay?.remove()
-      } else {
-        syncOverlay()
-      }
+    if (active) {
+      overlay?.reattach()
+      syncOverlay()
+    } else if (changed) {
+      overlay?.cancelThrob()
+      overlay?.remove()
     }
-    sendEvent("change", mapOf("active" to active))
+    if (changed) {
+      sendEvent("change", mapOf("active" to active))
+    }
   }
 
   private fun syncOverlay() {

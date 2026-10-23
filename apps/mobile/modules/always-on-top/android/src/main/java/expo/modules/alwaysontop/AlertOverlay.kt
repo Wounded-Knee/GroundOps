@@ -6,8 +6,10 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.Shader
 import android.os.Build
+import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -61,6 +63,12 @@ internal class AlertOverlay(context: Context) {
   private var throbAnimator: Animator? = null
 
   fun isThrobbing(): Boolean = throbAnimator != null
+
+  /** Drops a failed or picture-in-picture-sized window so the next show uses the full display. */
+  fun reattach() {
+    attachFailed = false
+    remove()
+  }
 
   fun showSteady(intensity: Float, stops: List<FadeStop>, edges: AlertEdges) {
     if (throbAnimator != null) {
@@ -133,16 +141,59 @@ internal class AlertOverlay(context: Context) {
   }
 
   private fun ensureAttached(): Boolean {
-    if (attached) {
-      return true
-    }
-    if (attachFailed || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
       attachFailed = true
       return false
     }
+    val params = displayLayoutParams() ?: return false
+    if (attached) {
+      return updateAttached(params)
+    }
+    if (attachFailed) {
+      return false
+    }
+    return try {
+      windowManager.addView(view, params)
+      attached = true
+      attachFailed = false
+      true
+    } catch (_: RuntimeException) {
+      attachFailed = true
+      attached = false
+      false
+    }
+  }
+
+  private fun updateAttached(params: WindowManager.LayoutParams): Boolean {
+    return try {
+      windowManager.updateViewLayout(view, params)
+      true
+    } catch (_: RuntimeException) {
+      attached = false
+      try {
+        windowManager.removeView(view)
+      } catch (_: RuntimeException) {
+      }
+      try {
+        windowManager.addView(view, params)
+        attached = true
+        attachFailed = false
+        true
+      } catch (_: RuntimeException) {
+        attachFailed = true
+        false
+      }
+    }
+  }
+
+  private fun displayLayoutParams(): WindowManager.LayoutParams? {
+    val (widthPx, heightPx) = realDisplaySize()
+    if (widthPx <= 0 || heightPx <= 0) {
+      return null
+    }
     val params = WindowManager.LayoutParams(
-      WindowManager.LayoutParams.MATCH_PARENT,
-      WindowManager.LayoutParams.MATCH_PARENT,
+      widthPx,
+      heightPx,
       WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
       WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -158,14 +209,20 @@ internal class AlertOverlay(context: Context) {
       params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
     }
     params.gravity = Gravity.TOP or Gravity.START
-    return try {
-      windowManager.addView(view, params)
-      attached = true
-      true
-    } catch (_: RuntimeException) {
-      attachFailed = true
-      false
+    params.x = 0
+    params.y = 0
+    return params
+  }
+
+  private fun realDisplaySize(): Pair<Int, Int> {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val bounds: Rect = windowManager.maximumWindowMetrics.bounds
+      return bounds.width() to bounds.height()
     }
+    val metrics = DisplayMetrics()
+    @Suppress("DEPRECATION")
+    windowManager.defaultDisplay.getRealMetrics(metrics)
+    return metrics.widthPixels to metrics.heightPixels
   }
 
   private fun pulse(): Animator {

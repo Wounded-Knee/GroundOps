@@ -92,7 +92,6 @@ import {
   setAlwaysOnTopEligible,
   setNativeOverlayActive,
   subscribeAlwaysOnTop,
-  subscribeOverlayUnavailable,
 } from "./src/alwaysOnTop";
 import { ensureAlwaysOnTopConsentLoaded, rememberAlwaysOnTopConsentAsked } from "./src/alwaysOnTopConsent";
 import { shouldAskAlwaysOnTopConsent } from "./src/alwaysOnTopLogic";
@@ -231,13 +230,9 @@ function AppContent() {
       }
     });
     const unsubscribe = subscribeAlwaysOnTop(setFloating);
-    const unsubscribeOverlay = subscribeOverlayUnavailable(() => {
-      setOverlayReady(false);
-    });
     return () => {
       appState.remove();
       unsubscribe();
-      unsubscribeOverlay();
     };
   }, []);
 
@@ -294,9 +289,9 @@ function AppContent() {
       return;
     }
     rememberAlertPrefs(visualAlert);
-    const armed = armNativeAlert(visualAlert);
-    setOverlayReady(armed);
-    setNativeOverlayActive(armed);
+    armNativeAlert(visualAlert);
+    setOverlayReady(true);
+    setNativeOverlayActive(true);
   }, [floating, overlayGranted, visualAlert]);
 
   const [request, , promptAsync] = AuthSession.useAuthRequest(
