@@ -1,0 +1,35 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.deadheadwidget'
+version = '0.1.0'
+
+def generatedIcons = layout.buildDirectory.dir("generated/app-icon")
+
+android {
+  namespace "expo.modules.deadheadwidget"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  sourceSets {
+    main {
+      res.srcDir(generatedIcons)
+    }
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+tasks.register("copyAppIcon", Copy) {
+  from("../../../android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp")
+  into(generatedIcons.map { it.dir("drawable") })
+  rename { "deadhead_app_icon.webp" }
+}
+
+tasks.named("preBuild").configure {
+  dependsOn("copyAppIcon")
+}

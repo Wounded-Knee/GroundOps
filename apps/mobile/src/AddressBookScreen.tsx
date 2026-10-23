@@ -5,6 +5,21 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { entrySubtitle, entrySuggestion, entryTitle, sortAddressEntries } from "./addressBookMatch";
 import {
+  addDeadheadShortcut,
+  publishedShortcutTitle,
+  removeDeadheadShortcut,
+  storedShortcutTitle,
+} from "./deadheadShortcutLogic";
+import {
+  deadheadShortcutCap,
+  ensureDeadheadShortcutsLoaded,
+  getDeadheadShortcuts,
+  saveDeadheadShortcuts,
+  subscribeDeadheadShortcuts,
+  syncPublishedShortcuts,
+} from "./deadheadShortcutStore";
+import { pinAndroidShortcut } from "./deadheadWidget";
+import {
   ensureAddressBookLoaded,
   getAddressBookSnapshot,
   removeSavedEntry,
@@ -31,6 +46,9 @@ const locationRequired = "Location is required.";
 const routeFailed = "The route failed.";
 const notLocated = "That address could not be located.";
 const contactsDenied = "Groundops cannot read addresses from your contacts.";
+const shortcutFull = "The phone's shortcut list is full.";
+const shortcutNotSaved = "The shortcut was not saved.";
+const shortcutNotPinned = "The home screen did not add the icon.";
 
 type PhoneRow = DevicePostalAddress & { starred: boolean };
 
@@ -45,20 +63,24 @@ type AddressDraft = {
 
 export function AddressBookScreen({
   token,
+  userId,
   onUnauthorized,
   onGuide,
   onCreateSortie,
 }: {
   token: string;
+  userId: string;
   onUnauthorized: () => void;
   onGuide: (command: PlaceGuideCommand) => void;
   onCreateSortie: (place: PlaceSuggestion) => void;
 }) {
   const { styles } = useAddressStyles();
   const book = useSyncExternalStore(subscribeAddressBook, getAddressBookSnapshot, getAddressBookSnapshot);
+  const shortcuts = useSyncExternalStore(subscribeDeadheadShortcuts, getDeadheadShortcuts, getDeadheadShortcuts);
   const onUnauthorizedRef = useRef(onUnauthorized);
   onUnauthorizedRef.current = onUnauthorized;
   const [draft, setDraft] = useState<AddressDraft | null>(null);
+  const [shortcutDraft, setShortcutDraft] = useState<{ entryId: string; title: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showPhones, setShowPhones] = useState(false);
@@ -89,6 +111,13 @@ export function AddressBookScreen({
     };
   }, [token]);
 
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      return;
+    }
+    void ensureDeadheadShortcutsLoaded(userId);
+  }, [userId]);
+
   const entries = sortAddressEntries(book.entries);
   const phones = starredPhones(book);
 
@@ -113,6 +142,66 @@ export function AddressBookScreen({
         longitude: entry.longitude,
       },
     });
+  }
+
+  function openShortcut(entry: AddressBookEntry): void {
+    const existing = shortcuts.find((shortcut) => shortcut.entryId === entry.id);
+    if (!existing && shortcuts.length >= deadheadShortcutCap()) {
+      setMessage(shortcutFull);
+      return;
+    }
+    setMessage(null);
+    const title = existing ? publishedShortcutTitle(existing, entry) : entryTitle(entry);
+    setShortcutDraft({ entryId: entry.id, title });
+  }
+
+  async function saveShortcut(): Promise<void> {
+    if (!shortcutDraft || busy) {
+      return;
+    }
+    const entry = entries.find((item) => item.id === shortcutDraft.entryId);
+    if (!entry) {
+      setShortcutDraft(null);
+      return;
+    }
+    const title = storedShortcutTitle(shortcutDraft.title, entryTitle(entry));
+    const result = addDeadheadShortcut(shortcuts, entry.id, title, deadheadShortcutCap());
+    if (!result.added) {
+      setMessage(shortcutFull);
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await saveDeadheadShortcuts(userId, result.shortcuts);
+      await syncPublishedShortcuts(book.entries);
+      const visible = publishedShortcutTitle({ entryId: entry.id, title }, entry);
+      if (Platform.OS === "android" && !pinAndroidShortcut(entry.id, visible, entry.id)) {
+        setMessage(shortcutNotPinned);
+      }
+      setShortcutDraft(null);
+    } catch {
+      setMessage(shortcutNotSaved);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeShortcut(entryId: string): Promise<void> {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await saveDeadheadShortcuts(userId, removeDeadheadShortcut(shortcuts, entryId));
+      await syncPublishedShortcuts(book.entries);
+      setShortcutDraft(null);
+    } catch {
+      setMessage(shortcutNotSaved);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveDraft(): Promise<void> {
@@ -219,6 +308,8 @@ export function AddressBookScreen({
             });
           }}
           onGuide={() => void guideTo(entrySuggestion(entry))}
+          onShortcut={() => openShortcut(entry)}
+          shortcutOn={shortcuts.some((shortcut) => shortcut.entryId === entry.id)}
           onEdit={() => openEdit(entry)}
           onSortie={() => onCreateSortie(entrySuggestion(entry))}
           onDelete={() => {
@@ -285,6 +376,17 @@ export function AddressBookScreen({
         onUnauthorized={onUnauthorized}
       />
     ) : null}
+    {shortcutDraft ? (
+      <ShortcutForm
+        title={shortcutDraft.title}
+        busy={busy}
+        canRemove={shortcuts.some((shortcut) => shortcut.entryId === shortcutDraft.entryId)}
+        onChange={(title) => setShortcutDraft({ ...shortcutDraft, title })}
+        onCancel={() => setShortcutDraft(null)}
+        onSave={() => void saveShortcut()}
+        onRemove={() => void removeShortcut(shortcutDraft.entryId)}
+      />
+    ) : null}
     </View>
   );
 }
@@ -294,6 +396,8 @@ function EntryRow({
   busy,
   onStar,
   onGuide,
+  onShortcut,
+  shortcutOn,
   onEdit,
   onSortie,
   onDelete,
@@ -302,6 +406,8 @@ function EntryRow({
   busy: boolean;
   onStar: () => void;
   onGuide: () => void;
+  onShortcut: () => void;
+  shortcutOn: boolean;
   onEdit: () => void;
   onSortie: () => void;
   onDelete: () => void;
@@ -321,6 +427,14 @@ function EntryRow({
       <View style={styles.actions}>
         {Platform.OS === "web" ? null : (
           <TextButton label="Guide" disabled={busy} onPress={onGuide} />
+        )}
+        {Platform.OS === "web" ? null : (
+          <TextButton
+            label="Shortcut"
+            disabled={busy}
+            selected={shortcutOn}
+            onPress={onShortcut}
+          />
         )}
         <TextButton label="Edit" disabled={busy} onPress={onEdit} />
         <TextButton label="Sortie" disabled={busy} onPress={onSortie} />
@@ -409,6 +523,60 @@ function AddressForm({
   );
 }
 
+function ShortcutForm({
+  title,
+  busy,
+  canRemove,
+  onChange,
+  onCancel,
+  onSave,
+  onRemove,
+}: {
+  title: string;
+  busy: boolean;
+  canRemove: boolean;
+  onChange: (title: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onRemove: () => void;
+}) {
+  const { colors, styles } = useAddressStyles();
+  return (
+    <View style={styles.backdrop}>
+      <ScrollView contentContainerStyle={styles.card} keyboardShouldPersistTaps="handled">
+        <Text style={styles.title}>Shortcut</Text>
+        <Text style={styles.label}>
+          Choose the name once. The home screen icon uses the app icon, with this name under it, and opens dead-head
+          navigation to this place.
+        </Text>
+        <Text style={styles.label}>Name on the home screen</Text>
+        <TextInput
+          value={title}
+          onChangeText={onChange}
+          placeholderTextColor={colors.textMuted}
+          style={styles.input}
+        />
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={onSave}
+          style={[styles.primary, busy ? styles.disabled : null]}
+        >
+          <Text style={styles.primaryText}>{canRemove ? "Save" : "Add to home screen"}</Text>
+        </Pressable>
+        {canRemove ? (
+          <Pressable accessibilityRole="button" disabled={busy} onPress={onRemove} style={styles.secondary}>
+            <Text style={styles.secondaryText}>Remove shortcut</Text>
+          </Pressable>
+        ) : null}
+        <Pressable accessibilityRole="button" onPress={onCancel} style={styles.secondary}>
+          <Text style={styles.secondaryText}>Cancel</Text>
+        </Pressable>
+      </ScrollView>
+    </View>
+  );
+}
+
 function PhoneAddressRow({
   row,
   onStar,
@@ -452,11 +620,28 @@ function StarButton({ favorite, onPress }: { favorite: boolean; onPress: () => v
   );
 }
 
-function TextButton({ label, disabled = false, onPress }: { label: string; disabled?: boolean; onPress: () => void }) {
+function TextButton({
+  label,
+  disabled = false,
+  selected = false,
+  onPress,
+}: {
+  label: string;
+  disabled?: boolean;
+  selected?: boolean;
+  onPress: () => void;
+}) {
   const { styles } = useAddressStyles();
   return (
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress}>
-      <Text style={[styles.actionText, disabled ? styles.actionDisabled : null]}>{label}</Text>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected, disabled }}
+      disabled={disabled}
+      onPress={onPress}
+    >
+      <Text style={[styles.actionText, selected ? styles.actionSelected : null, disabled ? styles.actionDisabled : null]}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -607,12 +792,16 @@ function createStyles(colors: ThemeColors) {
     },
     actions: {
       flexDirection: "row",
+      flexWrap: "wrap",
       gap: 16,
       paddingLeft: 30,
     },
     actionText: {
       color: colors.text,
       fontSize: 16,
+    },
+    actionSelected: {
+      color: colors.accent,
     },
     actionDisabled: {
       color: colors.textMuted,

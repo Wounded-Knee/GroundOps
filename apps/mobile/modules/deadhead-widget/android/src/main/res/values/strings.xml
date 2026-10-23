@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="deadhead_widget_label">Reposition</string>
+  <string name="deadhead_widget_description">Starts dead-head navigation to a saved place.</string>
+</resources>

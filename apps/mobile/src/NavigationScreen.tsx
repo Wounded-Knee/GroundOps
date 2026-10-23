@@ -119,6 +119,8 @@ import {
 } from "./sortieDwell";
 import type { SortieGuideCommand } from "./sortieGuide";
 import type { PlaceGuideCommand } from "./placeGuide";
+import type { DeadheadCommand } from "./deadheadShortcutLogic";
+import { shortcutMayStart, shortcutNavKind } from "./deadheadShortcutLogic";
 import { throb } from "./VisualAlert";
 import { floatingRouteScale, isActiveNavigation } from "./alwaysOnTopLogic";
 
@@ -199,6 +201,8 @@ export function NavigationScreen({
   onSortieGuideConsumed,
   placeGuide = null,
   onPlaceGuideConsumed,
+  deadhead = null,
+  onDeadheadConsumed,
   onMeterReading,
   onMeterEnded,
   onSortieCompleted,
@@ -220,6 +224,8 @@ export function NavigationScreen({
   onSortieGuideConsumed?: () => void;
   placeGuide?: PlaceGuideCommand | null;
   onPlaceGuideConsumed?: () => void;
+  deadhead?: DeadheadCommand | null;
+  onDeadheadConsumed?: () => void;
   onMeterReading?: (reading: MeterDisplay | null) => void;
   onMeterEnded?: () => void;
   onSortieCompleted?: (sortie: Sortie) => void;
@@ -251,6 +257,8 @@ export function NavigationScreen({
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
   const [query, setQuery] = useState("");
   const [pendingWhereTo, setPendingWhereTo] = useState<PlaceSuggestion | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const deadheadContinueRef = useRef(false);
   const [finding, setFinding] = useState(false);
   const [permission, setPermission] = useState<"unknown" | "granted" | "denied">("unknown");
   const [fix, setFix] = useState<GeoCoordinate | null>(null);
@@ -834,6 +842,22 @@ export function NavigationScreen({
     onPlaceGuideConsumed?.();
   }, [placeGuide]);
 
+  useEffect(() => {
+    if (!deadhead) {
+      return;
+    }
+    onDeadheadConsumed?.();
+    if (deadhead.kind === "missing") {
+      announceShortcut("That place is no longer saved.");
+      return;
+    }
+    if (deadhead.kind === "unavailable") {
+      announceShortcut("The address book could not be loaded.");
+      return;
+    }
+    void commenceDeadhead(deadhead.destination);
+  }, [deadhead]);
+
   const accountSortie = accountView?.activity.sortie ?? null;
   const accountStops = accountSortie ? stopListKey(accountSortie.stops) : "";
   useEffect(() => {
@@ -1285,8 +1309,234 @@ export function NavigationScreen({
     void Speech.stop();
   }, [nav, routeEpoch, fix, timingPrefs.announceLeadMeters]);
 
+  function announceShortcut(text: string): void {
+    const current = navRef.current;
+    const kind = shortcutNavKind(
+      current.mode,
+      current.mode === "guiding" || current.mode === "arrived" ? current.kind : null,
+    );
+    if (!shortcutMayStart(kind) || current.mode === "guiding" || current.mode === "arrived") {
+      setNotice(text);
+      return;
+    }
+    setNotice(null);
+    if (current.mode === "preview") {
+      setNav({ ...current, message: text });
+      return;
+    }
+    setNav({
+      mode: "browse",
+      destination: current.mode === "browse" ? current.destination : null,
+      message: text,
+    });
+  }
+
+  async function currentOrigin(): Promise<GeoCoordinate | null> {
+    const existing = fixRef.current;
+    if (existing) {
+      return existing;
+    }
+    const current = await Location.getForegroundPermissionsAsync();
+    const next = current.status === "granted" ? current : await Location.requestForegroundPermissionsAsync();
+    if (next.status !== "granted") {
+      setPermission("denied");
+      return null;
+    }
+    setPermission("granted");
+    try {
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const origin = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+      fixRef.current = origin;
+      setFix(origin);
+      return origin;
+    } catch {
+      return null;
+    }
+  }
+
+  async function commenceDeadhead(suggestion: PlaceSuggestion): Promise<void> {
+    const current = navRef.current;
+    const kind = shortcutNavKind(
+      current.mode,
+      current.mode === "guiding" || current.mode === "arrived" ? current.kind : null,
+    );
+    if (!shortcutMayStart(kind)) {
+      setNotice("A sortie is already running.");
+      return;
+    }
+    setNotice(null);
+    if ((current.mode === "guiding" || current.mode === "arrived") && current.kind === "search") {
+      speechGeneration.current += 1;
+      void Speech.stop();
+      void setActiveSortieObservation(null);
+    }
+    abandonPreviewChoice();
+    deadheadContinueRef.current = false;
+    setQuery(suggestion.label);
+    setPendingWhereTo(null);
+    const requestId = ++routeRequest.current;
+    const origin = await currentOrigin();
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (!origin) {
+      setFinding(false);
+      setNav({ mode: "browse", destination: suggestion, message: "Location is required." });
+      return;
+    }
+    setFinding(true);
+    setNav({ mode: "browse", destination: suggestion, message: null });
+
+    const driver = await ensureCurrentDriver(apiUrl, token);
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (driver === "unauthorized") {
+      setFinding(false);
+      onUnauthorized();
+      return;
+    }
+    if (driver === "unreachable") {
+      setFinding(false);
+      setNav({ mode: "browse", destination: suggestion, message: "The sortie was not saved." });
+      return;
+    }
+
+    const reported = await reportLocationObservation(apiUrl, token, {
+      observedAt: new Date().toISOString(),
+      latitude: origin.latitude,
+      longitude: origin.longitude,
+      accuracyMeters: null,
+    });
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (reported === "unauthorized") {
+      setFinding(false);
+      onUnauthorized();
+      return;
+    }
+    if (reported !== "ok") {
+      setFinding(false);
+      setNav({ mode: "browse", destination: suggestion, message: "Location is required." });
+      return;
+    }
+
+    const preview = await previewSortie(apiUrl, token, {
+      ...whereToWrite(suggestion, false),
+      sortieId: null,
+    });
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (preview === "unauthorized") {
+      setFinding(false);
+      onUnauthorized();
+      return;
+    }
+    const conflict =
+      typeof preview === "string" ? null : scheduleConflictMessage(preview.endangered.map((item) => item.label));
+    if (conflict) {
+      setFinding(false);
+      deadheadContinueRef.current = true;
+      setPendingWhereTo(suggestion);
+      setNav({ mode: "browse", destination: suggestion, message: conflict });
+      return;
+    }
+
+    await routeAndCommenceReposition(suggestion, origin, requestId);
+  }
+
+  async function routeAndCommenceReposition(
+    suggestion: PlaceSuggestion,
+    origin: GeoCoordinate,
+    requestId: number,
+  ): Promise<void> {
+    const [result, tariffResult] = await Promise.all([
+      requestDrivingRoute(apiUrl, token, origin, suggestion),
+      requestTariff(apiUrl, token),
+    ]);
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    setFinding(false);
+    if (result === "unauthorized" || tariffResult === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (result === "failed") {
+      setNav({ mode: "browse", destination: suggestion, message: "The route failed." });
+      return;
+    }
+    const tariff = typeof tariffResult === "string" ? null : tariffResult;
+    const saved = await authorSortie(apiUrl, token, whereToWrite(suggestion, false));
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (saved === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (saved === "no-location") {
+      setNav({ mode: "browse", destination: suggestion, message: "Location is required." });
+      return;
+    }
+    if (typeof saved === "string") {
+      setNav({ mode: "browse", destination: suggestion, message: "The sortie was not saved." });
+      return;
+    }
+    const commenced = await commenceSortie(apiUrl, token, saved.id);
+    if (requestId !== routeRequest.current) {
+      return;
+    }
+    if (commenced === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    if (typeof commenced === "string") {
+      setNav({
+        mode: "browse",
+        destination: suggestion,
+        message: "The departure could not be recorded.",
+      });
+      return;
+    }
+    rerouteInFlight.current = false;
+    stopAdvanceInFlight.current = false;
+    offRouteSinceRef.current = null;
+    resetArrivalDwell();
+    const started = emptyMeter();
+    setMeter(started);
+    meterRef.current = started;
+    snapshotProgressBaseline(origin, result);
+    const next: NavState = {
+      mode: "guiding",
+      kind: "sortie",
+      destination: suggestion,
+      route: result,
+      stepIndex: 0,
+      muted: getGuidanceMutePrefs().muted,
+      offRouteSince: null,
+      rerouteMessage: null,
+      sortieId: commenced.id,
+      stops: commenced.stops,
+      firstStopPosition: 0,
+      tariff,
+      sortie: commenced,
+    };
+    setNav(next);
+    setRouteEpoch((epoch) => epoch + 1);
+    publishMeter(started, next, origin, {
+      immediate: true,
+      overviewPath: overviewPathForUpload("guidance-start", next.firstStopPosition, next.route.path),
+    });
+    void setActiveSortieObservation(commenced.id);
+  }
+
   async function onSelect(suggestion: PlaceSuggestion): Promise<void> {
     abandonPreviewChoice();
+    deadheadContinueRef.current = false;
+    setNotice(null);
     setQuery(suggestion.label);
     setPendingWhereTo(null);
     const origin = fixRef.current;
@@ -1360,8 +1610,27 @@ export function NavigationScreen({
 
   async function onContinueWhereTo(): Promise<void> {
     const suggestion = pendingWhereTo;
+    if (!suggestion) {
+      return;
+    }
+    if (deadheadContinueRef.current) {
+      deadheadContinueRef.current = false;
+      const origin = await currentOrigin();
+      if (!origin) {
+        setPendingWhereTo(null);
+        setNav({ mode: "browse", destination: suggestion, message: "Location is required." });
+        return;
+      }
+      abandonPreviewChoice();
+      const requestId = ++routeRequest.current;
+      setPendingWhereTo(null);
+      setFinding(true);
+      setNav({ mode: "browse", destination: suggestion, message: null });
+      await routeAndCommenceReposition(suggestion, origin, requestId);
+      return;
+    }
     const origin = fixRef.current;
-    if (!suggestion || permission !== "granted" || !origin) {
+    if (permission !== "granted" || !origin) {
       return;
     }
     abandonPreviewChoice();
@@ -1561,6 +1830,7 @@ export function NavigationScreen({
       return;
     }
     abandonPreviewChoice();
+    deadheadContinueRef.current = false;
     routeRequest.current += 1;
     setFinding(false);
     setPendingWhereTo(null);
@@ -1794,6 +2064,8 @@ export function NavigationScreen({
                   onQueryChange={(text) => {
                     routeRequest.current += 1;
                     abandonPreviewChoice();
+                    deadheadContinueRef.current = false;
+                    setNotice(null);
                     setFinding(false);
                     setPendingWhereTo(null);
                     setQuery(text);
@@ -1952,6 +2224,12 @@ export function NavigationScreen({
                 <Text style={styles.secondaryText}>Dismiss</Text>
               </Pressable>
             </View>
+          </View>
+        ) : null}
+
+        {notice ? (
+          <View style={styles.sheet} pointerEvents="none">
+            <Text style={styles.message}>{notice}</Text>
           </View>
         ) : null}
 

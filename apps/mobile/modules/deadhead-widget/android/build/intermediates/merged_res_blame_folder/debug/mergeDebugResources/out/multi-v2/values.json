@@ -1,0 +1,48 @@
+{
+    "logs": [
+        {
+            "outputFile": "expo.modules.deadheadwidget.deadhead-widget-mergeDebugResources-2:/values/values.xml",
+            "map": [
+                {
+                    "source": "/home/joel/Documents/repodepot/groundops/apps/mobile/modules/deadhead-widget/android/src/main/res/values/strings.xml",
+                    "from": {
+                        "startLines": "3,2",
+                        "startColumns": "2,2",
+                        "startOffsets": "112,53",
+                        "endColumns": "99,58",
+                        "endOffsets": "209,109"
+                    },
+                    "to": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,157",
+                        "endColumns": "101,60",
+                        "endOffsets": "152,213"
+                    }
+                }
+            ]
+        },
+        {
+            "outputFile": "expo.modules.deadheadwidget.deadhead-widget-debug-4:/values/values.xml",
+            "map": [
+                {
+                    "source": "/home/joel/Documents/repodepot/groundops/apps/mobile/modules/deadhead-widget/android/src/main/res/values/strings.xml",
+                    "from": {
+                        "startLines": "3,2",
+                        "startColumns": "2,2",
+                        "startOffsets": "112,53",
+                        "endColumns": "99,58",
+                        "endOffsets": "209,109"
+                    },
+                    "to": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,157",
+                        "endColumns": "101,60",
+                        "endOffsets": "152,213"
+                    }
+                }
+            ]
+        }
+    ]
+}

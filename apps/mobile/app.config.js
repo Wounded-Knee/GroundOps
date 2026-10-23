@@ -89,6 +89,17 @@ module.exports = () => {
           },
         ],
         "expo-task-manager",
+        [
+          "expo-quick-actions",
+          {
+            androidIcons: {
+              shortcut_reposition: {
+                foregroundImage: "./assets/android-icon-foreground.png",
+                backgroundColor: "#E6F4FE",
+              },
+            },
+          },
+        ],
       ],
     },
   };

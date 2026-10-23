@@ -3,6 +3,7 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
+  expo-quick-actions: false
 minimumReleaseAgeExclude:
   - '@expo/cli@57.0.27'
   - '@expo/router-server@57.0.11'

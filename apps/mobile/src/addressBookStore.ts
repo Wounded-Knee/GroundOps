@@ -41,6 +41,10 @@ export function subscribeAddressBook(listener: () => void): () => void {
   };
 }
 
+export function addressBookHasLoaded(): boolean {
+  return loadedFor !== null;
+}
+
 export function clearAddressBookCache(): void {
   epoch += 1;
   loadedFor = null;

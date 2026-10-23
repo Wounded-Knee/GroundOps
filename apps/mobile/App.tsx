@@ -3,12 +3,30 @@ import * as AuthSession from "expo-auth-session";
 import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
 import { StatusBar } from "expo-status-bar";
+import * as QuickActions from "expo-quick-actions";
+import type { Action } from "expo-quick-actions";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
 import { AddressBookScreen } from "./src/AddressBookScreen";
-import { clearAddressBookCache, saveChosenPlace } from "./src/addressBookStore";
+import { entrySuggestion } from "./src/addressBookMatch";
+import {
+  addressBookHasLoaded,
+  clearAddressBookCache,
+  ensureAddressBookLoaded,
+  getAddressBookSnapshot,
+  saveChosenPlace,
+  subscribeAddressBook,
+} from "./src/addressBookStore";
+import {
+  clearPublishedShortcuts,
+  ensureDeadheadShortcutsLoaded,
+  getDeadheadShortcuts,
+  saveDeadheadShortcuts,
+  syncPublishedShortcuts,
+} from "./src/deadheadShortcutStore";
+import { deadheadLink, removeDeadheadShortcut, type DeadheadCommand } from "./src/deadheadShortcutLogic";
 import { BottomNav, type SignedInDestination } from "./src/BottomNav";
 import { DirectoryScreen } from "./src/DirectoryScreen";
 import { CalendarScreen } from "./src/CalendarScreen";
@@ -139,6 +157,7 @@ function AppContent() {
   const [calendarScopeCycle, setCalendarScopeCycle] = useState(0);
   const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
   const [placeGuide, setPlaceGuide] = useState<PlaceGuideCommand | null>(null);
+  const [deadhead, setDeadhead] = useState<DeadheadCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
   const [availability, setAvailability] = useState<AvailabilityView>(emptyAvailability);
   const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
@@ -169,6 +188,12 @@ function AppContent() {
   const applySortieUpdateRef = useRef<((sortie: Sortie) => void) | null>(null);
   const generation = useRef(0);
   const composeSaving = useRef(false);
+  const pendingShortcutId = useRef<string | null>(null);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const openShortcutRef = useRef<(token: string, userId: string, entryId: string) => Promise<void>>(
+    async () => undefined,
+  );
 
   useEffect(() => {
     void ensureVisualAlertPrefsLoaded();
@@ -343,6 +368,123 @@ function AppContent() {
   }, []);
 
   const sessionToken = phase.status === "signed-in" ? phase.token : null;
+  const signedInUserId = phase.status === "signed-in" ? phase.user.id : null;
+
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      return;
+    }
+    const take = (action: Action | null | undefined) => {
+      const entryId = action?.params?.entryId;
+      if (typeof entryId !== "string" || entryId.length === 0) {
+        return;
+      }
+      const current = phaseRef.current;
+      if (current.status !== "signed-in") {
+        pendingShortcutId.current = entryId;
+        return;
+      }
+      void openShortcutRef.current(current.token, current.user.id, entryId);
+    };
+    if (QuickActions.initial) {
+      take(QuickActions.initial);
+    }
+    const subscription = QuickActions.addListener((action) => take(action));
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (phase.status !== "signed-in") {
+      return;
+    }
+    const entryId = pendingShortcutId.current;
+    if (!entryId) {
+      return;
+    }
+    pendingShortcutId.current = null;
+    void openShortcutRef.current(phase.token, phase.user.id, entryId);
+  }, [phase]);
+
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      return;
+    }
+    let initialUrl: string | null | undefined;
+    let queued: string | null = null;
+    function open(url: string | null): void {
+      const link = deadheadLink(url);
+      if (!link || link.kind !== "start") {
+        return;
+      }
+      const current = phaseRef.current;
+      if (current.status !== "signed-in") {
+        pendingShortcutId.current = link.entryId;
+        return;
+      }
+      void openShortcutRef.current(current.token, current.user.id, link.entryId);
+    }
+    const subscription = Linking.addEventListener("url", (event) => {
+      if (initialUrl === undefined) {
+        queued = event.url;
+        return;
+      }
+      if (event.url === initialUrl) {
+        initialUrl = null;
+        return;
+      }
+      open(event.url);
+    });
+    void Linking.getInitialURL().then((url) => {
+      initialUrl = url;
+      open(url);
+      if (queued !== null && queued !== url) {
+        open(queued);
+      } else if (queued !== null) {
+        initialUrl = null;
+      }
+      queued = null;
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === "web" || !sessionToken || !signedInUserId) {
+      return;
+    }
+    const token = sessionToken;
+    const userId = signedInUserId;
+    let cancelled = false;
+    let ready = false;
+    void (async () => {
+      await ensureDeadheadShortcutsLoaded(userId);
+      if (cancelled) {
+        return;
+      }
+      const loaded = await ensureAddressBookLoaded(apiUrl, token);
+      if (cancelled || loaded !== "ok" || !addressBookHasLoaded()) {
+        return;
+      }
+      ready = true;
+      const entries = getAddressBookSnapshot().entries;
+      try {
+        await syncPublishedShortcuts(entries);
+      } catch {
+        // Publishing needs the installed build that registers the shortcuts.
+      }
+    })();
+    const unsubscribe = subscribeAddressBook(() => {
+      if (!ready || !addressBookHasLoaded()) {
+        return;
+      }
+      const entries = getAddressBookSnapshot().entries;
+      void syncPublishedShortcuts(entries).catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+      ready = false;
+      unsubscribe();
+    };
+  }, [sessionToken, signedInUserId]);
 
   useEffect(() => {
     if (!sessionToken) {
@@ -624,10 +766,43 @@ function AppContent() {
     setComposeMessage(null);
     setSortieGuide(null);
     setPlaceGuide(null);
+    setDeadhead(null);
     clearAddressBookCache();
+    void clearPublishedShortcuts();
     setMeterReading(null);
     setActivity(emptyActivity);
   }
+
+  async function openDeadheadShortcut(token: string, userId: string, entryId: string): Promise<void> {
+    setDestination("navigation");
+    const loaded = await ensureAddressBookLoaded(apiUrl, token);
+    if (loaded === "unauthorized") {
+      await onSessionRejected();
+      return;
+    }
+    if (loaded !== "ok") {
+      setDeadhead({ kind: "unavailable" });
+      return;
+    }
+    const entry = getAddressBookSnapshot().entries.find((item) => item.id === entryId);
+    if (!entry) {
+      try {
+        await ensureDeadheadShortcutsLoaded(userId);
+        const next = removeDeadheadShortcut(getDeadheadShortcuts(), entryId);
+        if (next.length !== getDeadheadShortcuts().length) {
+          await saveDeadheadShortcuts(userId, next);
+          await syncPublishedShortcuts(getAddressBookSnapshot().entries);
+        }
+      } catch {
+        // The icon may stay until the next publish. The driver still hears that the place is gone.
+      }
+      setDeadhead({ kind: "missing" });
+      return;
+    }
+    setDeadhead({ kind: "start", destination: entrySuggestion(entry) });
+  }
+
+  openShortcutRef.current = openDeadheadShortcut;
 
   function releaseSortie(completed: Sortie): void {
     setActivity((current) =>
@@ -927,6 +1102,8 @@ function AppContent() {
                   onSortieGuideConsumed={() => setSortieGuide(null)}
                   placeGuide={placeGuide}
                   onPlaceGuideConsumed={() => setPlaceGuide(null)}
+                  deadhead={deadhead}
+                  onDeadheadConsumed={() => setDeadhead(null)}
                   onMeterReading={setMeterReading}
                   onMeterEnded={() => {
                     setMeterReading(null);
@@ -978,6 +1155,7 @@ function AppContent() {
                 <View style={screenCover} pointerEvents={floatingMap ? "none" : "auto"}>
                   <AddressBookScreen
                     token={phase.token}
+                    userId={phase.user.id}
                     onUnauthorized={() => void onSessionRejected()}
                     onGuide={(command) => {
                       setPlaceGuide(command);

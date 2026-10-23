@@ -1,0 +1,7 @@
+int drawable deadhead_app_icon 0x0
+int id widget_icon 0x0
+int id widget_root 0x0
+int layout deadhead_widget 0x0
+int string deadhead_widget_description 0x0
+int string deadhead_widget_label 0x0
+int xml deadhead_widget_info 0x0

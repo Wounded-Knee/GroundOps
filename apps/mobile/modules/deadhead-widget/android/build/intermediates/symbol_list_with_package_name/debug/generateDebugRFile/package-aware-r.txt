@@ -1,0 +1,8 @@
+expo.modules.deadheadwidget
+drawable deadhead_app_icon
+id widget_icon
+id widget_root
+layout deadhead_widget
+string deadhead_widget_description
+string deadhead_widget_label
+xml deadhead_widget_info
