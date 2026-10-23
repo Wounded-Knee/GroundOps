@@ -1,7 +1,8 @@
-import type { DirectoryCompany, DirectoryFacility, DirectoryUser } from "@groundops/contracts";
-import { asc, eq } from "drizzle-orm";
+import type { DirectoryCompany, DirectoryFacility, DirectoryMember, DirectoryUser } from "@groundops/contracts";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "../db.js";
 import {
+  addressBookCompanyShare,
   addressBookEntry,
   addressBookPhoneStar,
   company,
@@ -76,8 +77,97 @@ export async function deleteCompany(id: string): Promise<"ok" | "missing" | "in-
     if (used[0]) {
       return "in-use";
     }
+    await tx.delete(addressBookCompanyShare).where(eq(addressBookCompanyShare.companyId, id));
     await tx.delete(company).where(eq(company.id, id));
     return "ok";
+  });
+}
+
+export async function listCompanyMembers(companyId: string): Promise<DirectoryMember[] | "missing"> {
+  const existing = await db.select({ id: company.id }).from(company).where(eq(company.id, companyId)).limit(1);
+  if (!existing[0]) {
+    return "missing";
+  }
+  const rows = await db
+    .select({
+      userId: user.id,
+      displayName: user.displayName,
+      email: user.email,
+      administrator: driverCompany.administrator,
+    })
+    .from(driverCompany)
+    .innerJoin(driver, eq(driver.id, driverCompany.driverId))
+    .innerJoin(user, eq(user.id, driver.userId))
+    .where(eq(driverCompany.companyId, companyId))
+    .orderBy(asc(user.displayName), asc(user.email), asc(user.id));
+  return rows;
+}
+
+/** Links a user to a company. A user who is not yet a driver gets a driver row and no personal company. */
+export async function putCompanyMember(
+  companyId: string,
+  userId: string,
+  administrator: boolean,
+): Promise<DirectoryMember | "missing"> {
+  return db.transaction(async (tx) => {
+    const companies = await tx.select({ id: company.id }).from(company).where(eq(company.id, companyId)).limit(1);
+    if (!companies[0]) {
+      return "missing";
+    }
+    const people = await tx
+      .select({ id: user.id, displayName: user.displayName, email: user.email })
+      .from(user)
+      .where(eq(user.id, userId))
+      .limit(1);
+    const person = people[0];
+    if (!person) {
+      return "missing";
+    }
+    const drivers = await tx.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId)).limit(1);
+    let driverId = drivers[0]?.id;
+    if (!driverId) {
+      const created = await tx.insert(driver).values({ userId }).returning({ id: driver.id });
+      driverId = created[0]?.id;
+      if (!driverId) {
+        throw new Error("driver insert returned no row");
+      }
+    }
+    const existing = await tx
+      .select({ id: driverCompany.id })
+      .from(driverCompany)
+      .where(and(eq(driverCompany.driverId, driverId), eq(driverCompany.companyId, companyId)))
+      .limit(1);
+    if (existing[0]) {
+      await tx.update(driverCompany).set({ administrator }).where(eq(driverCompany.id, existing[0].id));
+    } else {
+      await tx.insert(driverCompany).values({ driverId, companyId, administrator });
+    }
+    return {
+      userId: person.id,
+      displayName: person.displayName,
+      email: person.email,
+      administrator,
+    };
+  });
+}
+
+/** Removes the company link. The driver row stays. */
+export async function deleteCompanyMember(companyId: string, userId: string): Promise<"ok" | "missing"> {
+  return db.transaction(async (tx) => {
+    const companies = await tx.select({ id: company.id }).from(company).where(eq(company.id, companyId)).limit(1);
+    if (!companies[0]) {
+      return "missing";
+    }
+    const drivers = await tx.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId)).limit(1);
+    const driverRow = drivers[0];
+    if (!driverRow) {
+      return "missing";
+    }
+    const removed = await tx
+      .delete(driverCompany)
+      .where(and(eq(driverCompany.driverId, driverRow.id), eq(driverCompany.companyId, companyId)))
+      .returning({ id: driverCompany.id });
+    return removed.length === 0 ? "missing" : "ok";
   });
 }
 
@@ -200,6 +290,18 @@ export async function deleteDirectoryUser(callerId: string, userId: string): Pro
       return "in-use";
     }
     if (driverRow) {
+      const entries = await tx
+        .select({ id: addressBookEntry.id })
+        .from(addressBookEntry)
+        .where(eq(addressBookEntry.driverId, driverRow.id));
+      if (entries.length > 0) {
+        await tx.delete(addressBookCompanyShare).where(
+          inArray(
+            addressBookCompanyShare.entryId,
+            entries.map((entry) => entry.id),
+          ),
+        );
+      }
       await tx.delete(addressBookEntry).where(eq(addressBookEntry.driverId, driverRow.id));
       await tx.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, driverRow.id));
       await tx.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, driverRow.id));

@@ -6,30 +6,67 @@ import type {
   PhoneAddressStar,
   User,
 } from "@groundops/contracts";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, or, sql } from "drizzle-orm";
 import { ensureDriver } from "../calendar/calendar.js";
 import { db } from "../db.js";
-import { addressBookEntry, addressBookPhoneStar } from "../schema.js";
+import { addressBookCompanyShare, addressBookEntry, addressBookPhoneStar, driverCompany } from "../schema.js";
+
+type EntryRow = typeof addressBookEntry.$inferSelect;
+type ShareFailure = "missing" | "forbidden";
 
 export async function readAddressBook(person: User): Promise<AddressBookResponse> {
   const author = await ensureDriver(person);
+  const [memberIds, adminIds] = await Promise.all([
+    companyIds(author.id, false),
+    companyIds(author.id, true),
+  ]);
+  const access = [
+    eq(addressBookEntry.driverId, author.id),
+    eq(addressBookEntry.platformShared, true),
+  ];
+  if (memberIds.length > 0) {
+    access.push(
+      exists(
+        db
+          .select({ entryId: addressBookCompanyShare.entryId })
+          .from(addressBookCompanyShare)
+          .where(
+            and(
+              eq(addressBookCompanyShare.entryId, addressBookEntry.id),
+              inArray(addressBookCompanyShare.companyId, memberIds),
+            ),
+          ),
+      ),
+    );
+  }
   const entries = await db
     .select()
     .from(addressBookEntry)
-    .where(eq(addressBookEntry.driverId, author.id))
+    .where(or(...access))
     .orderBy(
       desc(addressBookEntry.favorite),
       sql`coalesce(nullif(${addressBookEntry.nickname}, ''), nullif(${addressBookEntry.placeName}, ''), ${addressBookEntry.label})`,
       asc(addressBookEntry.id),
     );
+  const sharedIds = await companySharedEntryIds(
+    entries.map((entry) => entry.id),
+    adminIds,
+  );
   const phoneStars = await db
     .select()
     .from(addressBookPhoneStar)
     .where(eq(addressBookPhoneStar.driverId, author.id))
     .orderBy(asc(addressBookPhoneStar.contactId), asc(addressBookPhoneStar.addressId));
   return {
-    entries: entries.map(presentEntry),
+    entries: entries.map((entry) =>
+      presentEntry(entry, {
+        owned: entry.driverId === author.id,
+        companyShared: sharedIds.has(entry.id),
+      }),
+    ),
     phoneStars: phoneStars.map(presentStar),
+    canShareWithCompany: adminIds.length > 0,
+    canShareWithPlatform: person.platformAdministrator,
   };
 }
 
@@ -58,7 +95,7 @@ export async function createAddressBookEntry(
   if (!created) {
     return "invalid";
   }
-  return presentEntry(created);
+  return presentForOwner(created, author.id);
 }
 
 export async function updateAddressBookEntry(
@@ -112,16 +149,44 @@ export async function updateAddressBookEntry(
   if (!updated) {
     return "missing";
   }
-  return presentEntry(updated);
+  return presentForOwner(updated, author.id);
 }
 
 export async function deleteAddressBookEntry(person: User, id: string): Promise<"ok" | "missing"> {
   const author = await ensureDriver(person);
-  const removed = await db
-    .delete(addressBookEntry)
-    .where(and(eq(addressBookEntry.id, id), eq(addressBookEntry.driverId, author.id)))
-    .returning({ id: addressBookEntry.id });
-  return removed.length === 0 ? "missing" : "ok";
+  return db.transaction(async (tx) => {
+    const existing = await tx
+      .select({ id: addressBookEntry.id })
+      .from(addressBookEntry)
+      .where(and(eq(addressBookEntry.id, id), eq(addressBookEntry.driverId, author.id)))
+      .limit(1);
+    if (!existing[0]) {
+      return "missing";
+    }
+    await tx.delete(addressBookCompanyShare).where(eq(addressBookCompanyShare.entryId, id));
+    await tx.delete(addressBookEntry).where(eq(addressBookEntry.id, id));
+    return "ok";
+  });
+}
+
+/** Grants the entry to every company the owner currently administers. */
+export async function shareAddressBookEntryWithCompany(person: User, id: string): Promise<AddressBookEntry | ShareFailure> {
+  return setCompanyShare(person, id, true);
+}
+
+/** Removes grants for companies the owner currently administers. */
+export async function unshareAddressBookEntryWithCompany(person: User, id: string): Promise<AddressBookEntry | ShareFailure> {
+  return setCompanyShare(person, id, false);
+}
+
+/** Makes the owner's entry readable by every signed-in user. */
+export async function shareAddressBookEntryWithPlatform(person: User, id: string): Promise<AddressBookEntry | ShareFailure> {
+  return setPlatformShare(person, id, true);
+}
+
+/** Clears platform access. The row stays with the owner. */
+export async function unshareAddressBookEntryWithPlatform(person: User, id: string): Promise<AddressBookEntry | ShareFailure> {
+  return setPlatformShare(person, id, false);
 }
 
 /** Inserts the star. A repeat star leaves the existing row in place. */
@@ -159,7 +224,90 @@ export async function unstarPhoneAddress(person: User, star: PhoneAddressStar): 
   return "ok";
 }
 
-function presentEntry(row: typeof addressBookEntry.$inferSelect): AddressBookEntry {
+async function setCompanyShare(person: User, id: string, shared: boolean): Promise<AddressBookEntry | ShareFailure> {
+  const owned = await ownedEntry(person, id);
+  if (owned === "missing") {
+    return "missing";
+  }
+  const companyIdsForAdmin = await companyIds(owned.driverId, true);
+  if (companyIdsForAdmin.length === 0) {
+    return "forbidden";
+  }
+  if (shared) {
+    await db
+      .insert(addressBookCompanyShare)
+      .values(companyIdsForAdmin.map((companyId) => ({ entryId: id, companyId })))
+      .onConflictDoNothing();
+  } else {
+    await db
+      .delete(addressBookCompanyShare)
+      .where(and(eq(addressBookCompanyShare.entryId, id), inArray(addressBookCompanyShare.companyId, companyIdsForAdmin)));
+  }
+  return presentForOwner(owned.row, owned.driverId);
+}
+
+async function setPlatformShare(person: User, id: string, shared: boolean): Promise<AddressBookEntry | ShareFailure> {
+  const owned = await ownedEntry(person, id);
+  if (owned === "missing") {
+    return "missing";
+  }
+  if (!person.platformAdministrator) {
+    return "forbidden";
+  }
+  const [updated] = await db
+    .update(addressBookEntry)
+    .set({ platformShared: shared })
+    .where(eq(addressBookEntry.id, id))
+    .returning();
+  if (!updated) {
+    return "missing";
+  }
+  return presentForOwner(updated, owned.driverId);
+}
+
+async function ownedEntry(person: User, id: string): Promise<{ driverId: string; row: EntryRow } | "missing"> {
+  const author = await ensureDriver(person);
+  const [row] = await db
+    .select()
+    .from(addressBookEntry)
+    .where(and(eq(addressBookEntry.id, id), eq(addressBookEntry.driverId, author.id)))
+    .limit(1);
+  if (!row) {
+    return "missing";
+  }
+  return { driverId: author.id, row };
+}
+
+async function companyIds(driverId: string, administratorsOnly: boolean): Promise<string[]> {
+  const rows = await db
+    .select({ companyId: driverCompany.companyId })
+    .from(driverCompany)
+    .where(
+      administratorsOnly
+        ? and(eq(driverCompany.driverId, driverId), eq(driverCompany.administrator, true))
+        : eq(driverCompany.driverId, driverId),
+    );
+  return rows.map((row) => row.companyId);
+}
+
+async function companySharedEntryIds(entryIds: string[], adminIds: string[]): Promise<Set<string>> {
+  if (entryIds.length === 0 || adminIds.length === 0) {
+    return new Set();
+  }
+  const rows = await db
+    .select({ entryId: addressBookCompanyShare.entryId })
+    .from(addressBookCompanyShare)
+    .where(and(inArray(addressBookCompanyShare.entryId, entryIds), inArray(addressBookCompanyShare.companyId, adminIds)));
+  return new Set(rows.map((row) => row.entryId));
+}
+
+async function presentForOwner(row: EntryRow, driverId: string): Promise<AddressBookEntry> {
+  const adminIds = await companyIds(driverId, true);
+  const sharedIds = await companySharedEntryIds([row.id], adminIds);
+  return presentEntry(row, { owned: true, companyShared: sharedIds.has(row.id) });
+}
+
+function presentEntry(row: EntryRow, flags: { owned: boolean; companyShared: boolean }): AddressBookEntry {
   return {
     id: row.id,
     nickname: row.nickname,
@@ -168,6 +316,9 @@ function presentEntry(row: typeof addressBookEntry.$inferSelect): AddressBookEnt
     latitude: row.latitude,
     longitude: row.longitude,
     favorite: row.favorite,
+    owned: flags.owned,
+    companyShared: flags.companyShared,
+    platformShared: row.platformShared,
   };
 }
 

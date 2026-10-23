@@ -28,6 +28,9 @@ function entry(id: string, nickname: string, placeName = ""): AddressBookEntry {
     latitude: 1,
     longitude: 2,
     favorite: false,
+    owned: true,
+    companyShared: false,
+    platformShared: false,
   };
 }
 

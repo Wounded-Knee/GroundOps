@@ -7,7 +7,11 @@ import {
   createAddressBookEntry,
   deleteAddressBookEntry,
   readAddressBook,
+  shareAddressBookEntryWithCompany,
+  shareAddressBookEntryWithPlatform,
   starPhoneAddress,
+  unshareAddressBookEntryWithCompany,
+  unshareAddressBookEntryWithPlatform,
   unstarPhoneAddress,
   updateAddressBookEntry,
 } from "./addressBook.js";
@@ -95,6 +99,22 @@ export function registerAddressBookRoutes(app: FastifyInstance): void {
     return reply.code(204).send();
   });
 
+  app.post("/address-book/:id/company-share", async (request, reply) => {
+    return shareRoute(request.headers.authorization, request.params, reply, shareAddressBookEntryWithCompany);
+  });
+
+  app.delete("/address-book/:id/company-share", async (request, reply) => {
+    return shareRoute(request.headers.authorization, request.params, reply, unshareAddressBookEntryWithCompany);
+  });
+
+  app.post("/address-book/:id/platform-share", async (request, reply) => {
+    return shareRoute(request.headers.authorization, request.params, reply, shareAddressBookEntryWithPlatform);
+  });
+
+  app.delete("/address-book/:id/platform-share", async (request, reply) => {
+    return shareRoute(request.headers.authorization, request.params, reply, unshareAddressBookEntryWithPlatform);
+  });
+
   app.patch("/address-book/:id", async (request, reply) => {
     const active = await findPresentedSession(request.headers.authorization);
     if (!active) {
@@ -142,6 +162,30 @@ export function registerAddressBookRoutes(app: FastifyInstance): void {
     }
     return reply.code(204).send();
   });
+}
+
+async function shareRoute(
+  authorization: string | string[] | undefined,
+  params: unknown,
+  reply: FastifyReply,
+  share: (person: Parameters<typeof shareAddressBookEntryWithCompany>[0], id: string) => ReturnType<typeof shareAddressBookEntryWithCompany>,
+) {
+  const active = await findPresentedSession(authorization);
+  if (!active) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+  const parsed = idParams.safeParse(params);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: "invalid request" });
+  }
+  const result = await share(active.user, parsed.data.id);
+  if (result === "missing") {
+    return reply.code(404).send({ error: "not found" });
+  }
+  if (result === "forbidden") {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+  return reply.send(result);
 }
 
 function sendEntry(

@@ -1,4 +1,4 @@
-import type { DirectoryCompany, DirectoryFacility, DirectoryUser } from "@groundops/contracts";
+import type { DirectoryCompany, DirectoryFacility, DirectoryMember, DirectoryUser } from "@groundops/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
@@ -7,9 +7,12 @@ import {
   createDirectoryUser,
   createFacility,
   deleteCompany,
+  deleteCompanyMember,
   deleteDirectoryUser,
   deleteFacility,
+  putCompanyMember,
   readCompanies,
+  readCompanyMembers,
   readDirectoryUsers,
   readFacilities,
   updateCompany,
@@ -45,6 +48,8 @@ export function DirectoryScreen({
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const [companies, setCompanies] = useState<DirectoryCompany[]>([]);
+  const [membersByCompany, setMembersByCompany] = useState<Record<string, DirectoryMember[]>>({});
+  const [memberDraft, setMemberDraft] = useState<{ companyId: string; userId: string; administrator: boolean } | null>(null);
   const [facilities, setFacilities] = useState<DirectoryFacility[]>([]);
   const [users, setUsers] = useState<DirectoryUser[]>([]);
   const [companyName, setCompanyName] = useState("");
@@ -72,7 +77,16 @@ export function DirectoryScreen({
     if (typeof result === "string") {
       return result;
     }
+    const members: Record<string, DirectoryMember[]> = {};
+    for (const company of result.companies) {
+      const listed = await readCompanyMembers(apiUrl, token, company.id);
+      if (typeof listed === "string") {
+        return listed;
+      }
+      members[company.id] = listed.members;
+    }
     setCompanies(result.companies);
+    setMembersByCompany(members);
     return "ok";
   }, [token]);
 
@@ -157,6 +171,75 @@ export function DirectoryScreen({
     if (loaded !== "ok" && !fail(loaded)) {
       setMessage(couldNotLoad);
     }
+  }
+
+  async function reloadMembers(companyId: string): Promise<void> {
+    const listed = await readCompanyMembers(apiUrl, token, companyId);
+    if (typeof listed === "string") {
+      if (!fail(listed)) {
+        setMessage(explain(listed));
+      }
+      return;
+    }
+    setMembersByCompany((current) => ({ ...current, [companyId]: listed.members }));
+  }
+
+  async function saveMember(companyId: string): Promise<void> {
+    if (!memberDraft || memberDraft.companyId !== companyId || memberDraft.userId.length === 0 || busy) {
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    const result = await putCompanyMember(apiUrl, token, companyId, {
+      userId: memberDraft.userId,
+      administrator: memberDraft.administrator,
+    });
+    setBusy(false);
+    if (typeof result === "string") {
+      if (!fail(result)) {
+        setMessage(explain(result));
+      }
+      return;
+    }
+    setMemberDraft(null);
+    await reloadMembers(companyId);
+  }
+
+  async function toggleMember(companyId: string, member: DirectoryMember): Promise<void> {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    const result = await putCompanyMember(apiUrl, token, companyId, {
+      userId: member.userId,
+      administrator: !member.administrator,
+    });
+    setBusy(false);
+    if (typeof result === "string") {
+      if (!fail(result)) {
+        setMessage(explain(result));
+      }
+      return;
+    }
+    await reloadMembers(companyId);
+  }
+
+  async function removeMember(company: DirectoryCompany, member: DirectoryMember): Promise<void> {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    const result = await deleteCompanyMember(apiUrl, token, company.id, member.userId);
+    setBusy(false);
+    if (result !== "ok") {
+      if (!fail(result)) {
+        setMessage(explain(result));
+      }
+      return;
+    }
+    await reloadMembers(company.id);
   }
 
   async function addFacility(): Promise<void> {
@@ -352,24 +435,114 @@ export function DirectoryScreen({
         </Pressable>
       </View>
       {ready && companies.length === 0 ? <Text style={styles.empty}>No companies.</Text> : null}
-      {companies.map((row) => (
-        <NamedRow
-          key={row.id}
-          name={row.name}
-          editing={edit?.kind === "company" && edit.id === row.id ? edit.name : null}
-          onChangeName={(name) => setEdit({ kind: "company", id: row.id, name })}
-          onEdit={() => {
-            setPendingDelete(null);
-            setEdit({ kind: "company", id: row.id, name: row.name });
-          }}
-          onCancel={() => setEdit(null)}
-          onSave={() => void saveEdit()}
-          confirming={pendingDelete?.kind === "company" && pendingDelete.id === row.id}
-          onDelete={() => setPendingDelete({ kind: "company", id: row.id, label: row.name })}
-          onCancelDelete={() => setPendingDelete(null)}
-          onConfirmDelete={() => void removeCompany(row)}
-        />
-      ))}
+      {companies.map((row) => {
+        const members = membersByCompany[row.id] ?? [];
+        const draft = memberDraft?.companyId === row.id ? memberDraft : null;
+        const memberIds = new Set(members.map((member) => member.userId));
+        const candidates = users.filter((person) => !memberIds.has(person.id));
+        return (
+          <View key={row.id}>
+            <NamedRow
+              name={row.name}
+              editing={edit?.kind === "company" && edit.id === row.id ? edit.name : null}
+              onChangeName={(name) => setEdit({ kind: "company", id: row.id, name })}
+              onEdit={() => {
+                setPendingDelete(null);
+                setEdit({ kind: "company", id: row.id, name: row.name });
+              }}
+              onCancel={() => setEdit(null)}
+              onSave={() => void saveEdit()}
+              confirming={pendingDelete?.kind === "company" && pendingDelete.id === row.id}
+              onDelete={() => setPendingDelete({ kind: "company", id: row.id, label: row.name })}
+              onCancelDelete={() => setPendingDelete(null)}
+              onConfirmDelete={() => void removeCompany(row)}
+            />
+            <View style={styles.members}>
+              <Text style={styles.memberLabel}>Members</Text>
+              {members.length === 0 ? <Text style={styles.empty}>No members.</Text> : null}
+              {members.map((member) => {
+                const label = personLabel(member);
+                return (
+                  <View key={member.userId} style={styles.memberRow}>
+                    <Text style={styles.memberName}>{label}</Text>
+                    <Pressable
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: member.administrator }}
+                      accessibilityLabel={`Administrator ${label} at ${row.name}`}
+                      onPress={() => void toggleMember(row.id, member)}
+                      style={styles.textButton}
+                    >
+                      <Text style={[styles.textButtonLabel, member.administrator ? styles.memberOn : null]}>Administrator</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel={`Remove ${label} from ${row.name}`}
+                      onPress={() => void removeMember(row, member)}
+                      style={styles.textButton}
+                    >
+                      <Text style={styles.textButtonLabel}>Remove</Text>
+                    </Pressable>
+                  </View>
+                );
+              })}
+              {draft ? (
+                <View style={styles.memberDraft}>
+                  {candidates.length === 0 ? <Text style={styles.empty}>No users to add.</Text> : null}
+                  {candidates.map((person) => {
+                    const label = personLabel(person);
+                    const selected = draft.userId === person.id;
+                    return (
+                      <Pressable
+                        key={person.id}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={label}
+                        onPress={() =>
+                          setMemberDraft({ companyId: row.id, userId: person.id, administrator: draft.administrator })
+                        }
+                      >
+                        <Text style={[styles.memberName, selected ? styles.memberOn : null]}>{label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                  <Pressable
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: draft.administrator }}
+                    accessibilityLabel="Administrator"
+                    onPress={() => setMemberDraft({ ...draft, administrator: !draft.administrator })}
+                    style={styles.textButton}
+                  >
+                    <Text style={[styles.textButtonLabel, draft.administrator ? styles.memberOn : null]}>Administrator</Text>
+                  </Pressable>
+                  <View style={styles.actions}>
+                    <Pressable
+                      accessibilityLabel={`Save member ${row.name}`}
+                      onPress={() => void saveMember(row.id)}
+                      style={styles.textButton}
+                    >
+                      <Text style={styles.textButtonLabel}>Add</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel={`Cancel member ${row.name}`}
+                      onPress={() => setMemberDraft(null)}
+                      style={styles.textButton}
+                    >
+                      <Text style={styles.textButtonLabel}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityLabel={`Add member to ${row.name}`}
+                  onPress={() => setMemberDraft({ companyId: row.id, userId: "", administrator: false })}
+                  style={styles.textButton}
+                >
+                  <Text style={styles.textButtonLabel}>Add member</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+      })}
 
       <Text style={styles.section}>Facilities</Text>
       <View style={styles.addRow}>
@@ -516,6 +689,10 @@ export function DirectoryScreen({
   );
 }
 
+function personLabel(person: { displayName: string | null; email: string | null }): string {
+  return person.displayName ?? person.email ?? "User";
+}
+
 function NamedRow({
   name,
   editing,
@@ -650,6 +827,32 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 8,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
+    },
+    members: {
+      gap: 8,
+      paddingLeft: 12,
+      paddingBottom: 8,
+    },
+    memberDraft: {
+      gap: 8,
+    },
+    memberLabel: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.textMuted,
+    },
+    memberRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+    },
+    memberName: {
+      flex: 1,
+      fontSize: 16,
+      color: colors.text,
+    },
+    memberOn: {
+      fontWeight: "600",
     },
     rowText: {
       flex: 1,

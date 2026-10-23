@@ -916,6 +916,7 @@ async function insertDriver(person: User): Promise<Driver> {
     await tx.insert(driverCompany).values({
       driverId: createdDriver.id,
       companyId: createdCompany.id,
+      administrator: true,
     });
     return createdDriver;
   });

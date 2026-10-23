@@ -7,11 +7,14 @@ import {
   createDirectoryUser,
   createFacility,
   deleteCompany,
+  deleteCompanyMember,
   deleteDirectoryUser,
   deleteFacility,
   listCompanies,
+  listCompanyMembers,
   listFacilities,
   listUsers,
+  putCompanyMember,
   updateCompany,
   updateDirectoryUser,
   updateFacility,
@@ -28,6 +31,16 @@ const userBody = z.object({
 
 const idParams = z.object({
   id: z.uuid(),
+});
+
+const memberParams = z.object({
+  id: z.uuid(),
+  userId: z.uuid(),
+});
+
+const memberBody = z.object({
+  userId: z.uuid(),
+  administrator: z.boolean(),
 });
 
 type DirectoryResult = "invalid" | "missing" | "in-use";
@@ -80,6 +93,51 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "invalid request" });
     }
     return sendDeleted(reply, await deleteCompany(params.data.id));
+  });
+
+  app.get("/companies/:id/members", async (request, reply) => {
+    const gate = await requireAdministrator(request.headers.authorization);
+    if (gate === "unauthorized" || gate === "forbidden") {
+      return sendGate(reply, gate);
+    }
+    const params = idParams.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const members = await listCompanyMembers(params.data.id);
+    if (members === "missing") {
+      return reply.code(404).send({ error: "not found" });
+    }
+    return reply.send({ members });
+  });
+
+  app.put("/companies/:id/members", async (request, reply) => {
+    const gate = await requireAdministrator(request.headers.authorization);
+    if (gate === "unauthorized" || gate === "forbidden") {
+      return sendGate(reply, gate);
+    }
+    const params = idParams.safeParse(request.params);
+    const parsed = memberBody.safeParse(request.body);
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const saved = await putCompanyMember(params.data.id, parsed.data.userId, parsed.data.administrator);
+    if (saved === "missing") {
+      return reply.code(404).send({ error: "not found" });
+    }
+    return reply.send(saved);
+  });
+
+  app.delete("/companies/:id/members/:userId", async (request, reply) => {
+    const gate = await requireAdministrator(request.headers.authorization);
+    if (gate === "unauthorized" || gate === "forbidden") {
+      return sendGate(reply, gate);
+    }
+    const params = memberParams.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    return sendDeleted(reply, await deleteCompanyMember(params.data.id, params.data.userId));
   });
 
   app.get("/facilities", async (request, reply) => {

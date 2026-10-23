@@ -3,6 +3,9 @@ import type {
   DirectoryCompanyList,
   DirectoryFacility,
   DirectoryFacilityList,
+  DirectoryMember,
+  DirectoryMemberList,
+  DirectoryMemberRequest,
   DirectoryNameRequest,
   DirectoryUser,
   DirectoryUserList,
@@ -37,6 +40,45 @@ export async function updateCompany(
 
 export async function deleteCompany(apiUrl: string, token: string, id: string): Promise<"ok" | DirectoryFailure> {
   return remove(apiUrl, token, `/companies/${id}`);
+}
+
+export async function readCompanyMembers(
+  apiUrl: string,
+  token: string,
+  companyId: string,
+): Promise<DirectoryMemberList | DirectoryFailure> {
+  return readList(apiUrl, token, `/companies/${companyId}/members`, isMemberList);
+}
+
+export async function putCompanyMember(
+  apiUrl: string,
+  token: string,
+  companyId: string,
+  body: DirectoryMemberRequest,
+): Promise<DirectoryMember | DirectoryFailure> {
+  try {
+    const response = await fetch(`${apiUrl}/companies/${companyId}/members`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      return failureFromStatus(response.status);
+    }
+    const payload: unknown = await response.json();
+    return isMember(payload) ? payload : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+export async function deleteCompanyMember(
+  apiUrl: string,
+  token: string,
+  companyId: string,
+  userId: string,
+): Promise<"ok" | DirectoryFailure> {
+  return remove(apiUrl, token, `/companies/${companyId}/members/${userId}`);
 }
 
 export async function readFacilities(
@@ -209,6 +251,20 @@ function isFacilityList(value: unknown): value is DirectoryFacilityList {
 
 function isUserList(value: unknown): value is DirectoryUserList {
   return isRecord(value) && Array.isArray(value.users) && value.users.every(isDirectoryUser);
+}
+
+function isMemberList(value: unknown): value is DirectoryMemberList {
+  return isRecord(value) && Array.isArray(value.members) && value.members.every(isMember);
+}
+
+function isMember(value: unknown): value is DirectoryMember {
+  return (
+    isRecord(value) &&
+    typeof value.userId === "string" &&
+    isNullableString(value.displayName) &&
+    isNullableString(value.email) &&
+    typeof value.administrator === "boolean"
+  );
 }
 
 function isNamed(value: unknown): value is DirectoryCompany {

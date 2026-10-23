@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import Fastify, { type FastifyInstance } from "fastify";
 import { closeDatabase, db } from "../db.js";
 import { createSession } from "../identity/sessions.js";
 import { migrateDatabase } from "../migrate.js";
 import {
+  addressBookCompanyShare,
   addressBookEntry,
   addressBookPhoneStar,
   company,
@@ -320,6 +321,256 @@ describe("address book", () => {
       await removePerson(other.user.id);
     }
   });
+
+  it("shares one company entry with members and keeps it owned by the origin account", async () => {
+    const owner = await createSession({
+      sub: `share-owner-${crypto.randomUUID()}`,
+      displayName: "Owner",
+      email: `share-owner-${crypto.randomUUID()}@example.com`,
+    });
+    const member = await createSession({
+      sub: `share-member-${crypto.randomUUID()}`,
+      displayName: "Member",
+      email: `share-member-${crypto.randomUUID()}@example.com`,
+    });
+    const joiner = await createSession({
+      sub: `share-joiner-${crypto.randomUUID()}`,
+      displayName: "Joiner",
+      email: `share-joiner-${crypto.randomUUID()}@example.com`,
+    });
+    const stranger = await createSession({
+      sub: `share-stranger-${crypto.randomUUID()}`,
+      displayName: "Stranger",
+      email: `share-stranger-${crypto.randomUUID()}@example.com`,
+    });
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: "/address-book",
+        headers: auth(owner.token),
+        payload: { nickname: "Hangar", label: "3 Ramp Rd", latitude: 41, longitude: -74 },
+      });
+      assert.equal(created.statusCode, 201);
+      const id = created.json().id as string;
+      assert.equal(created.json().owned, true);
+      assert.equal(created.json().companyShared, false);
+      assert.equal(created.json().platformShared, false);
+
+      const ownerDriver = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, owner.user.id));
+      const ownerDriverId = ownerDriver[0]?.id;
+      assert.ok(ownerDriverId);
+      const ownerLinks = await db.select().from(driverCompany).where(eq(driverCompany.driverId, ownerDriverId));
+      assert.equal(ownerLinks.length, 1);
+      assert.equal(ownerLinks[0]?.administrator, true);
+      const companyId = ownerLinks[0]?.companyId;
+      assert.ok(companyId);
+
+      await app.inject({ method: "GET", url: "/address-book", headers: auth(member.token) });
+      await app.inject({ method: "GET", url: "/address-book", headers: auth(joiner.token) });
+      const memberDriver = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, member.user.id));
+      const joinerDriver = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, joiner.user.id));
+      const memberDriverId = memberDriver[0]?.id;
+      const joinerDriverId = joinerDriver[0]?.id;
+      assert.ok(memberDriverId);
+      assert.ok(joinerDriverId);
+      await db.insert(driverCompany).values({ driverId: memberDriverId, companyId, administrator: false });
+
+      const before = await app.inject({ method: "GET", url: "/address-book", headers: auth(member.token) });
+      assert.equal(before.json().entries.some((entry: { id: string }) => entry.id === id), false);
+
+      const shared = await app.inject({
+        method: "POST",
+        url: `/address-book/${id}/company-share`,
+        headers: auth(owner.token),
+      });
+      assert.equal(shared.statusCode, 200);
+      assert.equal(shared.json().id, id);
+      assert.equal(shared.json().companyShared, true);
+      assert.equal(shared.json().owned, true);
+      const grants = await db.select().from(addressBookCompanyShare).where(eq(addressBookCompanyShare.entryId, id));
+      assert.equal(grants.length, 1);
+      assert.equal(grants[0]?.companyId, companyId);
+      const stored = await db.select().from(addressBookEntry).where(eq(addressBookEntry.id, id));
+      assert.equal(stored.length, 1);
+
+      const book = await app.inject({ method: "GET", url: "/address-book", headers: auth(owner.token) });
+      assert.equal(book.json().canShareWithCompany, true);
+      assert.equal(book.json().canShareWithPlatform, false);
+
+      const seen = await app.inject({ method: "GET", url: "/address-book", headers: auth(member.token) });
+      const received = seen.json().entries.find((entry: { id: string }) => entry.id === id);
+      assert.equal(received.nickname, "Hangar");
+      assert.equal(received.owned, false);
+      assert.equal(received.label, "3 Ramp Rd");
+
+      const hidden = await app.inject({ method: "GET", url: "/address-book", headers: auth(stranger.token) });
+      assert.equal(hidden.json().entries.some((entry: { id: string }) => entry.id === id), false);
+
+      const starred = await app.inject({
+        method: "POST",
+        url: "/address-book/phone-stars",
+        headers: auth(owner.token),
+        payload: { contactId: "contact", addressId: "address" },
+      });
+      assert.equal(starred.statusCode, 204);
+      const memberStars = await app.inject({ method: "GET", url: "/address-book", headers: auth(member.token) });
+      assert.deepEqual(memberStars.json().phoneStars, []);
+
+      const renamed = await app.inject({
+        method: "PATCH",
+        url: `/address-book/${id}`,
+        headers: auth(owner.token),
+        payload: { nickname: "Ramp" },
+      });
+      assert.equal(renamed.statusCode, 200);
+      const synced = await app.inject({ method: "GET", url: "/address-book", headers: auth(member.token) });
+      assert.equal(synced.json().entries.find((entry: { id: string }) => entry.id === id).nickname, "Ramp");
+      const stillOne = await db.select().from(addressBookEntry).where(eq(addressBookEntry.id, id));
+      assert.equal(stillOne.length, 1);
+
+      await db.insert(driverCompany).values({ driverId: joinerDriverId, companyId, administrator: false });
+      const joined = await app.inject({ method: "GET", url: "/address-book", headers: auth(joiner.token) });
+      assert.equal(joined.json().entries.some((entry: { id: string }) => entry.id === id), true);
+      await db
+        .delete(driverCompany)
+        .where(and(eq(driverCompany.driverId, joinerDriverId), eq(driverCompany.companyId, companyId)));
+      const left = await app.inject({ method: "GET", url: "/address-book", headers: auth(joiner.token) });
+      assert.equal(left.json().entries.some((entry: { id: string }) => entry.id === id), false);
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/address-book/${id}`,
+        headers: auth(member.token),
+        payload: { nickname: "Taken" },
+      });
+      assert.equal(patched.statusCode, 404);
+      const deleted = await app.inject({
+        method: "DELETE",
+        url: `/address-book/${id}`,
+        headers: auth(member.token),
+      });
+      assert.equal(deleted.statusCode, 404);
+      const memberShare = await app.inject({
+        method: "POST",
+        url: `/address-book/${id}/company-share`,
+        headers: auth(member.token),
+      });
+      assert.equal(memberShare.statusCode, 404);
+      const platform = await app.inject({
+        method: "POST",
+        url: `/address-book/${id}/platform-share`,
+        headers: auth(owner.token),
+      });
+      assert.equal(platform.statusCode, 403);
+
+      const unshared = await app.inject({
+        method: "DELETE",
+        url: `/address-book/${id}/company-share`,
+        headers: auth(owner.token),
+      });
+      assert.equal(unshared.statusCode, 200);
+      assert.equal(unshared.json().companyShared, false);
+      const withdrawn = await app.inject({ method: "GET", url: "/address-book", headers: auth(member.token) });
+      assert.equal(withdrawn.json().entries.some((entry: { id: string }) => entry.id === id), false);
+      const again = await app.inject({
+        method: "POST",
+        url: `/address-book/${id}/company-share`,
+        headers: auth(owner.token),
+      });
+      assert.equal(again.statusCode, 200);
+
+      const removed = await app.inject({
+        method: "DELETE",
+        url: `/address-book/${id}`,
+        headers: auth(owner.token),
+      });
+      assert.equal(removed.statusCode, 204);
+      const afterDelete = await app.inject({ method: "GET", url: "/address-book", headers: auth(member.token) });
+      assert.equal(afterDelete.json().entries.some((entry: { id: string }) => entry.id === id), false);
+      const grantsGone = await db.select().from(addressBookCompanyShare).where(eq(addressBookCompanyShare.entryId, id));
+      assert.equal(grantsGone.length, 0);
+    } finally {
+      await removePerson(member.user.id);
+      await removePerson(joiner.user.id);
+      await removePerson(stranger.user.id);
+      await removePerson(owner.user.id);
+    }
+  });
+
+  it("shares one platform entry with every signed-in user", async () => {
+    const previous = process.env.PLATFORM_ADMINISTRATOR_EMAILS;
+    const email = `platform-share-${crypto.randomUUID()}@example.com`;
+    process.env.PLATFORM_ADMINISTRATOR_EMAILS = email;
+    const admin = await createSession({
+      sub: `platform-share-${crypto.randomUUID()}`,
+      displayName: "Platform",
+      email,
+    });
+    const reader = await createSession({
+      sub: `platform-reader-${crypto.randomUUID()}`,
+      displayName: "Reader",
+      email: `platform-reader-${crypto.randomUUID()}@example.com`,
+    });
+    try {
+      assert.equal(admin.user.platformAdministrator, true);
+      await db.insert(driver).values({ userId: admin.user.id });
+      const created = await app.inject({
+        method: "POST",
+        url: "/address-book",
+        headers: auth(admin.token),
+        payload: { nickname: "Yard", label: "9 Yard", latitude: 42, longitude: -73 },
+      });
+      assert.equal(created.statusCode, 201);
+      const id = created.json().id as string;
+
+      const companyShare = await app.inject({
+        method: "POST",
+        url: `/address-book/${id}/company-share`,
+        headers: auth(admin.token),
+      });
+      assert.equal(companyShare.statusCode, 403);
+
+      const shared = await app.inject({
+        method: "POST",
+        url: `/address-book/${id}/platform-share`,
+        headers: auth(admin.token),
+      });
+      assert.equal(shared.statusCode, 200);
+      assert.equal(shared.json().platformShared, true);
+      assert.equal(shared.json().id, id);
+      const rows = await db.select().from(addressBookEntry).where(eq(addressBookEntry.id, id));
+      assert.equal(rows.length, 1);
+
+      const seen = await app.inject({ method: "GET", url: "/address-book", headers: auth(reader.token) });
+      const received = seen.json().entries.find((entry: { id: string }) => entry.id === id);
+      assert.equal(received.nickname, "Yard");
+      assert.equal(received.owned, false);
+      const readerShare = await app.inject({
+        method: "POST",
+        url: `/address-book/${id}/platform-share`,
+        headers: auth(reader.token),
+      });
+      assert.equal(readerShare.statusCode, 404);
+
+      const cleared = await app.inject({
+        method: "DELETE",
+        url: `/address-book/${id}/platform-share`,
+        headers: auth(admin.token),
+      });
+      assert.equal(cleared.statusCode, 200);
+      assert.equal(cleared.json().platformShared, false);
+      const hidden = await app.inject({ method: "GET", url: "/address-book", headers: auth(reader.token) });
+      assert.equal(hidden.json().entries.some((entry: { id: string }) => entry.id === id), false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PLATFORM_ADMINISTRATOR_EMAILS;
+      } else {
+        process.env.PLATFORM_ADMINISTRATOR_EMAILS = previous;
+      }
+      await removePerson(reader.user.id);
+      await removePerson(admin.user.id);
+    }
+  });
 });
 
 function auth(token: string): { authorization: string } {
@@ -329,6 +580,15 @@ function auth(token: string): { authorization: string } {
 async function removePerson(userId: string): Promise<void> {
   const drivers = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId));
   for (const row of drivers) {
+    const entries = await db.select({ id: addressBookEntry.id }).from(addressBookEntry).where(eq(addressBookEntry.driverId, row.id));
+    if (entries.length > 0) {
+      await db.delete(addressBookCompanyShare).where(
+        inArray(
+          addressBookCompanyShare.entryId,
+          entries.map((entry) => entry.id),
+        ),
+      );
+    }
     await db.delete(addressBookEntry).where(eq(addressBookEntry.driverId, row.id));
     await db.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, row.id));
     await db.delete(driverMeterReading).where(eq(driverMeterReading.driverId, row.id));
@@ -348,6 +608,15 @@ async function removePerson(userId: string): Promise<void> {
     await db.delete(driverCompany).where(eq(driverCompany.driverId, row.id));
     await db.delete(driver).where(eq(driver.id, row.id));
     for (const link of links) {
+      const remaining = await db
+        .select({ id: driverCompany.id })
+        .from(driverCompany)
+        .where(eq(driverCompany.companyId, link.companyId))
+        .limit(1);
+      if (remaining[0]) {
+        continue;
+      }
+      await db.delete(addressBookCompanyShare).where(eq(addressBookCompanyShare.companyId, link.companyId));
       await db.delete(company).where(eq(company.id, link.companyId));
     }
   }

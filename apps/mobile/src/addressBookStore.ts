@@ -5,6 +5,8 @@ import {
   deleteAddressBookEntry,
   patchAddressBookEntry,
   readAddressBook,
+  setCompanyShare,
+  setPlatformShare,
   starPhoneAddress,
   unstarPhoneAddress,
   type AddressBookFailure,
@@ -18,6 +20,8 @@ export type AddressBookSnapshot = {
   phoneStars: PhoneAddressStar[];
   phones: DevicePostalAddress[];
   phoneAccess: "unknown" | "granted" | "denied" | "unavailable";
+  canShareWithCompany: boolean;
+  canShareWithPlatform: boolean;
 };
 
 const listeners = new Set<() => void>();
@@ -78,6 +82,8 @@ export async function ensureAddressBookLoaded(apiUrl: string, token: string): Pr
     publish({
       entries: mergeEntries(result.entries),
       phoneStars: mergeStars(result.phoneStars),
+      canShareWithCompany: result.canShareWithCompany,
+      canShareWithPlatform: result.canShareWithPlatform,
     });
     removedEntryIds.clear();
     removedStarKeys.clear();
@@ -159,7 +165,7 @@ export async function saveChosenPlace(
   if (loaded !== "ok") {
     return loaded;
   }
-  if (snapshot.entries.some((entry) => samePlace(entry, place))) {
+  if (snapshot.entries.some((entry) => entry.owned && samePlace(entry, place))) {
     return "exists";
   }
   const created = await createAddressBookEntry(apiUrl, token, {
@@ -204,6 +210,32 @@ export async function setEntryFavorite(
   favorite: boolean,
 ): Promise<AddressBookEntry | AddressBookFailure> {
   const updated = await patchAddressBookEntry(apiUrl, token, id, { favorite });
+  if (typeof updated !== "string") {
+    noteEntry(updated);
+  }
+  return updated;
+}
+
+export async function setEntryCompanyShare(
+  apiUrl: string,
+  token: string,
+  id: string,
+  shared: boolean,
+): Promise<AddressBookEntry | AddressBookFailure> {
+  const updated = await setCompanyShare(apiUrl, token, id, shared);
+  if (typeof updated !== "string") {
+    noteEntry(updated);
+  }
+  return updated;
+}
+
+export async function setEntryPlatformShare(
+  apiUrl: string,
+  token: string,
+  id: string,
+  shared: boolean,
+): Promise<AddressBookEntry | AddressBookFailure> {
+  const updated = await setPlatformShare(apiUrl, token, id, shared);
   if (typeof updated !== "string") {
     noteEntry(updated);
   }
@@ -278,5 +310,5 @@ function sameStar(left: PhoneAddressStar, right: PhoneAddressStar): boolean {
 }
 
 function emptySnapshot(): AddressBookSnapshot {
-  return { entries: [], phoneStars: [], phones: [], phoneAccess: "unknown" };
+  return { entries: [], phoneStars: [], phones: [], phoneAccess: "unknown", canShareWithCompany: false, canShareWithPlatform: false };
 }

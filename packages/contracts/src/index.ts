@@ -124,6 +124,22 @@ export type DirectoryUserList = {
   users: DirectoryUser[];
 };
 
+export type DirectoryMember = {
+  userId: string;
+  displayName: string | null;
+  email: string | null;
+  administrator: boolean;
+};
+
+export type DirectoryMemberList = {
+  members: DirectoryMember[];
+};
+
+export type DirectoryMemberRequest = {
+  userId: string;
+  administrator: boolean;
+};
+
 export type CreateSessionRequest = {
   googleIdToken: string;
 };
@@ -308,6 +324,9 @@ export type AddressBookEntry = {
   latitude: number;
   longitude: number;
   favorite: boolean;
+  owned: boolean;
+  companyShared: boolean;
+  platformShared: boolean;
 };
 
 export type AddressBookEntryWrite = {
@@ -337,4 +356,6 @@ export type PhoneAddressStar = {
 export type AddressBookResponse = {
   entries: AddressBookEntry[];
   phoneStars: PhoneAddressStar[];
+  canShareWithCompany: boolean;
+  canShareWithPlatform: boolean;
 };

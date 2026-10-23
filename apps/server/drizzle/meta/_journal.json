@@ -127,6 +127,13 @@
       "when": 1791800000000,
       "tag": "0017_address_place_name",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791900000000,
+      "tag": "0018_address_book_share",
+      "breakpoints": true
     }
   ]
 }

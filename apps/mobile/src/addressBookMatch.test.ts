@@ -21,6 +21,9 @@ function entry(id: string, nickname: string, favorite: boolean, placeName = ""):
     latitude: Number(id),
     longitude: 1,
     favorite,
+    owned: false,
+    companyShared: false,
+    platformShared: false,
   };
 }
 

@@ -6,7 +6,7 @@ import type {
   PhoneAddressStar,
 } from "@groundops/contracts";
 
-export type AddressBookFailure = "unauthorized" | "invalid" | "missing" | "unreachable";
+export type AddressBookFailure = "unauthorized" | "forbidden" | "invalid" | "missing" | "unreachable";
 
 export async function readAddressBook(
   apiUrl: string,
@@ -49,6 +49,24 @@ export async function deleteAddressBookEntry(
   id: string,
 ): Promise<"ok" | AddressBookFailure> {
   return remove(apiUrl, token, `/address-book/${id}`);
+}
+
+export async function setCompanyShare(
+  apiUrl: string,
+  token: string,
+  id: string,
+  shared: boolean,
+): Promise<AddressBookEntry | AddressBookFailure> {
+  return sendShare(apiUrl, token, shared ? "POST" : "DELETE", `/address-book/${id}/company-share`);
+}
+
+export async function setPlatformShare(
+  apiUrl: string,
+  token: string,
+  id: string,
+  shared: boolean,
+): Promise<AddressBookEntry | AddressBookFailure> {
+  return sendShare(apiUrl, token, shared ? "POST" : "DELETE", `/address-book/${id}/platform-share`);
 }
 
 export async function starPhoneAddress(
@@ -111,6 +129,27 @@ async function writeStar(
   }
 }
 
+async function sendShare(
+  apiUrl: string,
+  token: string,
+  method: "POST" | "DELETE",
+  path: string,
+): Promise<AddressBookEntry | AddressBookFailure> {
+  try {
+    const response = await fetch(`${apiUrl}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      return failureFromStatus(response.status);
+    }
+    const payload: unknown = await response.json();
+    return isEntry(payload) ? payload : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
 async function remove(apiUrl: string, token: string, path: string): Promise<"ok" | AddressBookFailure> {
   try {
     const response = await fetch(`${apiUrl}${path}`, {
@@ -130,6 +169,9 @@ function failureFromStatus(status: number): AddressBookFailure {
   if (status === 401) {
     return "unauthorized";
   }
+  if (status === 403) {
+    return "forbidden";
+  }
   if (status === 400) {
     return "invalid";
   }
@@ -140,7 +182,15 @@ function failureFromStatus(status: number): AddressBookFailure {
 }
 
 function isAddressBook(value: unknown): value is AddressBookResponse {
-  return isRecord(value) && Array.isArray(value.entries) && value.entries.every(isEntry) && Array.isArray(value.phoneStars) && value.phoneStars.every(isStar);
+  return (
+    isRecord(value) &&
+    Array.isArray(value.entries) &&
+    value.entries.every(isEntry) &&
+    Array.isArray(value.phoneStars) &&
+    value.phoneStars.every(isStar) &&
+    typeof value.canShareWithCompany === "boolean" &&
+    typeof value.canShareWithPlatform === "boolean"
+  );
 }
 
 function isEntry(value: unknown): value is AddressBookEntry {
@@ -152,7 +202,10 @@ function isEntry(value: unknown): value is AddressBookEntry {
     typeof value.label === "string" &&
     typeof value.latitude === "number" &&
     typeof value.longitude === "number" &&
-    typeof value.favorite === "boolean"
+    typeof value.favorite === "boolean" &&
+    typeof value.owned === "boolean" &&
+    typeof value.companyShared === "boolean" &&
+    typeof value.platformShared === "boolean"
   );
 }
 

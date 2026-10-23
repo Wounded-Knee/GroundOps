@@ -25,7 +25,9 @@ import {
   removeSavedEntry,
   requestDeviceAddresses,
   saveAddressRecord,
+  setEntryCompanyShare,
   setEntryFavorite,
+  setEntryPlatformShare,
   setPhoneStarred,
   subscribeAddressBook,
   type AddressBookSnapshot,
@@ -298,8 +300,28 @@ export function AddressBookScreen({
           key={entry.id}
           entry={entry}
           busy={busy}
+          canShareWithCompany={book.canShareWithCompany}
+          canShareWithPlatform={book.canShareWithPlatform}
           onStar={() => {
             void setEntryFavorite(apiUrl, token, entry.id, !entry.favorite).then((result) => {
+              if (result === "unauthorized") {
+                onUnauthorized();
+              } else if (typeof result === "string") {
+                setMessage(notSaved);
+              }
+            });
+          }}
+          onShareCompany={() => {
+            void setEntryCompanyShare(apiUrl, token, entry.id, !entry.companyShared).then((result) => {
+              if (result === "unauthorized") {
+                onUnauthorized();
+              } else if (typeof result === "string") {
+                setMessage(notSaved);
+              }
+            });
+          }}
+          onSharePlatform={() => {
+            void setEntryPlatformShare(apiUrl, token, entry.id, !entry.platformShared).then((result) => {
               if (result === "unauthorized") {
                 onUnauthorized();
               } else if (typeof result === "string") {
@@ -394,7 +416,11 @@ export function AddressBookScreen({
 function EntryRow({
   entry,
   busy,
+  canShareWithCompany,
+  canShareWithPlatform,
   onStar,
+  onShareCompany,
+  onSharePlatform,
   onGuide,
   onShortcut,
   shortcutOn,
@@ -404,7 +430,11 @@ function EntryRow({
 }: {
   entry: AddressBookEntry;
   busy: boolean;
+  canShareWithCompany: boolean;
+  canShareWithPlatform: boolean;
   onStar: () => void;
+  onShareCompany: () => void;
+  onSharePlatform: () => void;
   onGuide: () => void;
   onShortcut: () => void;
   shortcutOn: boolean;
@@ -418,7 +448,7 @@ function EntryRow({
   return (
     <View style={styles.row}>
       <View style={styles.rowHead}>
-        <StarButton favorite={entry.favorite} onPress={onStar} />
+        {entry.owned ? <StarButton favorite={entry.favorite} onPress={onStar} /> : null}
         <View style={styles.rowText}>
           <Text style={styles.name}>{title}</Text>
           {subtitle === title ? null : <Text style={styles.address}>{subtitle}</Text>}
@@ -436,9 +466,25 @@ function EntryRow({
             onPress={onShortcut}
           />
         )}
-        <TextButton label="Edit" disabled={busy} onPress={onEdit} />
+        {entry.owned && canShareWithCompany ? (
+          <TextButton
+            label="Share with company"
+            disabled={busy}
+            selected={entry.companyShared}
+            onPress={onShareCompany}
+          />
+        ) : null}
+        {entry.owned && canShareWithPlatform ? (
+          <TextButton
+            label="Share with platform"
+            disabled={busy}
+            selected={entry.platformShared}
+            onPress={onSharePlatform}
+          />
+        ) : null}
+        {entry.owned ? <TextButton label="Edit" disabled={busy} onPress={onEdit} /> : null}
         <TextButton label="Sortie" disabled={busy} onPress={onSortie} />
-        <TextButton label="Delete" disabled={busy} onPress={onDelete} />
+        {entry.owned ? <TextButton label="Delete" disabled={busy} onPress={onDelete} /> : null}
       </View>
     </View>
   );

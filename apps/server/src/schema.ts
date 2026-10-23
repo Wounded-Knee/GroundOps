@@ -116,6 +116,8 @@ export const driverCompany = pgTable(
     companyId: uuid("company_id")
       .notNull()
       .references(() => company.id),
+    /** A company administrator can share their own places with this company. */
+    administrator: boolean("administrator").notNull().default(false),
   },
   (table) => [uniqueIndex("driver_company_driver_id_company_id_key").on(table.driverId, table.companyId)],
 );
@@ -244,9 +246,28 @@ export const addressBookEntry = pgTable(
     latitude: doublePrecision("latitude").notNull(),
     longitude: doublePrecision("longitude").notNull(),
     favorite: boolean("favorite").notNull().default(false),
+    /** When true, every signed-in user can read this place. The row stays with the owner. */
+    platformShared: boolean("platform_shared").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [index("address_book_entry_driver_id_idx").on(table.driverId)],
+);
+
+/** Access to one saved place for every member of a company. The entry stays on the owning driver. */
+export const addressBookCompanyShare = pgTable(
+  "address_book_company_share",
+  {
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => addressBookEntry.id),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => company.id),
+  },
+  (table) => [
+    primaryKey({ columns: [table.entryId, table.companyId] }),
+    index("address_book_company_share_company_id_idx").on(table.companyId),
+  ],
 );
 
 /** A star on a phone contact's postal address. The row stores no contact fields. */
@@ -278,5 +299,6 @@ export const schema = {
   driverMeterReading,
   driverTariff,
   addressBookEntry,
+  addressBookCompanyShare,
   addressBookPhoneStar,
 };
