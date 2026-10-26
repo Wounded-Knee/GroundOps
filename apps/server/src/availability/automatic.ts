@@ -21,7 +21,7 @@ export type AutomaticAvailabilityInput = {
 
 /**
  * The choice to write for one event, or null when this event must not change it.
- * Lead, calendar guidance, and commencing a fare set unavailable only.
+ * Lead, calendar guidance, commencing a fare, and a driving route toward a passenger stop of a sortie already in progress set unavailable only.
  * Commencing a sortie without a passenger, and concluding a sortie, set available, unless another sortie is already inside the lead.
  */
 export function automaticAvailabilityChoice(input: AutomaticAvailabilityInput): boolean | null {

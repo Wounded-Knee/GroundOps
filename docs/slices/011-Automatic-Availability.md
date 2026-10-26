@@ -6,7 +6,7 @@
 
 **Derived from:** Driver availability in `docs/03-domain-model.md` and `docs/01-architecture..md` section 15.
 
-**Purpose:** The platform sets the driver's availability choice when a sortie is inside the lead time before it is scheduled to commence, when the driver starts guidance from the calendar, when a sortie is commenced, and when a sortie concludes. The yellow bar still shows that choice.
+**Purpose:** The platform sets the driver's availability choice when a sortie is inside the lead time before it is scheduled to commence, when the driver starts guidance from the calendar, when a sortie is commenced, when guidance starts toward a passenger stop of a sortie that is already commenced, and when a sortie concludes. The yellow bar still shows that choice.
 
 This document is the implementation boundary. Duty, offers, assignment, and a list of who is available stay outside. Slice 010 still owns the check-in lease, including the background location check-in.
 
@@ -38,7 +38,7 @@ One actor: a signed-in driver. Reading or saving these settings creates the driv
 Stored on the driver:
 
 - `availability_threshold_minutes` — whole minutes, default 15, allowed 0 through 120.
-- `auto_set_unavailable` — default true. The lead before commencement, and starting guidance from the calendar, set the choice unavailable.
+- `auto_set_unavailable` — default true. The lead before commencement, starting guidance from the calendar, commencing a fare, and starting guidance toward a passenger stop set the choice unavailable.
 - `auto_set_available` — default true. Commencing or concluding a sortie sets the choice available, unless the latest GPS fix is outside the availability geofence.
 - `availability_geofence` — a coordinate ring, default empty. Empty means there is no fence. A ring of at least three vertices blocks an automatic true while the latest GPS fix is outside it. A point on the boundary counts as inside. Reported accuracy does not widen the ring. No fix is not outside.
 - `availability_auto_available_deferred` — default false. An automatic true was postponed because the latest fix was outside the ring.
@@ -57,7 +57,7 @@ An uncommenced sortie is inside the lead when `scheduledStart` is at or after no
 
 # 4. State transitions
 
-Automatic changes happen on four events. A postponed true is released later by a GPS fix inside the ring, not by a fifth event of its own.
+Automatic changes happen on four events. A driving route toward a passenger stop of a sortie already in progress reuses the commencement check. A postponed true is released later by a GPS fix inside the ring, not by a fifth event of its own.
 
 **Lead.** An uncommenced sortie is inside the lead. This is checked when a sortie is created, revised, or has its wait extended, and on the same one-minute interval as the check-in lapse for every driver whose unavailable flag is on. Importing the module does not start that interval. When the flag is on, the choice becomes false. The lead does not set the choice available, including after the window passes or a start becomes overdue.
 
@@ -65,9 +65,11 @@ Automatic changes happen on four events. A postponed true is released later by a
 
 **Commencement.** A sortie is commenced other than by that Guide tap. **Conclusion.** A sortie is completed. Both run the same check. When the available flag is on and no uncommenced sortie is inside the lead, the choice becomes true. When another sortie is already inside the lead and the unavailable flag is on, the choice becomes false instead. When that check would set the choice true and the latest fix is outside a saved ring, the choice is left unchanged and the true is postponed.
 
-A postponed true is written when a later GPS fix is inside the ring, if Automatically Set Available is still on. A fix outside the ring leaves the postponement in place. A later automatic false — a lead, calendar guidance, or commencing a fare — writes unavailable and clears the postponement, so coming back inside does not undo it.
+**Passenger leg.** A driving route for a sortie that is already commenced and not yet completed, whose `firstStopPosition` stop has passenger on, runs the same check as commencing a fare. When Automatically Set Unavailable is on, the choice becomes false and a postponed true is cleared. The same choice writes no event. A route whose target stop has passenger off does not change the choice. A reposition reroute, and the overview request that always asks for position 0, do not turn the driver available and do not undo calendar guidance.
 
-A sortie that is merely in progress does not change the choice. Saving settings does not, except that turning Automatically Set Available off clears a postponement, and clearing the ring applies a postponed true unless a lead would set unavailable. In that lead case the postponement is cleared and the choice stays as it is. A GPS fix does not change the choice unless it releases a postponed true.
+A postponed true is written when a later GPS fix is inside the ring, if Automatically Set Available is still on. A fix outside the ring leaves the postponement in place. A later automatic false — a lead, calendar guidance, commencing a fare, or starting guidance toward a passenger stop — writes unavailable and clears the postponement, so coming back inside does not undo it.
+
+A sortie that is merely in progress does not change the choice, except when a driving route starts guidance toward a passenger stop. Revising the sortie, including Onward Destination, does not. A route to a non-passenger stop does not. Saving settings does not, except that turning Automatically Set Available off clears a postponement, and clearing the ring applies a postponed true unless a lead would set unavailable. In that lead case the postponement is cleared and the choice stays as it is. A GPS fix does not change the choice unless it releases a postponed true.
 
 The same choice writes no event and publishes nothing. A new driver stays unavailable until a commencement, a conclusion, or calendar guidance, unless a lead sets them unavailable first.
 
@@ -101,6 +103,8 @@ Commands are HTTP JSON. Zod validates input at the boundary. Domain checks live 
 
 A missing or revoked session is 401. A non-integer threshold, a value outside 0–120, or a ring of one or two points is 400.
 
+`POST /sorties/:id/driving-route`, after a successful route for a sortie that is already commenced and not yet completed, runs the passenger-leg check. It does not set the choice available.
+
 The decision is a pure function. It calls `setAvailability` and does not call itself again. The one-minute starter imports the lapse sweep and the lead check from outside the availability module, because that module already imports the calendar.
 
 ---
@@ -125,8 +129,8 @@ The slice works when all of the following are true:
 
 1. A new driver's settings are both flags on, threshold 15, and an empty geofence. The choice stays unavailable through a lead check when no sortie is inside the lead. A conclusion sets the choice available, and a second conclusion writes no event.
 2. A missing session is rejected. A bad body is rejected, including a one- or two-point ring and a threshold outside 0–120. A saved ring is returned on the next read. One driver does not receive another's ring.
-3. A sortie already in progress does not change the choice by itself. Commencing one, or completing one, sets the choice available when that flag is on. A start 14 minutes out sets the choice unavailable. A start at exactly 15 minutes, and a start already in the past, do not, and neither one sets the choice available. Repeating an event that does not change the choice writes no event.
-4. A GPS fix does not change the choice by itself. A conclusion while the latest fix is outside a saved ring leaves the choice unchanged and postpones the true. A later fix outside leaves that postponement. The next fix inside sets the choice available, once. A conclusion with the fix inside the ring, with no fix, or with an empty ring, sets the choice available immediately. A lead after a postponement sets the choice unavailable and clears the postponement, and a later fix inside does not set the choice available. Turning a flag off skips that direction and clears a postponement when Automatically Set Available is turned off. Starting guidance from the calendar sets the choice unavailable when Automatically Set Unavailable is on, and writes no further event when the choice is already unavailable. When that flag is off, the same Guide tap uses the commencement check.
+3. A sortie already in progress does not change the choice by itself. Commencing one, or completing one, sets the choice available when that flag is on. A start 14 minutes out sets the choice unavailable. A start at exactly 15 minutes, and a start already in the past, do not, and neither one sets the choice available. Repeating an event that does not change the choice writes no event. After a reposition is commenced, revising in a later passenger stop leaves the choice available. The driving route for that stop sets the choice unavailable when Automatically Set Unavailable is on. Repeating that route writes no further event. A route for a non-passenger stop leaves the choice unavailable.
+4. A GPS fix does not change the choice by itself. The driving-route request that Commence or GPS leave makes is what sets unavailable for a passenger leg, not the location observation. A conclusion while the latest fix is outside a saved ring leaves the choice unchanged and postpones the true. A later fix outside leaves that postponement. The next fix inside sets the choice available, once. A conclusion with the fix inside the ring, with no fix, or with an empty ring, sets the choice available immediately. A lead after a postponement sets the choice unavailable and clears the postponement, and a later fix inside does not set the choice available. Turning a flag off skips that direction and clears a postponement when Automatically Set Available is turned off. Starting guidance from the calendar sets the choice unavailable when Automatically Set Unavailable is on, and writes no further event when the choice is already unavailable. When that flag is off, the same Guide tap uses the commencement check.
 5. The settings screen offers the threshold, both flags, and the availability status geofence, including the hint that automatic available waits while the GPS fix is outside the fence. Web does not offer Create or Edit.
 
 ---

@@ -656,6 +656,34 @@ export async function commenceSortie(
   return shown;
 }
 
+/** The target stop of a commenced, unfinished sortie carries a passenger. */
+export async function passengerLegUnderway(
+  person: User,
+  sortieId: string,
+  firstStopPosition: number,
+): Promise<boolean> {
+  const author = await findDriver(db, person.id);
+  if (!author) {
+    return false;
+  }
+  const rows = await db
+    .select({ passenger: sortieStop.passenger })
+    .from(sortieStop)
+    .innerJoin(sortie, eq(sortieStop.sortieId, sortie.id))
+    .where(
+      and(
+        eq(sortie.id, sortieId),
+        eq(sortie.authorDriverId, author.id),
+        isNotNull(sortie.actualStart),
+        isNull(sortie.actualEnd),
+        eq(sortieStop.position, firstStopPosition),
+        eq(sortieStop.passenger, true),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
 export async function completeSortie(
   person: User,
   sortieId: string,

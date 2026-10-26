@@ -7,6 +7,7 @@ import {
   authorSortie,
   commenceSortie,
   completeSortie,
+  passengerLegUnderway,
   defaultScheduleDeps,
   ensureDriver,
   extendStopWait,
@@ -436,6 +437,9 @@ export function registerCalendarRoutes(
     }
     if (result === "no-route") {
       return reply.code(422).send({ error: "no route" });
+    }
+    if (await passengerLegUnderway(active.user, params.data.id, body.data.firstStopPosition)) {
+      await applyAutomaticAvailability(active.user, "commencement", deps.now(), true);
     }
     return reply.send({ route: result });
   });

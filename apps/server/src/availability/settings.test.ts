@@ -16,8 +16,10 @@ import {
   driverAvailabilityEvent,
   driverCompany,
   locationObservation,
+  operationalEvent,
   session,
   sortie,
+  sortieStop,
   user,
   userCredential,
 } from "../schema.js";
@@ -579,6 +581,123 @@ describe("availability settings", () => {
       await removeUser(person.user.id);
     }
   });
+
+  it("sets unavailable when a commenced reposition starts a passenger leg", async () => {
+    const person = await createSession({
+      sub: `availability-passenger-leg-${crypto.randomUUID()}`,
+      displayName: "Passenger leg",
+      email: null,
+    });
+    const local = Fastify();
+    registerAvailabilityRoutes(local, { now: () => now });
+    registerCalendarRoutes(local, scheduleDeps, {
+      computeDrivingRoute: async () => ({
+        distanceMeters: 1000,
+        durationSeconds: 120,
+        path: [
+          { latitude: 40.7, longitude: -74 },
+          { latitude: 40.75, longitude: -73.99 },
+        ],
+        steps: [
+          {
+            instruction: "Go",
+            maneuver: "straight" as const,
+            distanceMeters: 1000,
+            durationSeconds: 120,
+            path: [
+              { latitude: 40.7, longitude: -74 },
+              { latitude: 40.75, longitude: -73.99 },
+            ],
+          },
+        ],
+      }),
+    });
+    const headers = { authorization: `Bearer ${person.token}` };
+    const pickup = { label: "Pickup", latitude: 40.71, longitude: -74.01, waitMinutes: 0, passenger: false };
+    const dropoff = { label: "Dropoff", latitude: 40.75, longitude: -73.99, waitMinutes: 0, passenger: true };
+    try {
+      const settings = await local.inject({ method: "GET", url: "/availability/settings", headers });
+      assert.equal(settings.statusCode, 200);
+      const observed = await local.inject({
+        method: "POST",
+        url: "/location-observations",
+        headers,
+        payload: {
+          observedAt: now.toISOString(),
+          latitude: 40.7,
+          longitude: -74,
+          accuracyMeters: 8,
+        },
+      });
+      assert.equal(observed.statusCode, 204);
+
+      const created = await local.inject({
+        method: "POST",
+        url: "/sorties",
+        headers,
+        payload: {
+          label: "",
+          arrivalAt: null,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [pickup],
+        },
+      });
+      assert.equal(created.statusCode, 201);
+      const sortieId = created.json().id as string;
+
+      const commenced = await local.inject({
+        method: "POST",
+        url: `/sorties/${sortieId}/commence`,
+        headers,
+      });
+      assert.equal(commenced.statusCode, 200);
+      assert.equal((await readOn(local, person.token)).available, true);
+      const afterCommence = (await eventsFor(person.user.id)).length;
+
+      const revised = await local.inject({
+        method: "PATCH",
+        url: `/sorties/${sortieId}`,
+        headers,
+        payload: {
+          label: "",
+          arrivalAt: null,
+          passengerName: null,
+          passengerPhone: null,
+          stops: [pickup, dropoff],
+        },
+      });
+      assert.equal(revised.statusCode, 200);
+      assert.equal(revised.json().stops[1].passenger, true);
+      assert.equal((await readOn(local, person.token)).available, true);
+      assert.equal((await eventsFor(person.user.id)).length, afterCommence);
+
+      const passengerLeg = await requestRoute(local, person.token, sortieId, 1);
+      assert.equal(passengerLeg.statusCode, 200);
+      assert.equal((await readOn(local, person.token)).available, false);
+      assert.equal((await eventsFor(person.user.id)).length, afterCommence + 1);
+
+      const again = await requestRoute(local, person.token, sortieId, 1);
+      assert.equal(again.statusCode, 200);
+      assert.equal((await eventsFor(person.user.id)).length, afterCommence + 1);
+
+      const overview = await requestRoute(local, person.token, sortieId, 0);
+      assert.equal(overview.statusCode, 200);
+      assert.equal((await readOn(local, person.token)).available, false);
+      assert.equal((await eventsFor(person.user.id)).length, afterCommence + 1);
+
+      const completed = await local.inject({
+        method: "POST",
+        url: `/sorties/${sortieId}/complete`,
+        headers,
+      });
+      assert.equal(completed.statusCode, 200);
+      assert.equal((await readOn(local, person.token)).available, true);
+    } finally {
+      await local.close();
+      await removeUser(person.user.id);
+    }
+  });
 });
 
 function later(minutes: number): Date {
@@ -596,6 +715,24 @@ async function observe(token: string, point: GeoCoordinate): Promise<number> {
     accuracyMeters: 5,
   });
   return response.statusCode;
+}
+
+function requestRoute(app: FastifyInstance, token: string, sortieId: string, firstStopPosition: number) {
+  return app.inject({
+    method: "POST",
+    url: `/sorties/${sortieId}/driving-route`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { origin: { latitude: 40.7, longitude: -74 }, firstStopPosition },
+  });
+}
+
+async function readOn(app: FastifyInstance, token: string): Promise<{ available: boolean; current: boolean }> {
+  const response = await app.inject({
+    method: "GET",
+    url: "/availability",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return response.json();
 }
 
 async function readChoice(token: string): Promise<{ available: boolean; current: boolean }> {
@@ -684,6 +821,11 @@ async function removeUser(userId: string): Promise<void> {
     await db.delete(addressBookEntry).where(eq(addressBookEntry.driverId, row.id));
     await db.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, row.id));
     await db.delete(locationObservation).where(eq(locationObservation.driverId, row.id));
+    const sorties = await db.select({ id: sortie.id }).from(sortie).where(eq(sortie.authorDriverId, row.id));
+    for (const item of sorties) {
+      await db.delete(operationalEvent).where(eq(operationalEvent.sortieId, item.id));
+      await db.delete(sortieStop).where(eq(sortieStop.sortieId, item.id));
+    }
     await db.delete(sortie).where(eq(sortie.authorDriverId, row.id));
     await db.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, row.id));
     const links = await db

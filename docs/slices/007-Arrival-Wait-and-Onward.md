@@ -67,6 +67,8 @@ At an intermediate stop after arrival, and after Onward Destination has added a 
 - **GPS progress:** a fix outside the arrival geofence requests a driving route for the next stop position and resumes guiding with the meter unpaused per the passenger flag.
 - **Commence:** the same route start without waiting to leave the geofence.
 
+That driving-route request sets availability unavailable when the next stop has passenger on, as slice 011 defines. When passenger is off, the request does not change the choice.
+
 Server departure inference from slice 006 continues via location observations.
 
 Leaving the final stop after that stationary dwell, when there is no later stop and no pending onward destination, does the same as End Sortie: the wait countdown stops, `POST /sorties/:id/complete` sets `actualEnd`, and Navigation returns to browse. The leave threshold is the same 40 meter arrival geofence. A drive through the geofence, without the 30 seconds stationary, does not complete the sortie. End Sortie remains available before that leave, including while the vehicle is still only passing the destination.
@@ -79,7 +81,7 @@ At an intermediate stop, or after Onward Destination has added a later stop, GPS
 
 Onward Destination opens the revise dialog for the active sortie with a trailing blank stop and that address field focused. Saving uses the existing revise write. While the sortie is in progress (`actualStart` set, `actualEnd` null), revise preserves `actualStart` and actual timestamps on unchanged prefix stops; new trailing stops have null actuals. Revising when the sortie is not in progress still clears all actual timestamps as slice 006 defines.
 
-After a successful onward save during guidance, the client updates stops, sets `pendingNextLeg`, keeps the meter paused, and does not start routing until GPS leave or Commence.
+After a successful onward save during guidance, the client updates stops, sets `pendingNextLeg`, keeps the meter paused, and does not start routing until GPS leave or Commence. Saving the revise does not change availability.
 
 ---
 
@@ -109,7 +111,7 @@ After a successful onward save during guidance, the client updates stops, sets `
 | Dwell (intermediate) | Guiding | GPS leave or Commence → next-stop route |
 | Dwell (final) | Final paused | Meter paused, fare flashes, Onward Destination |
 | Final paused | Onward paused | Revise adds stop; meter stays paused |
-| Onward paused | Guiding | GPS leave or Commence → new stop route |
+| Onward paused | Guiding | GPS leave or Commence → new stop route. When that stop has passenger on, availability becomes unavailable |
 | Final paused | Browse | GPS leave outside the arrival geofence after the stationary dwell, with no onward stop → complete; countdown stops |
 | Guiding / dwell / paused | Browse | End Sortie → complete |
 
@@ -132,6 +134,8 @@ After a successful onward save during guidance, the client updates stops, sets `
 | Assert arrive | `POST /sorties/:id/stops/:position/arrive` | Sortie with that stop’s `actualArrivedAt` sealed. Idempotent if already set |
 | Extend wait | `POST /sorties/:id/stops/:position/extend-wait` | Sortie with `waitMinutes` incremented and schedule recomputed |
 | Revise (in progress) | Existing `PATCH /sorties/:id` | Preserves `actualStart` and prefix stop actuals when `actualEnd` is null |
+
+The driving-route request that starts the next leg applies the slice 011 availability check. Revise still only preserves actuals.
 
 Authorization matches slice 003: only the authoring driver.
 
