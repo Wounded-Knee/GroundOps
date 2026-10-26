@@ -116,6 +116,11 @@ import {
   shouldCompleteOnLeave,
   waitEndsAtFromStop,
 } from "./sortieDwell";
+import {
+  activeStopAfterRevision,
+  dwellStopAfterRevision,
+  samePlaceOrder,
+} from "./sortieRevision";
 import type { SortieGuideCommand } from "./sortieGuide";
 import type { PlaceGuideCommand } from "./placeGuide";
 import type { DeadheadCommand } from "./deadheadShortcutLogic";
@@ -766,6 +771,127 @@ export function NavigationScreen({
     publishMeter(meterRef.current, current, origin, { immediate: true, overviewPath: path });
   }
 
+  function applyRevisedStopDetails(updated: Sortie): void {
+    const current = navRef.current;
+    if (current.mode !== "guiding" || current.kind !== "sortie" || current.sortieId !== updated.id) {
+      return;
+    }
+    const next: NavState = {
+      ...current,
+      stops: updated.stops,
+      sortie: updated,
+    };
+    setNav(next);
+    publishMeter(meterRef.current, next, fixRef.current);
+  }
+
+  function applyRevisedArrival(updated: Sortie): void {
+    const current = navRef.current;
+    if (current.mode !== "arrived" || current.kind !== "sortie" || current.sortieId !== updated.id) {
+      return;
+    }
+    const stopPosition = dwellStopAfterRevision(current.stops, current.stopPosition, updated.stops);
+    const stop = updated.stops[stopPosition];
+    if (!stop) {
+      return;
+    }
+    const arrived: NavState = {
+      ...current,
+      stops: updated.stops,
+      sortie: updated,
+      stopPosition,
+      destination: placeFromStop(stop),
+      pendingNextLeg: hasLaterStop(updated.stops, stopPosition),
+    };
+    setNav(arrived);
+    publishMeter(meterRef.current, arrived, fixRef.current);
+    void uploadRevisedOverview(updated.id);
+  }
+
+  async function retargetRevisedGuidance(updated: Sortie): Promise<void> {
+    const current = navRef.current;
+    if (current.mode !== "guiding" || current.kind !== "sortie" || current.sortieId !== updated.id) {
+      return;
+    }
+    const firstStopPosition = activeStopAfterRevision(
+      current.stops,
+      current.firstStopPosition,
+      updated.stops,
+    );
+    const stop = updated.stops[firstStopPosition];
+    if (!stop) {
+      return;
+    }
+    const origin = fixRef.current ?? current.destination;
+    const generation = ++rerouteGeneration.current;
+    rerouteInFlight.current = true;
+    const guidance = await requestSortieDrivingRoute(
+      apiUrl,
+      token,
+      updated.id,
+      origin,
+      firstStopPosition,
+    );
+    if (generation !== rerouteGeneration.current) {
+      return;
+    }
+    if (guidance === "unauthorized") {
+      rerouteInFlight.current = false;
+      onUnauthorized();
+      return;
+    }
+    if (typeof guidance !== "object") {
+      rerouteInFlight.current = false;
+      const existing = navRef.current;
+      if (existing.mode === "guiding" && existing.kind === "sortie" && existing.sortieId === updated.id) {
+        setNav({ ...existing, rerouteMessage: "Rerouting failed." });
+      }
+      return;
+    }
+    let overviewPath = overviewPathForUpload("stops-revised", 0, guidance.path);
+    if (firstStopPosition !== 0) {
+      const overview = await requestSortieDrivingRoute(apiUrl, token, updated.id, origin, 0);
+      if (generation !== rerouteGeneration.current) {
+        return;
+      }
+      if (overview === "unauthorized") {
+        rerouteInFlight.current = false;
+        onUnauthorized();
+        return;
+      }
+      overviewPath =
+        typeof overview === "object" ? overviewPathForUpload("stops-revised", 0, overview.path) : undefined;
+    }
+    const existing = navRef.current;
+    if (existing.mode !== "guiding" || existing.kind !== "sortie" || existing.sortieId !== updated.id) {
+      rerouteInFlight.current = false;
+      return;
+    }
+    rerouteInFlight.current = false;
+    offRouteSinceRef.current = null;
+    resetArrivalDwell();
+    const next: NavState = {
+      mode: "guiding",
+      kind: "sortie",
+      destination: placeFromStop(stop),
+      route: guidance,
+      stepIndex: 0,
+      muted: existing.muted,
+      offRouteSince: null,
+      rerouteMessage: null,
+      sortieId: existing.sortieId,
+      stops: updated.stops,
+      firstStopPosition,
+      tariff: existing.tariff,
+      sortie: updated,
+    };
+    const previousRemaining = remainingDistanceMeters(origin, existing.route, existing.stepIndex);
+    const nextMeter = applyRouteToMeter(origin, guidance, previousRemaining);
+    setNav(next);
+    publishMeter(nextMeter, next, origin, { immediate: true, overviewPath });
+    setRouteEpoch((epoch) => epoch + 1);
+  }
+
   useEffect(() => {
     if (!sortieGuide) {
       return;
@@ -877,7 +1003,15 @@ export function NavigationScreen({
     if (stopListKey(current.stops) === accountStops) {
       return;
     }
-    void uploadRevisedOverview(accountSortie.id);
+    if (current.mode === "arrived") {
+      applyRevisedArrival(accountSortie);
+      return;
+    }
+    if (samePlaceOrder(current.stops, accountSortie.stops)) {
+      applyRevisedStopDetails(accountSortie);
+      return;
+    }
+    void retargetRevisedGuidance(accountSortie);
   }, [accountSortie, accountStops]);
 
   useEffect(() => {
