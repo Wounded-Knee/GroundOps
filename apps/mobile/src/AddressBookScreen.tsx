@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { entrySubtitle, entrySuggestion, entryTitle, sortAddressEntries } from "./addressBookMatch";
+import { destinationFromEntry, entrySubtitle, entryTitle, sortAddressEntries } from "./addressBookMatch";
 import {
   addDeadheadShortcut,
   publishedShortcutTitle,
@@ -329,11 +329,11 @@ export function AddressBookScreen({
               }
             });
           }}
-          onGuide={() => void guideTo(entrySuggestion(entry))}
+          onGuide={() => void guideTo(destinationFromEntry(entry))}
           onShortcut={() => openShortcut(entry)}
           shortcutOn={shortcuts.some((shortcut) => shortcut.entryId === entry.id)}
           onEdit={() => openEdit(entry)}
-          onSortie={() => onCreateSortie(entrySuggestion(entry))}
+          onSortie={() => onCreateSortie(destinationFromEntry(entry))}
           onDelete={() => {
             void removeSavedEntry(apiUrl, token, entry.id).then((result) => {
               if (result === "unauthorized") {

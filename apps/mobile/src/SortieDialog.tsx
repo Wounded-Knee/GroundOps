@@ -489,6 +489,7 @@ function WaypointRow({
             query={stop.query}
             token={token}
             autoFocus={autoFocus}
+            savedTitle
             onQueryChange={(query) => {
               const chosen = stop.chosen && stop.chosen.label === query ? stop.chosen : null;
               onChange({ query, chosen, waitMinutes: stop.waitMinutes, passenger: stop.passenger });

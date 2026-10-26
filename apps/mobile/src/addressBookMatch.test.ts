@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AddressBookEntry } from "@groundops/contracts";
 import {
+  destinationFromEntry,
+  entrySuggestion,
   entrySubtitle,
   entryTitle,
   localSuggestionLimit,
@@ -77,6 +79,27 @@ describe("address book matching", () => {
       assert.equal(hit.suggestion.label, "3 Ramp Rd");
       assert.equal(hit.suggestion.detail, "Denny's, 3 Ramp Rd");
     }
+  });
+
+  it("keeps the picked title as the destination label", () => {
+    const hangar = {
+      ...entry("1", "Hangar", false, "Denny's"),
+      label: "40.1, -75.2",
+      latitude: 40.1,
+      longitude: -75.2,
+    };
+    const place = destinationFromEntry(hangar);
+    assert.equal(place.name, "Hangar");
+    assert.equal(place.label, "Hangar");
+    assert.equal(place.detail, "Denny's, 40.1, -75.2");
+    assert.equal(place.latitude, 40.1);
+    assert.equal(place.longitude, -75.2);
+    assert.equal(entrySuggestion(hangar).label, "40.1, -75.2");
+
+    const named = { ...entry("2", "", false, "Oak"), label: "2 Oak St" };
+    assert.equal(destinationFromEntry(named).label, "Oak");
+    const bare = { ...entry("3", "  ", false, "  "), label: "4 Bare St" };
+    assert.equal(destinationFromEntry(bare).label, "4 Bare St");
   });
 
   it("titles a row with the nickname, then the place name, then the address", () => {

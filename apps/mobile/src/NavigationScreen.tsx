@@ -2070,6 +2070,7 @@ export function NavigationScreen({
                   query={query}
                   token={token}
                   bias={fix}
+                  savedTitle
                   onQueryChange={(text) => {
                     routeRequest.current += 1;
                     abandonPreviewChoice();

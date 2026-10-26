@@ -34,6 +34,7 @@ export function AddressPicker({
   appearance,
   listMaxHeight,
   autoFocus = false,
+  savedTitle = false,
   onQueryChange,
   onSelect,
   onUnauthorized,
@@ -48,6 +49,8 @@ export function AddressPicker({
   /** Caps the search suggestion list so it stays above the status stack. */
   listMaxHeight?: number;
   autoFocus?: boolean;
+  /** A saved place keeps the nickname the driver picked as its destination label. */
+  savedTitle?: boolean;
   onQueryChange: (query: string) => void;
   onSelect: (suggestion: PlaceSuggestion) => void;
   onUnauthorized: () => void;
@@ -220,7 +223,15 @@ export function AddressPicker({
   const suggestions = rows.map((row) => (
     <Pressable
       key={row.key}
-      onPress={() => (row.kind === "phone" ? choosePhone(row) : choose(row.suggestion))}
+      onPress={() => {
+        if (row.kind === "phone") {
+          choosePhone(row);
+          return;
+        }
+        const suggestion =
+          savedTitle && row.saved ? { ...row.suggestion, label: row.suggestion.name } : row.suggestion;
+        choose(suggestion);
+      }}
       style={appearance === "field" ? styles.fieldSuggestion : styles.searchSuggestion}
     >
       <Text style={styles.suggestionText}>{row.name}</Text>
@@ -278,7 +289,7 @@ export function AddressPicker({
 }
 
 type ShownRow =
-  | { kind: "place"; key: string; name: string; detail: string; suggestion: PlaceSuggestion }
+  | { kind: "place"; key: string; name: string; detail: string; suggestion: PlaceSuggestion; saved?: boolean }
   | { kind: "phone"; key: string; name: string; detail: string; contactId: string; addressId: string; postal: string };
 
 function phoneSources(book: AddressBookSnapshot) {
@@ -304,7 +315,7 @@ function shownRows(
 function rowsFromLocal(local: LocalSuggestion[]): ShownRow[] {
   return local.map((hit) => {
     if (hit.source === "entry") {
-      return placeRow(hit.suggestion);
+      return { ...placeRow(hit.suggestion), saved: true };
     }
     return {
       kind: "phone",

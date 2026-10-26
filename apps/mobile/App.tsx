@@ -10,7 +10,7 @@ import { AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from "
 import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
 import { AddressBookScreen } from "./src/AddressBookScreen";
-import { entrySuggestion } from "./src/addressBookMatch";
+import { destinationFromEntry } from "./src/addressBookMatch";
 import {
   addressBookHasLoaded,
   clearAddressBookCache,
@@ -795,7 +795,7 @@ function AppContent() {
       setDeadhead({ kind: "missing" });
       return;
     }
-    setDeadhead({ kind: "start", destination: entrySuggestion(entry) });
+    setDeadhead({ kind: "start", destination: destinationFromEntry(entry) });
   }
 
   openShortcutRef.current = openDeadheadShortcut;

@@ -61,6 +61,11 @@ export function entrySuggestion(entry: AddressBookEntry): PlaceSuggestion {
   };
 }
 
+/** The title the driver just picked, kept as the destination label from here on. */
+export function destinationFromEntry(entry: AddressBookEntry): PlaceSuggestion {
+  return { ...entrySuggestion(entry), label: entryTitle(entry) };
+}
+
 export function samePlace(left: GeoCoordinate, right: GeoCoordinate): boolean {
   return (
     Math.abs(left.latitude - right.latitude) < coordinateEpsilon &&
