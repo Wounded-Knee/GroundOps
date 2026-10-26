@@ -16,3 +16,4 @@ coverage/
 crash.log
 override.tf
 override.tf.json
+.cursor
