@@ -1,8 +1,6 @@
 import { Platform } from "react-native";
-import type { DepartureAlertMark, NextDeparture } from "./nextDeparture";
-import { departureAlertMarks } from "./nextDeparture";
-
-const notificationIds = ["groundops-depart-5", "groundops-depart-1", "groundops-depart-0"] as const;
+import type { NextDeparture } from "./nextDeparture";
+import { departureAlertRequests, departureNotificationIds } from "./departureAlertRequests";
 
 type NotificationsModule = typeof import("expo-notifications");
 
@@ -54,7 +52,7 @@ export async function cancelDepartureAlerts(): Promise<void> {
   if (!module) {
     return;
   }
-  await Promise.all(notificationIds.map((id) => module.cancelScheduledNotificationAsync(id)));
+  await Promise.all(departureNotificationIds.map((id) => module.cancelScheduledNotificationAsync(id)));
 }
 
 export async function scheduleDepartureAlerts(next: NextDeparture | null, now: Date): Promise<void> {
@@ -70,39 +68,20 @@ export async function scheduleDepartureAlerts(next: NextDeparture | null, now: D
   if (!module) {
     return;
   }
-  const marks = departureAlertMarks(next.departAt, now);
-  for (const mark of marks) {
+  const requests = departureAlertRequests(next, now);
+  for (const request of requests) {
     await module.scheduleNotificationAsync({
-      identifier: notificationIdFor(mark.minutesBefore),
+      identifier: request.identifier,
       content: {
-        title: departureTitle(mark),
-        body: `Depart for ${next.label}`,
+        title: request.title,
+        body: request.body,
         sound: true,
+        data: { collapseTag: request.collapseTag },
       },
       trigger: {
         type: module.SchedulableTriggerInputTypes.DATE,
-        date: mark.fireAt,
+        date: request.fireAt,
       },
     });
   }
-}
-
-function notificationIdFor(minutesBefore: DepartureAlertMark["minutesBefore"]): string {
-  if (minutesBefore === 5) {
-    return "groundops-depart-5";
-  }
-  if (minutesBefore === 1) {
-    return "groundops-depart-1";
-  }
-  return "groundops-depart-0";
-}
-
-function departureTitle(mark: DepartureAlertMark): string {
-  if (mark.minutesBefore === 0) {
-    return "Departure time";
-  }
-  if (mark.minutesBefore === 1) {
-    return "Depart in 1 minute";
-  }
-  return "Depart in 5 minutes";
 }

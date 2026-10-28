@@ -1,0 +1,34 @@
+diff --git a/android/src/main/java/expo/modules/notifications/service/delegates/ExpoPresentationDelegate.kt b/android/src/main/java/expo/modules/notifications/service/delegates/ExpoPresentationDelegate.kt
+index 38f6fbaf0c595009031fff8659dcd2def12e5205..a367d4ebcef115601934ee0d4071f9180d207d06 100644
+--- a/android/src/main/java/expo/modules/notifications/service/delegates/ExpoPresentationDelegate.kt
++++ b/android/src/main/java/expo/modules/notifications/service/delegates/ExpoPresentationDelegate.kt
+@@ -104,15 +104,26 @@ open class ExpoPresentationDelegate(
+     }
+     CoroutineScope(Dispatchers.IO).launch {
+       val androidNotification = createNotification(notification, behavior)
+-
++      val notifyId = getNotifyId(notification.notificationRequest)
++      // A shared collapseTag replaces the previous shade row. Cancel first so the new post still alerts.
++      val collapseTag = collapseTag(notification)
++      val tag = collapseTag ?: notification.notificationRequest.identifier
++      if (collapseTag != null) {
++        NotificationManagerCompat.from(context).cancel(collapseTag, notifyId)
++      }
+       NotificationManagerCompat.from(context).notify(
+-        notification.notificationRequest.identifier,
+-        getNotifyId(notification.notificationRequest),
++        tag,
++        notifyId,
+         androidNotification
+       )
+     }
+   }
+ 
++  private fun collapseTag(notification: Notification): String? {
++    val tag = notification.notificationRequest.content.body?.optString("collapseTag").orEmpty()
++    return tag.ifEmpty { null }
++  }
++
+   private fun getNotificationSoundUri(notification: Notification): Uri? {
+     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+       notification.notificationRequest.trigger.getNotificationChannel()?.let {

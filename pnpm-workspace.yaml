@@ -3,7 +3,7 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
-  expo-quick-actions: false
+  "expo-quick-actions@https://codeload.github.com/EvanBacon/expo-quick-actions/tar.gz/08ae00820f9a0c75e17fd8439f35991000ce7a88": true
 minimumReleaseAgeExclude:
   - '@expo/cli@57.0.27'
   - '@expo/router-server@57.0.11'
@@ -14,3 +14,4 @@ minimumReleaseAgeExclude:
   - expo-task-manager@57.0.21
 patchedDependencies:
   expo-maps@57.0.3: patches/expo-maps@57.0.3.patch
+  expo-notifications@57.0.21: patches/expo-notifications@57.0.21.patch
