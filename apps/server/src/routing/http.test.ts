@@ -12,17 +12,25 @@ const session: ActiveSession = {
   user: { id: "user", displayName: null, email: null, platformAdministrator: false },
 };
 
-const route: DrivingRoute = {
+const routeStep = {
+  instruction: "Head north",
+  maneuver: "depart" as const,
   distanceMeters: 100,
   durationSeconds: 30,
   path: [{ latitude: 1, longitude: 2 }],
-  steps: [
+};
+
+const route: DrivingRoute = {
+  distanceMeters: 100,
+  durationSeconds: 30,
+  path: routeStep.path,
+  steps: [routeStep],
+  legs: [
     {
-      instruction: "Head north",
-      maneuver: "depart",
       distanceMeters: 100,
       durationSeconds: 30,
-      path: [{ latitude: 1, longitude: 2 }],
+      path: routeStep.path,
+      steps: [routeStep],
     },
   ],
 };

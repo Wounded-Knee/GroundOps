@@ -53,11 +53,20 @@ export type RouteStep = {
   path: GeoCoordinate[];
 };
 
+/** One waypoint-to-waypoint portion of a driving route. */
+export type RouteLeg = {
+  distanceMeters: number;
+  durationSeconds: number;
+  path: GeoCoordinate[];
+  steps: RouteStep[];
+};
+
 export type DrivingRoute = {
   distanceMeters: number;
   durationSeconds: number;
   path: GeoCoordinate[];
   steps: RouteStep[];
+  legs: RouteLeg[];
 };
 
 export type DrivingRouteResponse = {

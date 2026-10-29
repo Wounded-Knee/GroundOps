@@ -7,6 +7,7 @@ import {
   type PlaceSuggestion,
   type PlaceSuggestionsRequest,
   type PlaceSuggestionsResponse,
+  type RouteLeg,
   type RouteStep,
 } from "@groundops/contracts";
 import { fetchAuthorized, isRecord } from "./authorizedFetch";
@@ -153,6 +154,56 @@ function readSuggestion(value: unknown): PlaceSuggestion | null {
 }
 
 function readRoute(value: unknown): DrivingRoute | null {
+  if (!isRecord(value) || !Array.isArray(value.steps) || value.steps.length === 0) {
+    return null;
+  }
+  const path = readPath(value.path);
+  if (!path || path.length === 0 || !isMeters(value.distanceMeters) || !isMeters(value.durationSeconds)) {
+    return null;
+  }
+  const steps: RouteStep[] = [];
+  for (const step of value.steps) {
+    const parsed = readStep(step);
+    if (!parsed) {
+      return null;
+    }
+    steps.push(parsed);
+  }
+  const fallback: RouteLeg = {
+    distanceMeters: value.distanceMeters,
+    durationSeconds: value.durationSeconds,
+    path,
+    steps,
+  };
+  const legs = readLegs(value.legs, fallback);
+  if (!legs) {
+    return null;
+  }
+  return {
+    distanceMeters: value.distanceMeters,
+    durationSeconds: value.durationSeconds,
+    path,
+    steps,
+    legs,
+  };
+}
+
+function readLegs(value: unknown, fallback: RouteLeg): RouteLeg[] | null {
+  if (!Array.isArray(value) || value.length === 0) {
+    return [fallback];
+  }
+  const legs: RouteLeg[] = [];
+  for (const item of value) {
+    const leg = readLeg(item);
+    if (!leg) {
+      return null;
+    }
+    legs.push(leg);
+  }
+  return legs;
+}
+
+function readLeg(value: unknown): RouteLeg | null {
   if (!isRecord(value) || !Array.isArray(value.steps) || value.steps.length === 0) {
     return null;
   }

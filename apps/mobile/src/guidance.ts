@@ -51,7 +51,7 @@ export function applyLocationFix(input: {
     stepIndex += 1;
   }
 
-  const offRoute = distanceToPathMeters(input.fix, input.route.path) > offRouteMeters;
+  const offRoute = distanceToPathMeters(input.fix, currentLegPath(input.route)) > offRouteMeters;
   if (!offRoute) {
     return { arrived: false, stepIndex, offRouteSince: null, shouldReroute: false };
   }
@@ -128,13 +128,50 @@ export function projectOntoPath(point: GeoCoordinate, path: GeoCoordinate[]): Pa
   };
 }
 
+/** Polyline the follow camera, off-route check, and meter progress follow. */
+export function currentLegPath(route: DrivingRoute): GeoCoordinate[] {
+  const leg = route.legs[0];
+  if (leg && leg.path.length >= 2) {
+    return leg.path;
+  }
+  return route.path;
+}
+
+export type PaintedLeg = {
+  role: "past" | "current" | "future";
+  path: GeoCoordinate[];
+};
+
+/**
+ * Past legs, then future legs, then the current leg.
+ * The current leg is drawn last so it covers crossings.
+ */
+export function paintedLegs(completed: GeoCoordinate[][], route: DrivingRoute): PaintedLeg[] {
+  const legs = route.legs.length > 0 ? route.legs : [];
+  const past = completed
+    .filter((path) => path.length >= 2)
+    .map((path) => ({ role: "past" as const, path }));
+  const future = legs
+    .slice(1)
+    .filter((leg) => leg.path.length >= 2)
+    .map((leg) => ({ role: "future" as const, path: leg.path }));
+  const active = currentLegPath(route);
+  const current = active.length >= 2 ? [{ role: "current" as const, path: active }] : [];
+  return [...past, ...future, ...current];
+}
+
 export function remainingDistanceMeters(fix: GeoCoordinate, route: DrivingRoute, stepIndex: number): number {
+  const current = route.legs[0];
+  const laterMeters = route.legs.slice(1).reduce((sum, leg) => sum + leg.distanceMeters, 0);
+  if (current && current.path.length >= 2) {
+    return projectOntoPath(fix, current.path).remainingMeters + laterMeters;
+  }
   if (route.path.length >= 2) {
     return projectOntoPath(fix, route.path).remainingMeters;
   }
   const step = route.steps[stepIndex];
   if (!step) {
-    return 0;
+    return laterMeters;
   }
   const later = route.steps.slice(stepIndex + 1).reduce((sum, item) => sum + item.distanceMeters, 0);
   return distanceToStepEnd(fix, step) + later;

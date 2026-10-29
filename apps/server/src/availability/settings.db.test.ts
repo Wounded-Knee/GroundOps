@@ -591,26 +591,26 @@ describe("availability settings", () => {
     const local = Fastify();
     registerAvailabilityRoutes(local, { now: () => now });
     registerCalendarRoutes(local, scheduleDeps, {
-      computeDrivingRoute: async () => ({
-        distanceMeters: 1000,
-        durationSeconds: 120,
-        path: [
+      computeDrivingRoute: async () => {
+        const path = [
           { latitude: 40.7, longitude: -74 },
           { latitude: 40.75, longitude: -73.99 },
-        ],
-        steps: [
-          {
-            instruction: "Go",
-            maneuver: "straight" as const,
-            distanceMeters: 1000,
-            durationSeconds: 120,
-            path: [
-              { latitude: 40.7, longitude: -74 },
-              { latitude: 40.75, longitude: -73.99 },
-            ],
-          },
-        ],
-      }),
+        ];
+        const step = {
+          instruction: "Go",
+          maneuver: "straight" as const,
+          distanceMeters: 1000,
+          durationSeconds: 120,
+          path,
+        };
+        return {
+          distanceMeters: 1000,
+          durationSeconds: 120,
+          path,
+          steps: [step],
+          legs: [{ distanceMeters: 1000, durationSeconds: 120, path, steps: [step] }],
+        };
+      },
     });
     const headers = { authorization: `Bearer ${person.token}` };
     const pickup = { label: "Pickup", latitude: 40.71, longitude: -74.01, waitMinutes: 0, passenger: false };

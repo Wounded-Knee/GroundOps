@@ -13,6 +13,8 @@ const routeFieldMask = [
   "routes.duration",
   "routes.distanceMeters",
   "routes.polyline.encodedPolyline",
+  "routes.legs.distanceMeters",
+  "routes.legs.polyline.encodedPolyline",
   "routes.legs.steps.distanceMeters",
   "routes.legs.steps.staticDuration",
   "routes.legs.steps.polyline.encodedPolyline",

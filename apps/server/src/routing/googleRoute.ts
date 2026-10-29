@@ -1,4 +1,4 @@
-import type { DrivingRoute, GeoCoordinate, Maneuver, RouteStep } from "@groundops/contracts";
+import type { DrivingRoute, GeoCoordinate, Maneuver, RouteLeg, RouteStep } from "@groundops/contracts";
 import { decodePolyline } from "./polyline.js";
 
 export function readFormattedAddress(body: unknown): string | null {
@@ -31,19 +31,34 @@ export function mapGoogleRoute(body: unknown): DrivingRoute | "no-route" {
     return "no-route";
   }
 
-  const parsedSteps = readSteps(route);
+  const parsedLegs = readLegs(route);
+  const parsedSteps = parsedLegs.flatMap((leg) => leg.steps);
   if (parsedSteps.length === 0) {
     return "no-route";
   }
 
   const durations = allocate(parseDurationSeconds(route.duration), parsedSteps.map((step) => step.staticSeconds));
-  const steps: RouteStep[] = parsedSteps.map((step, index) => ({
-    instruction: step.instruction,
-    maneuver: step.maneuver,
-    distanceMeters: step.distanceMeters,
-    durationSeconds: durations[index] ?? 0,
-    path: step.path,
-  }));
+  let cursor = 0;
+  const legs: RouteLeg[] = parsedLegs.map((leg) => {
+    const steps: RouteStep[] = leg.steps.map((step) => {
+      const built: RouteStep = {
+        instruction: step.instruction,
+        maneuver: step.maneuver,
+        distanceMeters: step.distanceMeters,
+        durationSeconds: durations[cursor] ?? 0,
+        path: step.path,
+      };
+      cursor += 1;
+      return built;
+    });
+    return {
+      distanceMeters: leg.distanceMeters,
+      durationSeconds: steps.reduce((sum, step) => sum + step.durationSeconds, 0),
+      path: leg.path,
+      steps,
+    };
+  });
+  const steps = legs.flatMap((leg) => leg.steps);
 
   const encodedPath = readEncodedPath(route.polyline);
   const path = encodedPath.length > 0 ? encodedPath : steps.flatMap((step) => step.path);
@@ -58,6 +73,7 @@ export function mapGoogleRoute(body: unknown): DrivingRoute | "no-route" {
     durationSeconds: durations.reduce((sum, duration) => sum + duration, 0),
     path,
     steps,
+    legs,
   };
 }
 
@@ -115,23 +131,41 @@ function firstRoute(body: unknown): Record<string, unknown> | null {
   return isRecord(route) ? route : null;
 }
 
-function readSteps(route: Record<string, unknown>): ParsedStep[] {
+type ParsedLeg = {
+  distanceMeters: number;
+  path: GeoCoordinate[];
+  steps: ParsedStep[];
+};
+
+function readLegs(route: Record<string, unknown>): ParsedLeg[] {
   if (!Array.isArray(route.legs)) {
     return [];
   }
-  const steps: ParsedStep[] = [];
+  const legs: ParsedLeg[] = [];
   for (const leg of route.legs) {
     if (!isRecord(leg) || !Array.isArray(leg.steps)) {
       continue;
     }
+    const steps: ParsedStep[] = [];
     for (const step of leg.steps) {
       const parsed = readStep(step);
       if (parsed) {
         steps.push(parsed);
       }
     }
+    if (steps.length === 0) {
+      continue;
+    }
+    const encoded = readEncodedPath(leg.polyline);
+    const path = encoded.length > 0 ? encoded : steps.flatMap((step) => step.path);
+    if (path.length === 0) {
+      continue;
+    }
+    const distanceMeters =
+      readMeters(leg.distanceMeters) || steps.reduce((sum, step) => sum + step.distanceMeters, 0);
+    legs.push({ distanceMeters, path, steps });
   }
-  return steps;
+  return legs;
 }
 
 function readStep(value: unknown): ParsedStep | null {

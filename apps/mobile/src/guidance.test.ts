@@ -10,9 +10,11 @@ import {
   formatMeters,
   formatSeconds,
   guidanceLookAheadMeters,
+  currentLegPath,
   noteRouteFix,
   offsetAlongBearing,
   overviewCamera,
+  paintedLegs,
   pathLengthMeters,
   pointAlongPath,
   poseAt,
@@ -241,6 +243,88 @@ describe("guidance", () => {
     assert.equal(formatSeconds(5400), "1 hr 30 min");
   });
 
+  it("follows the current leg when a future leg passes closer", () => {
+    const currentPath = [origin, north(origin, 1000)];
+    const futurePath = [east(north(origin, 100), 20), east(north(origin, 100), 200)];
+    const route = legRoute([
+      { path: currentPath, distanceMeters: 1000 },
+      { path: futurePath, distanceMeters: pathLengthMeters(futurePath) },
+    ]);
+    const beside = east(north(origin, 100), 40);
+    const woven = noteRouteFix(null, {
+      at: beside,
+      speedMps: 10,
+      bearing: 90,
+      timeMs: 0,
+      path: route.path,
+    });
+    const locked = noteRouteFix(null, {
+      at: beside,
+      speedMps: 10,
+      bearing: 90,
+      timeMs: 0,
+      path: currentLegPath(route),
+    });
+    assert.ok(Math.abs(bearingDeltaDegrees(woven.bearing, 90)) < 5);
+    assert.ok(Math.abs(bearingDeltaDegrees(locked.bearing, 0)) < 5);
+  });
+
+  it("keeps later-leg length when the fix is closer to a future leg", () => {
+    const currentPath = [origin, north(origin, 1000)];
+    const futurePath = [east(north(origin, 100), 20), east(north(origin, 100), 200)];
+    const futureLength = pathLengthMeters(futurePath);
+    const route = legRoute([
+      { path: currentPath, distanceMeters: 1000 },
+      { path: futurePath, distanceMeters: futureLength },
+    ]);
+    const beside = east(north(origin, 100), 40);
+    const remaining = remainingDistanceMeters(beside, route, 0);
+    const woven = projectOntoPath(beside, route.path).remainingMeters;
+    assert.ok(Math.abs(remaining - (900 + futureLength)) < 5);
+    assert.ok(woven < futureLength + 1);
+    assert.ok(remaining > woven + 500);
+  });
+
+  it("treats a nearby future leg as off the current leg", () => {
+    const currentPath = [origin, north(origin, 500)];
+    const futurePath = [east(origin, 40), east(origin, 200)];
+    const route = legRoute([
+      { path: currentPath, distanceMeters: 500 },
+      { path: futurePath, distanceMeters: pathLengthMeters(futurePath) },
+    ]);
+    const onFuture = east(origin, 60);
+    const started = applyLocationFix({
+      fix: onFuture,
+      destination: north(origin, 500),
+      route,
+      stepIndex: 0,
+      now: 1_000,
+      offRouteSince: null,
+      rerouteInFlight: false,
+      stepAdvanceMeters,
+    });
+    assert.equal(started.offRouteSince, 1_000);
+    assert.equal(started.shouldReroute, false);
+  });
+
+  it("paints completed paths, the active leg, and later legs in that order", () => {
+    const past = [origin, north(origin, 10)];
+    const current = [north(origin, 10), north(origin, 20)];
+    const future = [north(origin, 20), east(north(origin, 20), 30)];
+    const route = legRoute([
+      { path: current, distanceMeters: 10 },
+      { path: future, distanceMeters: 30 },
+    ]);
+    const painted = paintedLegs([past, [origin]], route);
+    assert.deepEqual(
+      painted.map((leg) => leg.role),
+      ["past", "future", "current"],
+    );
+    assert.equal(painted[0]?.path, past);
+    assert.equal(painted[1]?.path, future);
+    assert.equal(painted[2]?.path, current);
+  });
+
   it("projects a point onto a bent path using along-route distance", () => {
     const corner = north(origin, 100);
     const end = east(corner, 100);
@@ -366,11 +450,41 @@ function routeWithEnds(firstMeters: number, secondMeters: number): DrivingRoute 
   const secondEnd = north(origin, firstMeters + secondMeters);
   const first = step(origin, firstEnd, firstMeters, 100);
   const second = step(firstEnd, secondEnd, secondMeters, 40);
+  const path = [origin, firstEnd, secondEnd];
+  const steps = [first, second];
   return {
     distanceMeters: firstMeters + secondMeters,
     durationSeconds: 140,
-    path: [origin, firstEnd, secondEnd],
-    steps: [first, second],
+    path,
+    steps,
+    legs: [
+      {
+        distanceMeters: firstMeters + secondMeters,
+        durationSeconds: 140,
+        path,
+        steps,
+      },
+    ],
+  };
+}
+
+function legRoute(legs: { path: GeoCoordinate[]; distanceMeters: number }[]): DrivingRoute {
+  const built = legs.map((leg) => {
+    const start = leg.path[0] ?? origin;
+    const end = leg.path[leg.path.length - 1] ?? start;
+    return {
+      distanceMeters: leg.distanceMeters,
+      durationSeconds: 10,
+      path: leg.path,
+      steps: [step(start, end, leg.distanceMeters, 10)],
+    };
+  });
+  return {
+    distanceMeters: built.reduce((sum, leg) => sum + leg.distanceMeters, 0),
+    durationSeconds: built.length * 10,
+    path: legs.flatMap((leg) => leg.path),
+    steps: built.flatMap((leg) => leg.steps),
+    legs: built,
   };
 }
 

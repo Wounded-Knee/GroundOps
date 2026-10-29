@@ -12,7 +12,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
-import { useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { NetworkStatusIcon } from "./NetworkStatusIcon";
@@ -52,8 +52,10 @@ import {
   distanceToUpcomingManeuver,
   formatMeters,
   formatSeconds,
+  currentLegPath,
   guidanceLookAheadMeters,
   maneuverLabel,
+  paintedLegs,
   requiresCourseAdjustment,
   turnSide,
   offsetAlongBearing,
@@ -61,7 +63,6 @@ import {
   routeOverviewCamera,
   noteRouteBearing,
   noteRouteFix,
-  pathLengthMeters,
   poseAt,
   projectOntoPath,
   remainingDistanceMeters,
@@ -100,7 +101,7 @@ import {
 import type { AccountActivity } from "./liveActivity";
 import { completedSortie, overviewPathForUpload, stopListKey } from "./liveActivity";
 import type { MeterDisplay } from "./meterDisplay";
-import { PlatformMap, type MapCamera, type MapCameraMove, type MapHandle } from "./PlatformMap";
+import { PlatformMap, type MapCamera, type MapCameraMove, type MapHandle, type MapRouteLine } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
 import {
   bumpStopWaitMinutes,
@@ -115,6 +116,7 @@ import {
   activeStopAfterRevision,
   dwellStopAfterRevision,
   samePlaceOrder,
+  sameStopPlace,
 } from "./sortieRevision";
 import type { SortieGuideCommand } from "./sortieGuide";
 import type { PlaceGuideCommand } from "./placeGuide";
@@ -256,6 +258,8 @@ export function NavigationScreen({
   const [mapBearing, setMapBearing] = useState(0);
   const cameraSnapshotRef = useRef<MapCameraMove | null>(null);
   const [nav, setNav] = useState<NavState>({ mode: "browse", message: null, destination: null });
+  const [completedLegPaths, setCompletedLegPaths] = useState<GeoCoordinate[][]>([]);
+  const completedLegPathsRef = useRef<GeoCoordinate[][]>([]);
   const [query, setQuery] = useState("");
   const [pendingWhereTo, setPendingWhereTo] = useState<PlaceSuggestion | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -332,11 +336,7 @@ export function NavigationScreen({
   }
 
   function snapshotProgressBaseline(at: GeoCoordinate | null, route: DrivingRoute): void {
-    if (at && route.path.length >= 2) {
-      baselineRemainingRef.current = projectOntoPath(at, route.path).remainingMeters;
-      return;
-    }
-    baselineRemainingRef.current = pathLengthMeters(route.path) || route.distanceMeters;
+    baselineRemainingRef.current = at ? remainingDistanceMeters(at, route, 0) : route.distanceMeters;
   }
 
   function applyRouteToMeter(
@@ -344,8 +344,8 @@ export function NavigationScreen({
     route: DrivingRoute,
     previousRemainingMeters?: number,
   ): MeterState {
-    const along =
-      at && route.path.length >= 2 ? projectOntoPath(at, route.path).alongMeters : null;
+    const followed = currentLegPath(route);
+    const along = at && followed.length >= 2 ? projectOntoPath(at, followed).alongMeters : null;
     const next = resetMeterRouteProgress(meterRef.current, along);
     meterRef.current = next;
     setMeter(next);
@@ -353,10 +353,7 @@ export function NavigationScreen({
       snapshotProgressBaseline(at, route);
       return next;
     }
-    const nextRemaining =
-      at && route.path.length >= 2
-        ? projectOntoPath(at, route.path).remainingMeters
-        : pathLengthMeters(route.path) || route.distanceMeters;
+    const nextRemaining = at ? remainingDistanceMeters(at, route, 0) : route.distanceMeters;
     baselineRemainingRef.current = baselineAfterReroute(
       baselineRemainingRef.current,
       previousRemainingMeters,
@@ -441,6 +438,26 @@ export function NavigationScreen({
   function resetArrivalDwell(): void {
     arrivalDwellRef.current = emptyArrivalDwell();
     arrivalEnteredRef.current = false;
+  }
+
+  function replaceCompletedLegs(paths: GeoCoordinate[][]): void {
+    completedLegPathsRef.current = paths;
+    setCompletedLegPaths(paths);
+  }
+
+  function clearCompletedLegs(): void {
+    if (completedLegPathsRef.current.length === 0) {
+      return;
+    }
+    replaceCompletedLegs([]);
+  }
+
+  function rememberCompletedLeg(route: DrivingRoute): void {
+    const finished = currentLegPath(route);
+    if (finished.length < 2) {
+      return;
+    }
+    replaceCompletedLegs([...completedLegPathsRef.current, finished.slice()]);
   }
 
   function enterStopDwell(
@@ -590,6 +607,7 @@ export function NavigationScreen({
     if (!nextStop) {
       return;
     }
+    rememberCompletedLeg(existing.route);
     const updated: NavState = {
       mode: "guiding",
       kind: "sortie",
@@ -680,6 +698,9 @@ export function NavigationScreen({
     if (!stop) {
       return;
     }
+    if (!passedStopsUnchanged(current.stops, current.stopPosition, updated.stops)) {
+      clearCompletedLegs();
+    }
     const arrived: NavState = {
       ...current,
       stops: updated.stops,
@@ -755,6 +776,9 @@ export function NavigationScreen({
     rerouteInFlight.current = false;
     offRouteSinceRef.current = null;
     resetArrivalDwell();
+    if (!passedStopsUnchanged(existing.stops, existing.firstStopPosition, updated.stops)) {
+      clearCompletedLegs();
+    }
     const next: NavState = {
       mode: "guiding",
       kind: "sortie",
@@ -794,6 +818,7 @@ export function NavigationScreen({
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     resetArrivalDwell();
+    clearCompletedLegs();
     const origin = fixRef.current;
     snapshotProgressBaseline(origin, sortieGuide.route);
     const next: NavState = {
@@ -832,6 +857,7 @@ export function NavigationScreen({
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     resetArrivalDwell();
+    clearCompletedLegs();
     const origin = fixRef.current;
     snapshotProgressBaseline(origin, placeGuide.route);
     const next: NavState = {
@@ -936,14 +962,14 @@ export function NavigationScreen({
               speedMps: speedRef.current,
               bearing: nextCourse ?? compassRef.current,
               timeMs: Date.now(),
-              path: currentNav.route.path,
+              path: currentLegPath(currentNav.route),
             });
             if (currentNav.kind === "sortie" && sortieLegBillable(currentNav)) {
               const advanced = advanceMeterAlongRoute(meterRef.current, {
                 fix: sampleFix,
                 observedAtMs: Date.now(),
                 accuracyMeters: typeof location.coords.accuracy === "number" ? location.coords.accuracy : null,
-                routePath: currentNav.route.path,
+                routePath: currentLegPath(currentNav.route),
               });
               meterRef.current = advanced;
               setMeter(advanced);
@@ -1192,7 +1218,7 @@ export function NavigationScreen({
     timingPrefs.resumeTravelMeters,
   ]);
 
-  const guidancePath = nav.mode === "guiding" || nav.mode === "arrived" ? nav.route.path : null;
+  const guidancePath = nav.mode === "guiding" || nav.mode === "arrived" ? currentLegPath(nav.route) : null;
   useEffect(() => {
     const at = fixRef.current;
     if (!guidancePath || !at) {
@@ -1244,18 +1270,26 @@ export function NavigationScreen({
     };
   }, [nav.mode, cameraPrefs.zoom, cameraPrefs.tilt]);
 
-  const overviewPath =
-    cameraMode === "overview" && (nav.mode === "guiding" || nav.mode === "arrived") ? nav.route.path : null;
+  const lineRoute = nav.mode === "browse" ? null : nav.route;
+  const lineKind = nav.mode === "guiding" || nav.mode === "arrived" ? nav.kind : "other";
+  const routeLines = useMemo(
+    () => routeLinesFor(lineRoute, lineKind, completedLegPaths),
+    [lineRoute, lineKind, completedLegPaths],
+  );
+  const overviewPoints = useMemo(
+    () => (cameraMode === "overview" ? routeLines.flatMap((line) => line.coordinates) : null),
+    [cameraMode, routeLines],
+  );
   useEffect(() => {
-    if (!overviewPath) {
+    if (!overviewPoints || overviewPoints.length === 0) {
       return;
     }
-    const camera = routeOverviewCamera(overviewPath);
+    const camera = routeOverviewCamera(overviewPoints);
     if (!camera) {
       return;
     }
     mapRef.current?.setCamera(camera);
-  }, [overviewPath]);
+  }, [overviewPoints]);
 
   useEffect(() => {
     if (nav.mode === "guiding" || nav.mode === "arrived") {
@@ -1517,6 +1551,7 @@ export function NavigationScreen({
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     resetArrivalDwell();
+    clearCompletedLegs();
     const started = emptyMeter();
     setMeter(started);
     meterRef.current = started;
@@ -1783,6 +1818,7 @@ export function NavigationScreen({
     stopAdvanceInFlight.current = false;
     offRouteSinceRef.current = null;
     resetArrivalDwell();
+    clearCompletedLegs();
     const origin = fixRef.current;
     const started = emptyMeter();
     setMeter(started);
@@ -1885,6 +1921,7 @@ export function NavigationScreen({
       stopAdvanceInFlight.current = false;
       offRouteSinceRef.current = null;
       resetArrivalDwell();
+      clearCompletedLegs();
       const started = emptyMeter();
       setMeter(started);
       meterRef.current = started;
@@ -1944,6 +1981,7 @@ export function NavigationScreen({
     rerouteInFlight.current = false;
     offRouteSinceRef.current = null;
     resetArrivalDwell();
+    clearCompletedLegs();
     setFinding(false);
     setQuery("");
     speechGeneration.current += 1;
@@ -2024,6 +2062,7 @@ export function NavigationScreen({
       return;
     }
     resetArrivalDwell();
+    clearCompletedLegs();
     endingSortieRef.current = false;
     onMeterReading?.(null);
     onMeterEnded?.();
@@ -2159,7 +2198,7 @@ export function NavigationScreen({
     <View style={styles.screen}>
       <PlatformMap
         ref={mapRef}
-        path={route?.path ?? []}
+        lines={routeLines}
         destination={destination}
         user={permission === "granted" ? fix : null}
         showTraffic={guiding !== null || arrived !== null}
@@ -2454,6 +2493,50 @@ function previewSummary(preview: PreviewNav): string {
     return trip;
   }
   return `${trip} · ${formatTripEstimate(preview.tariff, preview.route.distanceMeters)}`;
+}
+
+const currentLegColor = "#1A73E8";
+const currentLegCasing = "#174EA6";
+const futureLegColor = "#A8C7FA";
+const pastLegColor = "#9AA0A6";
+
+function routeLinesFor(
+  route: DrivingRoute | null,
+  kind: "search" | "sortie" | "other",
+  completed: GeoCoordinate[][],
+): MapRouteLine[] {
+  if (!route) {
+    return [];
+  }
+  const followed = currentLegPath(route);
+  const painted =
+    kind === "sortie"
+      ? paintedLegs(completed, route)
+      : followed.length >= 2
+        ? [{ role: "current" as const, path: followed }]
+        : [];
+  return painted.map((leg, index) => ({
+    id: `${leg.role}-${index}`,
+    coordinates: leg.path,
+    color: leg.role === "past" ? pastLegColor : leg.role === "future" ? futureLegColor : currentLegColor,
+    ...(leg.role === "current" ? { casingColor: currentLegCasing } : {}),
+  }));
+}
+
+/** Stops before the active index still match, so completed leg geometry stays valid. */
+function passedStopsUnchanged(previous: SortieStop[], activeIndex: number, next: SortieStop[]): boolean {
+  const passedCount = Math.min(Math.max(0, activeIndex), previous.length);
+  if (next.length < passedCount) {
+    return false;
+  }
+  for (let index = 0; index < passedCount; index += 1) {
+    const before = previous[index];
+    const after = next[index];
+    if (!before || !after || !sameStopPlace(before, after)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function placeFromStop(stop: SortieStop): PlaceSuggestion {

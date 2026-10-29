@@ -32,8 +32,16 @@ export type MapCameraMove = {
   bearing: number;
 };
 
+export type MapRouteLine = {
+  id: string;
+  coordinates: GeoCoordinate[];
+  color: string;
+  /** Drawn under the stroke. Omitted for past and future legs. */
+  casingColor?: string;
+};
+
 type PlatformMapProps = {
-  path: GeoCoordinate[];
+  lines: MapRouteLine[];
   destination: GeoCoordinate | null;
   user: GeoCoordinate | null;
   showTraffic: boolean;
@@ -47,8 +55,6 @@ type PlatformMapProps = {
   onCameraMove?: (camera: MapCameraMove) => void;
 };
 
-const routeColor = "#1A73E8";
-const routeCasingColor = "#174EA6";
 /** Density-independent route stroke. Android Maps treats width as raw pixels. */
 const routeWidthDp = 22;
 const routeCasingWidthDp = 30;
@@ -58,7 +64,7 @@ function routeStrokeWidth(dp: number): number {
 }
 
 export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function PlatformMap(
-  { path, destination, user, showTraffic, followUser, navigationZoom = guidanceZoom, routeScale = 1, bare = false, onCameraMove },
+  { lines, destination, user, showTraffic, followUser, navigationZoom = guidanceZoom, routeScale = 1, bare = false, onCameraMove },
   ref,
 ) {
   const googleRef = useRef<GoogleMaps.MapView | null>(null);
@@ -129,26 +135,31 @@ export const PlatformMap = forwardRef<MapHandle, PlatformMapProps>(function Plat
   }
 
   const strokeScale = routeStrokeScale(zoom, navigationZoom);
-  const polylines = useMemo(
-    () =>
-      path.length > 0
-        ? [
-            {
-              id: "route-casing",
-              coordinates: path,
-              color: routeCasingColor,
-              width: routeStrokeWidth(Math.max(1, routeCasingWidthDp * strokeScale * routeScale)),
-            },
-            {
-              id: "route",
-              coordinates: path,
-              color: routeColor,
-              width: routeStrokeWidth(Math.max(1, routeWidthDp * strokeScale * routeScale)),
-            },
-          ]
-        : [],
-    [path, strokeScale, routeScale],
-  );
+  const polylines = useMemo(() => {
+    const drawn: { id: string; coordinates: GeoCoordinate[]; color: string; width: number }[] = [];
+    const stroke = routeStrokeWidth(Math.max(1, routeWidthDp * strokeScale * routeScale));
+    const casing = routeStrokeWidth(Math.max(1, routeCasingWidthDp * strokeScale * routeScale));
+    for (const line of lines) {
+      if (line.coordinates.length === 0) {
+        continue;
+      }
+      if (line.casingColor) {
+        drawn.push({
+          id: `${line.id}-casing`,
+          coordinates: line.coordinates,
+          color: line.casingColor,
+          width: casing,
+        });
+      }
+      drawn.push({
+        id: line.id,
+        coordinates: line.coordinates,
+        color: line.color,
+        width: stroke,
+      });
+    }
+    return drawn;
+  }, [lines, strokeScale, routeScale]);
   const markers = destination
     ? [{ id: "destination", coordinates: destination, ...(bare ? {} : { title: "Destination" }) }]
     : [];

@@ -34,23 +34,28 @@ const scheduleDeps: ScheduleDeps = {
   now: () => new Date("2026-09-08T10:00:00.000Z"),
 };
 
+const routePath = [
+  { latitude: 40.7, longitude: -74.0 },
+  { latitude: 40.71, longitude: -74.01 },
+];
+const routeStep = {
+  instruction: "Go",
+  maneuver: "straight" as const,
+  distanceMeters: 1000,
+  durationSeconds: 120,
+  path: routePath,
+};
 const route = {
   distanceMeters: 1000,
   durationSeconds: 120,
-  path: [
-    { latitude: 40.7, longitude: -74.0 },
-    { latitude: 40.71, longitude: -74.01 },
-  ],
-  steps: [
+  path: routePath,
+  steps: [routeStep],
+  legs: [
     {
-      instruction: "Go",
-      maneuver: "straight" as const,
       distanceMeters: 1000,
       durationSeconds: 120,
-      path: [
-        { latitude: 40.7, longitude: -74.0 },
-        { latitude: 40.71, longitude: -74.01 },
-      ],
+      path: routePath,
+      steps: [routeStep],
     },
   ],
 };

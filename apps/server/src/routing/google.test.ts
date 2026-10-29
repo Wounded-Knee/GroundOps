@@ -63,6 +63,8 @@ describe("mapGoogleRoute", () => {
     assert.equal(route.steps[1]?.maneuver, "turn-left");
     assert.equal(route.steps[1]?.instruction, "Turn left");
     assert.equal(route.steps[1]?.durationSeconds, 60);
+    assert.equal(route.legs.length, 1);
+    assert.equal(route.legs[0]?.steps.length, route.steps.length);
     assert.ok((route.path[0]?.latitude ?? 0) > 38);
     const serialized = JSON.stringify(route);
     assert.equal(serialized.includes("encodedPolyline"), false);
@@ -98,6 +100,64 @@ describe("mapGoogleRoute", () => {
       return;
     }
     assert.equal(route.steps[0]?.maneuver, "arrive");
+  });
+
+  it("keeps each Google leg separate and flattens steps in order", () => {
+    const route = mapGoogleRoute({
+      routes: [
+        {
+          distanceMeters: 150,
+          duration: "40s",
+          polyline: { encodedPolyline: encoded },
+          legs: [
+            {
+              distanceMeters: 100,
+              polyline: { encodedPolyline: encoded },
+              steps: [
+                {
+                  distanceMeters: 100,
+                  staticDuration: "30s",
+                  navigationInstruction: { maneuver: "DEPART", instructions: "Head north" },
+                  startLocation: { latLng: { latitude: 1, longitude: 2 } },
+                  endLocation: { latLng: { latitude: 1.001, longitude: 2 } },
+                },
+              ],
+            },
+            {
+              distanceMeters: 50,
+              steps: [
+                {
+                  distanceMeters: 50,
+                  staticDuration: "10s",
+                  navigationInstruction: { maneuver: "TURN_RIGHT", instructions: "Turn right" },
+                  startLocation: { latLng: { latitude: 3, longitude: 4 } },
+                  endLocation: { latLng: { latitude: 3, longitude: 4.001 } },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    assert.notEqual(route, "no-route");
+    if (route === "no-route") {
+      return;
+    }
+    assert.equal(route.legs.length, 2);
+    assert.equal(route.steps.length, 2);
+    assert.equal(route.steps[0]?.maneuver, "depart");
+    assert.equal(route.steps[1]?.maneuver, "turn-right");
+    assert.equal(route.legs[0]?.distanceMeters, 100);
+    assert.equal(route.legs[1]?.distanceMeters, 50);
+    assert.equal(route.legs[0]?.durationSeconds, 30);
+    assert.equal(route.legs[1]?.durationSeconds, 10);
+    assert.ok((route.legs[0]?.path[0]?.latitude ?? 0) > 38);
+    assert.equal(route.legs[1]?.path[0]?.latitude, 3);
+    assert.equal(route.legs[1]?.path[1]?.longitude, 4.001);
+    assert.ok((route.path[0]?.latitude ?? 0) > 38);
+    assert.equal(route.distanceMeters, 150);
+    assert.equal(route.durationSeconds, 40);
   });
 
   it("rejects a payload with no driving route", () => {
