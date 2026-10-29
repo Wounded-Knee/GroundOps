@@ -62,7 +62,7 @@ export async function putCompanyMember(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!(response instanceof Response)) {
+  if (typeof response === "string") {
     return response;
   }
   const payload: unknown = await response.json();
@@ -145,7 +145,7 @@ async function readList<T>(
   parse: (value: unknown) => value is T,
 ): Promise<T | DirectoryFailure> {
   const response = await directoryFetch(apiUrl, token, path);
-  if (!(response instanceof Response)) {
+  if (typeof response === "string") {
     return response;
   }
   const body: unknown = await response.json();
@@ -164,7 +164,7 @@ async function writeNamed(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!(response instanceof Response)) {
+  if (typeof response === "string") {
     return response;
   }
   const payload: unknown = await response.json();
@@ -183,7 +183,7 @@ async function writeUser(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!(response instanceof Response)) {
+  if (typeof response === "string") {
     return response;
   }
   const payload: unknown = await response.json();
@@ -192,7 +192,7 @@ async function writeUser(
 
 async function remove(apiUrl: string, token: string, path: string): Promise<"ok" | DirectoryFailure> {
   const response = await directoryFetch(apiUrl, token, path, { method: "DELETE" });
-  if (!(response instanceof Response)) {
+  if (typeof response === "string") {
     return response;
   }
   return response.status === 204 ? "ok" : failureFromStatus(response.status);
