@@ -3,20 +3,22 @@ import { useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { requestCalendar } from "./calendarClient";
 import { cancelDepartureAlerts, scheduleDepartureAlerts } from "./departureAlerts";
-import { nextDeparture, type NextDeparture } from "./nextDeparture";
+import { dueDeparture, nextDeparture, type NextDeparture } from "./nextDeparture";
 
 export function useUpcomingDeparture(input: {
   apiUrl: string;
   token: string;
   browsing: boolean;
   onUnauthorized: () => void;
-}): { upcoming: NextDeparture | null; clock: number } {
+}): { upcoming: NextDeparture | null; due: NextDeparture | null; clock: number } {
   const { apiUrl, token, browsing, onUnauthorized } = input;
   const onUnauthorizedRef = useRef(onUnauthorized);
   onUnauthorizedRef.current = onUnauthorized;
   const [upcomingSorties, setUpcomingSorties] = useState<Sortie[]>([]);
   const [clock, setClock] = useState(() => Date.now());
-  const upcoming = browsing ? nextDeparture(upcomingSorties, new Date(clock)) : null;
+  const now = new Date(clock);
+  const upcoming = browsing ? nextDeparture(upcomingSorties, now) : null;
+  const due = browsing ? dueDeparture(upcomingSorties, now) : null;
   const upcomingRef = useRef(upcoming);
   upcomingRef.current = upcoming;
 
@@ -89,5 +91,5 @@ export function useUpcomingDeparture(input: {
     void scheduleDepartureAlerts(upcoming, new Date());
   }, [upcoming?.sortieId, upcomingDepartAt]);
 
-  return { upcoming, clock };
+  return { upcoming, due, clock };
 }

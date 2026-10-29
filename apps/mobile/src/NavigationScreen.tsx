@@ -40,7 +40,7 @@ import {
   getCountdownLeadMinutes,
   subscribeCountdownLeadMinutes,
 } from "./countdownPrefs";
-import { formatCountdown, showDepartureCountdown } from "./nextDeparture";
+import { departurePrompt, formatCountdown } from "./nextDeparture";
 import { arrivedFixChoice, guidingSortieFixChoice, insideArrival } from "./guidanceFix";
 import { useMeterReporter } from "./useMeterReporter";
 import { useUpcomingDeparture } from "./useUpcomingDeparture";
@@ -263,12 +263,13 @@ export function NavigationScreen({
   const [chromeBox, setChromeBox] = useState(0);
   const deadheadContinueRef = useRef(false);
   const [finding, setFinding] = useState(false);
+  const [departing, setDeparting] = useState(false);
   const [permission, setPermission] = useState<"unknown" | "granted" | "denied">("unknown");
   const [fix, setFix] = useState<GeoCoordinate | null>(null);
   const [routeEpoch, setRouteEpoch] = useState(0);
   const [meter, setMeter] = useState<MeterState>(emptyMeter());
   const { queueMeterReport, resetMeterReporter } = useMeterReporter(apiUrl, token, onUnauthorized);
-  const { upcoming, clock } = useUpcomingDeparture({
+  const { upcoming, due, clock } = useUpcomingDeparture({
     apiUrl,
     token,
     browsing: nav.mode === "browse",
@@ -303,6 +304,7 @@ export function NavigationScreen({
   const displayedPoseRef = useRef<MotionPose | null>(null);
   const centered = useRef(false);
   const routeRequest = useRef(0);
+  const departInFlight = useRef(false);
   const choiceGeneration = useRef(0);
   const choiceChain = useRef(Promise.resolve());
   const previewCommitRef = useRef<PreviewNav | null>(null);
@@ -1810,6 +1812,120 @@ export function NavigationScreen({
     void setActiveSortieObservation(commenced.id);
   }
 
+  async function departDue(sortieId: string): Promise<void> {
+    if (departInFlight.current || navRef.current.mode !== "browse") {
+      return;
+    }
+    departInFlight.current = true;
+    setDeparting(true);
+    const requestId = ++routeRequest.current;
+    try {
+      const origin = await currentOrigin();
+      if (requestId !== routeRequest.current || navRef.current.mode !== "browse") {
+        return;
+      }
+      if (!origin) {
+        setBrowseMessage("Location is required.");
+        return;
+      }
+      setFinding(true);
+      const [route, tariffResult] = await Promise.all([
+        requestSortieDrivingRoute(apiUrl, token, sortieId, origin, 0),
+        requestTariff(apiUrl, token),
+      ]);
+      if (requestId !== routeRequest.current) {
+        return;
+      }
+      if (navRef.current.mode !== "browse") {
+        setFinding(false);
+        return;
+      }
+      if (route === "unauthorized" || tariffResult === "unauthorized") {
+        setFinding(false);
+        onUnauthorized();
+        return;
+      }
+      if (route === "failed") {
+        setFinding(false);
+        setBrowseMessage("The route failed.");
+        return;
+      }
+      const tariff = typeof tariffResult === "string" ? null : tariffResult;
+      const commenced = await commenceSortie(apiUrl, token, sortieId, { guidance: true });
+      if (requestId !== routeRequest.current) {
+        return;
+      }
+      if (navRef.current.mode !== "browse") {
+        setFinding(false);
+        return;
+      }
+      if (commenced === "unauthorized") {
+        setFinding(false);
+        onUnauthorized();
+        return;
+      }
+      if (commenced === "no-location") {
+        setFinding(false);
+        setBrowseMessage("Location is required.");
+        return;
+      }
+      if (typeof commenced === "string") {
+        setFinding(false);
+        setBrowseMessage("The departure could not be recorded.");
+        return;
+      }
+      const stop = commenced.stops[0] ?? commenced.stops[commenced.stops.length - 1];
+      if (!stop) {
+        setFinding(false);
+        setBrowseMessage("The route failed.");
+        return;
+      }
+      setFinding(false);
+      rerouteInFlight.current = false;
+      stopAdvanceInFlight.current = false;
+      offRouteSinceRef.current = null;
+      resetArrivalDwell();
+      const started = emptyMeter();
+      setMeter(started);
+      meterRef.current = started;
+      snapshotProgressBaseline(origin, route);
+      const next: NavState = {
+        mode: "guiding",
+        kind: "sortie",
+        destination: placeFromStop(stop),
+        route,
+        stepIndex: 0,
+        muted: getGuidanceMutePrefs().muted,
+        offRouteSince: null,
+        rerouteMessage: null,
+        sortieId: commenced.id,
+        stops: commenced.stops,
+        firstStopPosition: 0,
+        tariff,
+        sortie: commenced,
+      };
+      setNav(next);
+      setRouteEpoch((epoch) => epoch + 1);
+      publishMeter(started, next, origin, {
+        immediate: true,
+        overviewPath: overviewPathForUpload("guidance-start", next.firstStopPosition, next.route.path),
+      });
+      void setActiveSortieObservation(commenced.id);
+    } finally {
+      departInFlight.current = false;
+      setDeparting(false);
+    }
+  }
+
+  function setBrowseMessage(message: string): void {
+    const current = navRef.current;
+    setNav({
+      mode: "browse",
+      destination: current.mode === "browse" ? current.destination : null,
+      message,
+    });
+  }
+
   function onDismiss(): void {
     void endGuidance();
   }
@@ -2026,9 +2142,10 @@ export function NavigationScreen({
         : (guiding.route.steps[guiding.stepIndex]?.distanceMeters ?? step.distanceMeters)
       : 0;
   const browseMessage = nav.mode === "browse" ? nav.message : null;
+  const prompt = departurePrompt(due, upcoming, clock, countdownLeadMinutes);
   const departureRemainingMs = upcoming ? upcoming.departAt.getTime() - clock : null;
-  const showCountdown =
-    departureRemainingMs !== null && showDepartureCountdown(departureRemainingMs, countdownLeadMinutes);
+  const showCountdown = prompt === "countdown" && upcoming !== null && departureRemainingMs !== null;
+  const showDue = prompt === "due" && due !== null;
   const compassVisible = Math.abs(bearingDeltaDegrees(0, mapBearing)) >= compassBearingEpsilonDegrees;
   const showFooter = showSearch && (finding || (browseMessage !== null && !pendingWhereTo));
   const showBottomSheet = preview !== null || notice !== null || guiding?.rerouteMessage != null || showFooter;
@@ -2108,6 +2225,23 @@ export function NavigationScreen({
                 </Pressable>
               </View>
             ) : null}
+          </View>
+        ) : null}
+
+        {showDue && due ? (
+          <View style={styles.countdownCard} pointerEvents="auto">
+            <Text style={styles.countdownTime}>Leave now</Text>
+            <Text style={styles.countdownLabel}>Depart for {due.label}</Text>
+            <Pressable
+              accessibilityLabel={`Depart for ${due.label}`}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: departing }}
+              disabled={departing}
+              onPress={() => void departDue(due.sortieId)}
+              style={[styles.primary, styles.dueButton, departing ? styles.primaryDisabled : null]}
+            >
+              <Text style={styles.primaryText}>Depart</Text>
+            </Pressable>
           </View>
         ) : null}
 
@@ -2425,6 +2559,10 @@ function createStyles(colors: ThemeColors) {
       marginTop: 4,
       fontSize: 15,
       color: colors.textSecondary,
+    },
+    dueButton: {
+      flex: 0,
+      marginTop: 12,
     },
     maneuverCard: {
       marginHorizontal: 12,
