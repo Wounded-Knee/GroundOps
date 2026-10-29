@@ -55,14 +55,32 @@ export async function recordObservation(
   }
 
   const inProgress = await resolveInProgressSortie(author.id, input.sortieId ?? null);
-  await db.insert(locationObservation).values({
-    driverId: author.id,
-    sortieId: inProgress?.id ?? null,
-    observedAt: input.observedAt,
-    latitude: input.latitude,
-    longitude: input.longitude,
-    accuracyMeters: input.accuracyMeters,
-  });
+  if (input.id) {
+    const existing = await db
+      .select({ id: locationObservation.id })
+      .from(locationObservation)
+      .where(and(eq(locationObservation.driverId, author.id), eq(locationObservation.clientId, input.id)))
+      .limit(1);
+    if (existing[0]) {
+      return "ok";
+    }
+  }
+  try {
+    await db.insert(locationObservation).values({
+      driverId: author.id,
+      clientId: input.id ?? null,
+      sortieId: inProgress?.id ?? null,
+      observedAt: input.observedAt,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      accuracyMeters: input.accuracyMeters,
+    });
+  } catch (error) {
+    if (input.id && uniqueViolation(error)) {
+      return "ok";
+    }
+    throw error;
+  }
   await publishRealtime(
     locationUpdated(person.id, {
       latitude: input.latitude,
@@ -82,6 +100,11 @@ export async function recordObservation(
   await recomputeOpenSorties(author.id, person.id, { latitude: input.latitude, longitude: input.longitude }, deps);
   return "ok";
 }
+
+function uniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+}
+
 async function recomputeOpenSorties(
   driverId: string,
   userId: string,

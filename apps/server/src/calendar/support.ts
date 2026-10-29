@@ -44,6 +44,7 @@ export {
 };
 
 export type SortieInput = {
+  id?: string;
   label: string;
   arrivalAt: Date | null;
   passengerName: string | null;
@@ -52,6 +53,7 @@ export type SortieInput = {
 };
 
 export type ObservationInput = {
+  id?: string | null;
   observedAt: Date;
   latitude: number;
   longitude: number;

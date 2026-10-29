@@ -1,10 +1,12 @@
 import type { AvailabilityInterval, Sortie, SortieWriteRequest } from "@groundops/contracts";
+import * as Location from "expo-location";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { AppState } from "react-native";
 import { resolveApiUrl } from "./apiUrl";
 import { readCalendarCache, writeCalendarCache } from "./calendarCache";
 import { ensureCurrentDriver, requestCalendar } from "./calendarClient";
-import { saveSortieDraft } from "./saveSortie";
+import { readPending, saveOrQueueSortie } from "./pendingSorties";
+import { overlaySorties, rangeCovers } from "./provisionalWindow";
 import type { DialogDraft } from "./SortieDialog";
 import { visibleRange, type CalendarScope } from "./calendarTime";
 
@@ -21,6 +23,7 @@ export type CalendarReady = {
   sorties: Sortie[];
   availability: AvailabilityInterval[];
   live: boolean;
+  pendingIds: string[];
   message: string | null;
   dialog: DialogDraft | null;
 };
@@ -33,6 +36,7 @@ function emptyCalendar(anchor: Date): CalendarReady {
     sorties: [],
     availability: [],
     live: false,
+    pendingIds: [],
     message: null,
     dialog: null,
   };
@@ -65,32 +69,52 @@ export function useCalendar(input: {
   shown.current = { scope: screen.scope, anchor: screen.anchor, live: screen.live };
 
   async function showCached(scope: CalendarScope, anchor: Date, current: number): Promise<void> {
+    const range = visibleRange(scope, anchor);
     const cached = await readCalendarCache(userId);
+    const pending = await readPending(userId);
     if (generation.current !== current) {
       return;
     }
+    const covered = cached !== null && rangeCovers(cached, range);
     setScreen((prev) => ({
       ...prev,
       scope,
       anchor,
-      sorties: cached?.sorties ?? [],
-      availability: cached?.availability ?? [],
+      sorties: overlaySorties(covered && cached ? cached.sorties : [], pending.map((command) => command.provisional)),
+      availability: covered && cached ? cached.availability : [],
       live: false,
-      message: cached ? couldNotRefresh : couldNotLoad,
+      pendingIds: pending.map((command) => command.sortieId),
+      message: covered ? couldNotRefresh : couldNotLoad,
       dialog: null,
     }));
   }
 
+  async function paintCached(scope: CalendarScope, anchor: Date, current: number): Promise<void> {
+    const range = visibleRange(scope, anchor);
+    const cached = await readCalendarCache(userId);
+    const pending = await readPending(userId);
+    if (generation.current !== current) {
+      return;
+    }
+    const covered = cached !== null && rangeCovers(cached, range);
+    setScreen((prev) => {
+      if (prev.live || prev.message) {
+        return prev;
+      }
+      return {
+        ...prev,
+        scope,
+        anchor,
+        sorties: overlaySorties(covered && cached ? cached.sorties : [], pending.map((command) => command.provisional)),
+        availability: covered && cached ? cached.availability : prev.availability,
+        pendingIds: pending.map((command) => command.sortieId),
+      };
+    });
+  }
+
   async function load(scope: CalendarScope, anchor: Date, current: number): Promise<void> {
     const range = visibleRange(scope, anchor);
-    void readCalendarCache(userId).then((cached) => {
-      if (generation.current !== current || !cached) {
-        return;
-      }
-      setScreen((prev) =>
-        prev.live || prev.message ? prev : { ...prev, sorties: cached.sorties, availability: cached.availability },
-      );
-    });
+    void paintCached(scope, anchor, current);
 
     const ensured = await ensureCurrentDriver(apiUrl, token);
     if (generation.current !== current) {
@@ -125,6 +149,7 @@ export function useCalendar(input: {
       sorties: calendar.sorties,
       availability: calendar.availability,
     });
+    const pending = await readPending(userId);
     if (generation.current !== current) {
       return;
     }
@@ -132,9 +157,10 @@ export function useCalendar(input: {
       ...prev,
       scope,
       anchor,
-      sorties: calendar.sorties,
+      sorties: overlaySorties(calendar.sorties, pending.map((command) => command.provisional)),
       availability: calendar.availability,
       live: true,
+      pendingIds: pending.map((command) => command.sortieId),
       message: saveFailureMessage(prev.message) ? prev.message : null,
       dialog: withFreshSortie(prev.dialog, calendar.sorties),
     }));
@@ -155,43 +181,56 @@ export function useCalendar(input: {
   }
 
   async function commit(ready: CalendarReady, sortieId: string | null, body: SortieWriteRequest): Promise<void> {
-    if (!ready.live || saving.current) {
-      if (!saving.current) {
-        clearHeldRef.current();
-        if (!ready.live) {
-          setScreen((prev) => (prev.message ? prev : { ...prev, message: notSaved }));
-        }
-      }
+    if (saving.current) {
       return;
     }
     saving.current = true;
-    const current = generation.current;
-    const saved = await saveSortieDraft(apiUrl, token, sortieId, body);
+    const result = await saveOrQueueSortie({
+      apiUrl,
+      token,
+      userId,
+      sortieId,
+      body,
+      sorties: ready.sorties,
+      gps: await currentFix(),
+    });
     saving.current = false;
-    if (saved === "unauthorized") {
+    if (result.status === "unauthorized") {
       clearHeldRef.current();
       onUnauthorizedRef.current();
       return;
     }
-    if (saved === "no-location") {
+    if (result.status === "no-location") {
       clearHeldRef.current();
       setScreen((prev) => ({ ...prev, message: locationRequired }));
       return;
     }
-    if (saved === "not-saved") {
+    if (result.status === "not-saved") {
       clearHeldRef.current();
       setScreen((prev) => ({ ...prev, message: notSaved }));
       return;
     }
-
-    closeDialogChromeRef.current();
-    setScreen((prev) => ({ ...prev, dialog: null, message: null }));
-
-    if (generation.current !== current) {
+    if (result.status === "queued") {
+      const pending = await readPending(userId);
+      closeDialogChromeRef.current();
       clearHeldRef.current();
+      setScreen((prev) => ({
+        ...prev,
+        dialog: null,
+        sorties: overlaySorties(
+          prev.sorties.filter((sortie) => !pending.some((command) => command.sortieId === sortie.id)),
+          pending.map((command) => command.provisional),
+        ),
+        pendingIds: pending.map((command) => command.sortieId),
+        message: null,
+      }));
       return;
     }
 
+    const saved = result.sortie;
+    closeDialogChromeRef.current();
+    setScreen((prev) => ({ ...prev, dialog: null, message: null }));
+    const current = generation.current;
     const range = visibleRange(ready.scope, ready.anchor);
     const calendar = await requestCalendar(apiUrl, token, range.from.toISOString(), range.to.toISOString());
     if (generation.current !== current) {
@@ -205,7 +244,17 @@ export function useCalendar(input: {
     }
     if (typeof calendar === "string") {
       clearHeldRef.current();
-      setScreen((prev) => ({ ...prev, live: false, message: couldNotRefresh }));
+      const remaining = await readPending(userId);
+      setScreen((prev) => ({
+        ...prev,
+        sorties: overlaySorties(
+          prev.sorties.filter((sortie) => sortie.id !== saved.id),
+          [saved, ...remaining.map((command) => command.provisional)],
+        ),
+        live: false,
+        pendingIds: remaining.map((command) => command.sortieId),
+        message: couldNotRefresh,
+      }));
       return;
     }
     await writeCalendarCache({
@@ -219,12 +268,14 @@ export function useCalendar(input: {
       clearHeldRef.current();
       return;
     }
+    const remaining = await readPending(userId);
     clearHeldRef.current();
     setScreen((prev) => ({
       ...prev,
-      sorties: calendar.sorties,
+      sorties: overlaySorties(calendar.sorties, remaining.map((command) => command.provisional)),
       availability: calendar.availability,
       live: true,
+      pendingIds: remaining.map((command) => command.sortieId),
       message: prev.dialog ? prev.message : null,
     }));
   }
@@ -244,7 +295,7 @@ export function useCalendar(input: {
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
-      if (state !== "active" || !shown.current.live) {
+      if (state !== "active") {
         return;
       }
       const current = ++generation.current;
@@ -258,6 +309,19 @@ export function useCalendar(input: {
 
 function saveFailureMessage(message: string | null): boolean {
   return message === notSaved || message === locationRequired;
+}
+
+async function currentFix(): Promise<{ latitude: number; longitude: number } | null> {
+  try {
+    const current = await Location.getForegroundPermissionsAsync();
+    if (current.status !== "granted") {
+      return null;
+    }
+    const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    return { latitude: position.coords.latitude, longitude: position.coords.longitude };
+  } catch {
+    return null;
+  }
 }
 
 function withFreshSortie(dialog: DialogDraft | null, sorties: Sortie[]): DialogDraft | null {

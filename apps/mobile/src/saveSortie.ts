@@ -1,7 +1,7 @@
 import type { Sortie, SortieWriteRequest } from "@groundops/contracts";
 import { authorSortie, ensureCurrentDriver, reviseSortie } from "./calendarClient";
 
-export type SortieSaveResult = Sortie | "unauthorized" | "no-location" | "not-saved";
+export type SortieSaveResult = Sortie | "unauthorized" | "no-location" | "not-saved" | "unreachable" | "unavailable";
 
 export async function saveSortieDraft(
   apiUrl: string,
@@ -17,14 +17,11 @@ export async function saveSortieDraft(
     return "unauthorized";
   }
   if (ensured === "unreachable") {
-    return "not-saved";
+    return "unreachable";
   }
   const saved = sortieId ? await reviseSortie(apiUrl, token, sortieId, body) : await authorSortie(apiUrl, token, body);
-  if (saved === "unauthorized") {
-    return "unauthorized";
-  }
-  if (saved === "no-location") {
-    return "no-location";
+  if (saved === "unauthorized" || saved === "unreachable" || saved === "unavailable" || saved === "no-location") {
+    return saved;
   }
   if (typeof saved === "string") {
     return "not-saved";

@@ -23,6 +23,7 @@ import { defaultScheduleDeps, type ObservationInput, type ScheduleDeps, type Sor
 import { readTariff, replaceTariff } from "./tariff.js";
 
 const writeBody = z.object({
+  id: z.uuid().optional(),
   label: z.string(),
   arrivalAt: z.string().nullable(),
   passengerName: z.string().nullable(),
@@ -35,6 +36,7 @@ const previewBody = writeBody.extend({
 });
 
 const observationBody = z.object({
+  id: z.uuid().optional(),
   observedAt: z.string(),
   latitude: coordinateSchema.shape.latitude,
   longitude: coordinateSchema.shape.longitude,
@@ -343,6 +345,7 @@ function readWrite(body: unknown): SortieInput | null {
     return null;
   }
   return {
+    id: parsed.data.id,
     label: parsed.data.label,
     arrivalAt,
     passengerName: parsed.data.passengerName,
@@ -373,6 +376,7 @@ function readObservation(body: unknown): ObservationInput | null {
     return null;
   }
   return {
+    id: parsed.data.id ?? null,
     observedAt,
     latitude: parsed.data.latitude,
     longitude: parsed.data.longitude,

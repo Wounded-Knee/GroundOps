@@ -58,7 +58,7 @@ export async function authorSortie(
   apiUrl: string,
   token: string,
   body: SortieWriteRequest,
-): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location" | "unavailable"> {
   return writeSortie(apiUrl, token, "POST", "/sorties", body);
 }
 
@@ -67,7 +67,7 @@ export async function reviseSortie(
   token: string,
   sortieId: string,
   body: SortieWriteRequest,
-): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location" | "unavailable"> {
   return writeSortie(apiUrl, token, "PATCH", `/sorties/${sortieId}`, body);
 }
 
@@ -109,7 +109,7 @@ export async function commenceSortie(
   token: string,
   sortieId: string,
   options?: { guidance?: boolean },
-): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location" | "unavailable"> {
   const guidance = options?.guidance === true;
   const response = await fetchAuthorized(`${apiUrl}/sorties/${sortieId}/commence`, token, {
     method: "POST",
@@ -166,7 +166,7 @@ export async function extendStopWait(
   token: string,
   sortieId: string,
   position: number,
-): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location" | "unavailable"> {
   const response = await fetchAuthorized(
     `${apiUrl}/sorties/${sortieId}/stops/${position}/extend-wait`,
     token,
@@ -217,7 +217,7 @@ async function writeSortie(
   method: "POST" | "PATCH",
   path: string,
   body: SortieWriteRequest,
-): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
+): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location" | "unavailable"> {
   const response = await fetchAuthorized(`${apiUrl}${path}`, token, {
     method,
     headers: { "content-type": "application/json" },
@@ -226,15 +226,18 @@ async function writeSortie(
   if (response === "unauthorized" || response === "unreachable") {
     return response;
   }
-    if (response.status === 409 && (await readError(response)) === "no location") {
-      return "no-location";
-    }
-    if (response.status === 400 || response.status === 404 || response.status === 409 || response.status === 503) {
-      return "rejected";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
+  if (response.status === 409 && (await readError(response)) === "no location") {
+    return "no-location";
+  }
+  if (response.status === 503) {
+    return "unavailable";
+  }
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    return "rejected";
+  }
+  if (!response.ok) {
+    return "unreachable";
+  }
   const parsed: unknown = await response.json();
   return isSortie(parsed) ? parsed : "unreachable";
 }
@@ -304,17 +307,14 @@ export async function reportLocationObservation(
   apiUrl: string,
   token: string,
   body: LocationObservationRequest,
-): Promise<"ok" | "unauthorized" | "rejected"> {
+): Promise<"ok" | "unauthorized" | "unreachable" | "rejected"> {
   const response = await fetchAuthorized(`${apiUrl}/location-observations`, token, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (response === "unauthorized") {
-    return "unauthorized";
-  }
-  if (response === "unreachable") {
-    return "rejected";
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
   }
   return response.status === 204 ? "ok" : "rejected";
 }

@@ -1,4 +1,4 @@
-import { taskSortieType, type Sortie, type SortiePreviewResponse, type User } from "@groundops/contracts";
+import { sameSortieWrite, taskSortieType, type Sortie, type SortiePreviewResponse, type User } from "@groundops/contracts";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db.js";
 import { findCompanyId, findDriver } from "../identity/driver.js";
@@ -50,6 +50,12 @@ export async function authorSortie(
   if (!companyId) {
     return "no-driver";
   }
+  if (input.id) {
+    const replay = await replayAuthoredSortie(person, author.id, input.id, valid, deps);
+    if (replay !== "missing") {
+      return replay;
+    }
+  }
   const position = await departurePosition(author.id, null, valid.arrivalAt, deps.now());
   if (!position) {
     return "no-location";
@@ -63,6 +69,7 @@ export async function authorSortie(
     const inserted = await tx
       .insert(sortie)
       .values({
+        ...(input.id ? { id: input.id } : {}),
         companyId,
         authorDriverId: author.id,
         type: taskSortieType,
@@ -255,6 +262,9 @@ export async function reviseSortie(
     return "not-found";
   }
   const previousStops = (await stopsBySortie(db, [sortieId])).get(sortieId) ?? [];
+  if (matchesStored(existing, previousStops, valid)) {
+    return presentSortie(author.id, toSortie(existing, previousStops), deps);
+  }
   const inProgress = existing.actualStart !== null && existing.actualEnd === null;
   const nextStops = mergeStopActuals(valid.stops, previousStops, inProgress);
 
@@ -303,4 +313,60 @@ export async function reviseSortie(
   await publishSortie(person.id, shown);
   await alignFollowingSorties(author.id, person.id, deps);
   return shown;
+}
+
+async function replayAuthoredSortie(
+  person: User,
+  authorId: string,
+  sortieId: string,
+  valid: NonNullable<ReturnType<typeof validSortie>>,
+  deps: ScheduleDeps,
+): Promise<Sortie | "invalid" | "no-location" | "unavailable" | "not-found" | "missing"> {
+  const rows = await db
+    .select({ ...sortieSelect, authorDriverId: sortie.authorDriverId })
+    .from(sortie)
+    .where(eq(sortie.id, sortieId))
+    .limit(1);
+  const existing = rows[0];
+  if (!existing) {
+    return "missing";
+  }
+  if (existing.authorDriverId !== authorId) {
+    return "invalid";
+  }
+  const stops = (await stopsBySortie(db, [sortieId])).get(sortieId) ?? [];
+  if (matchesStored(existing, stops, valid)) {
+    return presentSortie(authorId, toSortie(existing, stops), deps);
+  }
+  return reviseSortie(person, sortieId, valid, deps);
+}
+
+function matchesStored(
+  existing: {
+    label: string;
+    arrivalAt: Date;
+    arrivalAuthored: boolean;
+    passengerName: string | null;
+    passengerPhone: string | null;
+  },
+  stops: Sortie["stops"],
+  valid: NonNullable<ReturnType<typeof validSortie>>,
+): boolean {
+  return sameSortieWrite(
+    {
+      label: existing.label,
+      arrivalAt: existing.arrivalAt.toISOString(),
+      arrivalAuthored: existing.arrivalAuthored,
+      passengerName: existing.passengerName,
+      passengerPhone: existing.passengerPhone,
+      stops,
+    },
+    {
+      label: valid.label,
+      arrivalAt: valid.arrivalAt ? valid.arrivalAt.toISOString() : null,
+      passengerName: valid.passengerName,
+      passengerPhone: valid.passengerPhone,
+      stops: valid.stops,
+    },
+  );
 }

@@ -318,14 +318,11 @@ export function CalendarScreen({
   }, [hourPx, pinchShift]);
 
   function openDialog(ready: Ready, dialog: DialogDraft): void {
-    if (!ready.live) {
-      return;
-    }
     setScreen({ ...ready, dialog, message: null });
   }
 
   async function guideSortie(ready: Ready, sortie: Sortie): Promise<void> {
-    if (!onGuide || Platform.OS === "web") {
+    if (!onGuide || Platform.OS === "web" || ready.pendingIds.includes(sortie.id)) {
       return;
     }
     const permission = await Location.requestForegroundPermissionsAsync();
@@ -521,7 +518,7 @@ export function CalendarScreen({
                           key={sortie.id}
                           label={sortieTitle(sortie)}
                           reposition={sortieIsReposition(sortie)}
-                          enabled={ready.live && !ready.dialog}
+                          enabled={!ready.dialog}
                           onOpen={() => openDialog(ready, dialogFor(sortie))}
                           onMove={(pageX, pageY) => {
                             const target = dayAtPoint(gridBox.current, pageX, pageY);
@@ -550,7 +547,7 @@ export function CalendarScreen({
               tab={agendaTab}
               sorties={ready.sorties}
               now={now}
-              live={ready.live}
+              pendingIds={ready.pendingIds}
               expandedSortieId={expandedSortieId}
               scrollLocked={agendaScrollLocked}
               token={token}
@@ -561,9 +558,6 @@ export function CalendarScreen({
                 setAgendaScrollLocked(false);
               }}
               onExpand={(sortieId) => {
-                if (!ready.live) {
-                  return;
-                }
                 setExpandedSortieId(sortieId);
                 setScreen((current) => ({ ...current, dialog: null, message: null }));
               }}
@@ -691,7 +685,7 @@ export function CalendarScreen({
                       {hours.map((hour) => (
                         <Pressable
                           key={hour}
-                          disabled={!ready.live || ready.dialog !== null}
+                          disabled={ready.dialog !== null}
                           onPress={() => {
                             openDialog(ready, dialogForCreate(hourSlot(day, hour).start));
                           }}
@@ -718,7 +712,7 @@ export function CalendarScreen({
                             height={block.height}
                             lane={lane}
                             hourPx={hourPx}
-                            enabled={ready.live && !ready.dialog}
+                            enabled={!ready.dialog}
                             allowDayShift={ready.scope === "week"}
                             columnWidth={() => columnWidth.current}
                             heldOffset={held?.sortieId === sortie.id ? { x: held.x, y: held.y } : null}
@@ -848,7 +842,7 @@ function AgendaList({
   tab,
   sorties,
   now,
-  live,
+  pendingIds,
   expandedSortieId,
   scrollLocked,
   token,
@@ -865,7 +859,7 @@ function AgendaList({
   tab: "upcoming" | "history";
   sorties: Sortie[];
   now: Date;
-  live: boolean;
+  pendingIds: readonly string[];
   expandedSortieId: string | null;
   scrollLocked: boolean;
   token: string;
@@ -940,7 +934,6 @@ function AgendaList({
                 <Pressable
                   key={sortie.id}
                   accessibilityRole="button"
-                  disabled={!live}
                   onPress={() => onExpand(sortie.id)}
                   style={[styles.agendaCard, reposition ? styles.agendaCardReposition : null]}
                 >
@@ -965,7 +958,7 @@ function AgendaList({
                   onScrollLock={onScrollLock}
                   onUnauthorized={onUnauthorized}
                   onSaveAddress={onSaveAddress}
-                  onGuide={onGuide ? () => onGuide(sortie) : null}
+                  onGuide={onGuide && !pendingIds.includes(sortie.id) ? () => onGuide(sortie) : null}
                   onSave={(body) => onSave(sortie.id, body)}
                 />
               </View>

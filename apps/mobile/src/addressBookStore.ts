@@ -14,6 +14,8 @@ import {
 import { samePlace, sortAddressEntries } from "./addressBookMatch";
 import type { DevicePostalAddress } from "./phoneAddress";
 import { phoneContactsAccess, readPostalAddresses, requestPhoneContactsAccess } from "./phoneContacts";
+import { readAddressBookCache, writeAddressBookCache } from "./readCache";
+import { readStoredUser } from "./sessionStore";
 
 export type AddressBookSnapshot = {
   entries: AddressBookEntry[];
@@ -68,7 +70,7 @@ export async function ensureAddressBookLoaded(apiUrl: string, token: string): Pr
     return inflight.task;
   }
   const seen = epoch;
-  const task = readAddressBook(apiUrl, token).then((result) => {
+  const task = readAddressBook(apiUrl, token).then(async (result) => {
     if (inflight?.task === task) {
       inflight = null;
     }
@@ -76,6 +78,19 @@ export async function ensureAddressBookLoaded(apiUrl: string, token: string): Pr
       return "ok" as const;
     }
     if (typeof result === "string") {
+      if (result === "unreachable") {
+        const cached = await cachedAddressBook();
+        if (cached && seen === epoch) {
+          loadedFor = token;
+          publish({
+            entries: mergeEntries(cached.entries),
+            phoneStars: mergeStars(cached.phoneStars),
+            canShareWithCompany: cached.canShareWithCompany,
+            canShareWithPlatform: cached.canShareWithPlatform,
+          });
+          return "ok" as const;
+        }
+      }
       return result;
     }
     loadedFor = token;
@@ -87,10 +102,53 @@ export async function ensureAddressBookLoaded(apiUrl: string, token: string): Pr
     });
     removedEntryIds.clear();
     removedStarKeys.clear();
+    await rememberAddressBook(result);
     return "ok" as const;
   });
   inflight = { token, task };
   return task;
+}
+
+export async function reloadAddressBook(apiUrl: string, token: string): Promise<void> {
+  const result = await readAddressBook(apiUrl, token);
+  if (typeof result === "string" || epoch === 0) {
+    return;
+  }
+  loadedFor = token;
+  publish({
+    entries: mergeEntries(result.entries),
+    phoneStars: mergeStars(result.phoneStars),
+    canShareWithCompany: result.canShareWithCompany,
+    canShareWithPlatform: result.canShareWithPlatform,
+  });
+  removedEntryIds.clear();
+  removedStarKeys.clear();
+  await rememberAddressBook(result);
+}
+
+async function cachedAddressBook() {
+  try {
+    const user = await readStoredUser();
+    return user ? await readAddressBookCache(user.id) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function rememberAddressBook(result: {
+  entries: AddressBookSnapshot["entries"];
+  phoneStars: AddressBookSnapshot["phoneStars"];
+  canShareWithCompany: boolean;
+  canShareWithPlatform: boolean;
+}): Promise<void> {
+  try {
+    const user = await readStoredUser();
+    if (user) {
+      await writeAddressBookCache(user.id, result);
+    }
+  } catch {
+    // The in-memory book is already showing. The next successful read writes the cache.
+  }
 }
 
 /** Reads device addresses when permission is already granted. Does not prompt. */

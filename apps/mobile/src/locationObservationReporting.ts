@@ -1,4 +1,5 @@
 import type { LocationObservationRequest } from "@groundops/contracts";
+import * as Crypto from "expo-crypto";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
 import * as TaskManager from "expo-task-manager";
@@ -7,7 +8,8 @@ import { resolveApiUrl } from "./apiUrl";
 import { availabilityCheckInMs } from "./availability";
 import { reportLocationObservation } from "./calendarClient";
 import { distanceMeters } from "./guidance";
-import { readStoredSession } from "./sessionStore";
+import { enqueueObservation } from "./locationOutbox";
+import { readStoredSession, readStoredUser } from "./sessionStore";
 
 export const locationObservationTaskName = "groundops-location-observations";
 
@@ -46,6 +48,7 @@ export async function reportEligibleLocationFix(
   const accuracy = location.coords.accuracy;
   const activeSortieId = await readRaw(activeSortieKey);
   const fix: LocationObservationRequest = {
+    id: Crypto.randomUUID(),
     observedAt: new Date(location.timestamp).toISOString(),
     latitude: location.coords.latitude,
     longitude: location.coords.longitude,
@@ -77,8 +80,21 @@ export async function reportEligibleLocationFix(
       longitude: fix.longitude,
       at: Date.now(),
     });
+    return "ok";
   }
-  return result;
+  if (result === "unreachable") {
+    const user = await readStoredUser().catch(() => null);
+    if (user && fix.id) {
+      await enqueueObservation(user.id, { ...fix, id: fix.id });
+      await writeLastSent({
+        latitude: fix.latitude,
+        longitude: fix.longitude,
+        at: Date.now(),
+      });
+      return "ok";
+    }
+  }
+  return result === "unreachable" ? "rejected" : result;
 }
 
 export async function startLocationObservationUpdates(): Promise<boolean> {

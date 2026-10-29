@@ -89,7 +89,7 @@ Dragging a sortie revises that same sortie's arrival and marks the arrival autho
 - On week and day, dragging the hour grid scrolls it. A long-press on the block gives haptic feedback, and the drag that follows moves the arrival by the same day and minute delta. Times snap to 15 minutes. The block stays on the snapped slot through confirmation and the save, and returns to its previous time if the move is cancelled or the save fails.
 - On month, dragging a chip to another day shifts the arrival by whole days and keeps the clock time. The day delta is measured from the cached start day.
 
-A failed revise leaves the sortie and the cache unchanged. The block returns to the times from the last successful read. The screen says the sortie was not saved, or that location is required when the driver has no stored fix. When the server cannot be reached, drag is refused. When the app returns to the foreground, the open calendar reads again, so a window recomputed from a later fix can appear.
+A failed revise leaves the sortie and the cache unchanged. The block returns to the times from the last successful read. The screen says the sortie was not saved, or that location is required when the driver has no stored fix. While the server cannot be reached, author, revise, and drag are applied on the device as slice 014 defines. The server write is what appends the event and replaces the window. When the app returns to the foreground, the open calendar reads again, so a window recomputed from a later fix can appear.
 
 In the same transaction as the sortie write, the server appends one operational event. Authoring appends `sortie.created`. Revising, including a drag, appends `sortie.revised`. The event stores the sortie id, the label, the interval, the passenger name, the phone, and the ordered stops after the write. Current state stays on the sortie row and its stop rows. A rejected author or revise writes no sortie change and no event. The client does not rebuild the calendar from events.
 
@@ -97,7 +97,7 @@ The client reads the calendar over HTTP for the range on screen. Month, week, da
 
 A failed author or revise leaves the cache unchanged. After a successful author or revise, the client reads the calendar again, and that read replaces the cache. When that follow-up read fails, the server has the change, the cache stays as it was, and the screen says the calendar could not be refreshed.
 
-The month, week, day, and agenda views are drawn immediately. Sorties appear when the cache or the server read returns. When the server cannot be reached, the person can still switch month, week, day, and agenda, and can move with previous, next, and today on a date scope. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days. A period that was never fetched is empty. Author, revise, and drag are refused. When no range has ever been fetched, the grid is still shown and the screen says the calendar could not be loaded.
+The month, week, day, and agenda views are drawn immediately. Sorties appear when the cache or the server read returns. When the server cannot be reached, the person can still switch month, week, day, and agenda, and can move with previous, next, and today on a date scope. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days. A period that was never fetched is empty of server sorties. Author, revise, and drag still apply, as slice 014 defines, and a pending sortie is shown on the days its provisional window covers. When no range has ever been fetched, the grid is still shown and the screen says the calendar could not be loaded.
 
 This slice does not publish on NATS. Another session sees a change on its next calendar read.
 
@@ -159,7 +159,7 @@ A stop is not a driving route and not a place id. Authored wait minutes on a sto
 | No sortie | Sortie authored | The server accepts the dialog, writes the sortie, its stops, and a `sortie.created` event, and the client reads the calendar again. |
 | Sortie authored | Sortie revised | The server updates the sortie and replaces its stops, recomputes the cached window, appends `sortie.revised`, and the client reads the calendar again. A drag sends the new arrival and the existing label, passenger fields, and stops. |
 | Sortie with a cached window | Window recomputed | A new location observation is at least five miles from the computation coordinate, or is already at the next stop while that coordinate is not, the cached end is still in the future, and the approach still starts from the driver's position. A following sortie is recomputed when the previous destination it starts from changes. The server replaces the cached start and end and appends `sortie.schedule_computed`. |
-| Calendar reachable | Cached calendar | The server cannot be reached. The person can still change scope and period. The screen shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are refused. |
+| Calendar reachable | Cached calendar | The server cannot be reached. The person can still change scope and period. The screen shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are applied on the device, as slice 014 defines. The event is appended when the server accepts the command. |
 | Signed in | Signed out | The server revokes the session presented by the client, as slice 001 defines. The client deletes the calendar cache. |
 
 No duty, availability, responsibility, or guidance state changes.
@@ -190,7 +190,7 @@ A rejected session creates no driver and no sortie. No stops, a stop with no coo
 
 **Move.** On week and day, dragging the hour grid scrolls it. Moving a block starts with a long-press, which gives haptic feedback, followed by a drag. Dropped times snap to 15 minutes. The block stays where it was dropped until the person confirms, and through the save; it returns if they cancel or the save fails. The duration is not edited. On month, dragging a chip to another day shifts the arrival by whole days and keeps the clock time.
 
-When the server cannot be reached and a range is cached, month, week, day, previous, next, and today stay available. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag are unavailable. A period that was never fetched is empty.
+When the server cannot be reached and a range is cached, month, week, day, previous, next, and today stay available. Tapping a day still opens that day. The grid shows cached sorties that fall on the visible days and says the calendar could not be refreshed. Author, revise, and drag stay available, as slice 014 defines. A period that was never fetched is empty of server sorties.
 
 On every platform a persistent bottom bar opens Navigation, New Sortie, Settings, and Calendar. Opening Calendar shows day view. Another Calendar tap while Calendar is already open rotates day → week → month → agenda → day. Leaving the calendar returns to Navigation. Sign out is on Settings. The calendar has no sign-out action.
 
@@ -198,7 +198,7 @@ The person sees a failure in these cases:
 
 - The calendar request fails and no range is cached. The grid is shown and the screen says the calendar could not be loaded.
 - The calendar request fails and a range is cached. The screen shows that range and says the calendar could not be refreshed.
-- Author, revise, or drag is rejected, or the network is unreachable. The screen says the sortie was not saved. The calendar and the cache stay as they were. A dragged block returns to the times from the last successful read.
+- Author, revise, or drag is rejected by the server. The screen says the sortie was not saved. The calendar and the cache stay as they were. A dragged block returns to the times from the last successful read. While the network is unreachable, the edit is kept and shown as slice 014 defines.
 - A follow-up read after a successful author or revise fails. The screen says the calendar could not be refreshed. The cache stays as it was.
 - The server rejects the session. The app clears the stored token and the calendar cache and returns to sign-in, as slice 001 defines.
 - Sign-out fails because the network or server is unreachable. The person stays signed in and the screen says that sign-out failed, as slice 001 defines. The cache stays.
@@ -273,7 +273,7 @@ The slice works when all of the following are true on the local stack:
 8. No stops, an incomplete stop row, a phone number that is not ten digits, or a missing location observation creates no sortie and no event. A failed routing call creates no sortie. An omitted arrival is now plus the drive to the first stop, and the sortie records that the arrival was not authored.
 9. Dragging a sortie on the week or day grid shifts the arrival, snapped to 15 minutes, and the server recomputes the cached start and end. The block cannot be resized. Dragging a chip to another day on the month grid shifts the arrival by whole days and keeps the clock time. A failed drop leaves the previous times.
 10. A missing, unknown, or revoked session is rejected on every endpoint in section 8. A session cannot revise another driver's sortie.
-11. After a successful read, when the server cannot be reached, the person can switch month, week, day, and agenda, move previous, next, and today on a date scope, and open a day from the month grid or a week day heading. Cached sorties that fall on the visible days stay visible. The device does not apply an author, revise, or drag.
+11. After a successful read, when the server cannot be reached, the person can switch month, week, day, and agenda, move previous, next, and today on a date scope, and open a day from the month grid or a week day heading. Cached sorties that fall on the visible days stay visible. The device applies an author, revise, or drag as slice 014 defines. The server write is what appends the event and replaces the window.
 12. When the server cannot be reached and no range is cached, the grid is shown and the screen says the calendar could not be loaded.
 13. Sign-out revokes that session and clears the local calendar cache.
 14. On every platform the calendar opens from the bottom bar and stays available during guidance and arrival. Choosing a Where to? suggestion on iOS or Android previews the route, then writes an immediate one-stop sortie only after the driver chooses Passenger or Reposition, and does not open the dialog. A sortie whose stops all have passenger off is drawn with the reposition theme color on month chips and on day and week blocks. A sortie with any passenger stop keeps the usual color. New Sortie opens the author dialog from any destination. On web, Navigation still shows identity and live-connection state. Sign out is on Settings.
@@ -297,6 +297,5 @@ The slice works when all of the following are true on the local stack:
 - Conflict detection, feasibility, and schedule margins
 - Another company's occupied time on this calendar
 - Live push of calendar changes to a connected session
-- Authoring, revising, or dragging while the server cannot be reached
 - Company management, renaming the company, and a second company for the same driver
 - Roles

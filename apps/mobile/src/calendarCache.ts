@@ -1,7 +1,7 @@
 import type { AvailabilityInterval, Sortie, SortieStop } from "@groundops/contracts";
 import { taskSortieType } from "@groundops/contracts";
-import * as SQLite from "expo-sqlite";
 import { parseAvailabilityIntervals } from "./calendarTime";
+import { localDatabase } from "./localDatabase";
 
 export type CachedCalendar = {
   userId: string;
@@ -10,8 +10,6 @@ export type CachedCalendar = {
   sorties: Sortie[];
   availability: AvailabilityInterval[];
 };
-
-let opening: Promise<SQLite.SQLiteDatabase> | null = null;
 
 export async function readCalendarCache(userId: string): Promise<CachedCalendar | null> {
   const db = await database();
@@ -57,28 +55,8 @@ export async function clearCalendarCache(): Promise<void> {
   await db.execAsync("DELETE FROM calendar_cache");
 }
 
-function database(): Promise<SQLite.SQLiteDatabase> {
-  opening ??= openDatabase();
-  return opening;
-}
-
-async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
-  const db = await SQLite.openDatabaseAsync("groundops-calendar");
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS calendar_cache (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      user_id TEXT NOT NULL,
-      range_from TEXT NOT NULL,
-      range_to TEXT NOT NULL,
-      sorties_json TEXT NOT NULL,
-      availability_json TEXT NOT NULL DEFAULT '[]'
-    );
-  `);
-  const columns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(calendar_cache)");
-  if (!columns.some((column) => column.name === "availability_json")) {
-    await db.execAsync("ALTER TABLE calendar_cache ADD COLUMN availability_json TEXT NOT NULL DEFAULT '[]'");
-  }
-  return db;
+function database(): ReturnType<typeof localDatabase> {
+  return localDatabase();
 }
 
 function parseStoredAvailability(value: string): AvailabilityInterval[] | null {
@@ -89,6 +67,10 @@ function parseStoredAvailability(value: string): AvailabilityInterval[] | null {
     return null;
   }
   return parseAvailabilityIntervals(parsed);
+}
+
+export function parseStoredSortie(value: unknown): Sortie | null {
+  return isSortie(value) ? value : null;
 }
 
 function parseSorties(value: string): Sortie[] | null {

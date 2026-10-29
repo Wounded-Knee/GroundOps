@@ -117,6 +117,8 @@ Clients may:
 
 but clients must not independently establish authoritative operational state.
 
+A client may hold a pending command and show a provisional window for an author, revise, or drag that the server has not yet accepted. That display is not authoritative state and it is not history. The server write and its operational event are what make the sortie authoritative. Assignment, responsibility, completion, and facility state stay server-authoritative.
+
 A useful conceptual flow is:
 
 **Client action/observation → server processing → authoritative state → event/history → realtime propagation**

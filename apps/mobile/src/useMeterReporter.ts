@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { ReplaceMeterReadingRequest } from "@groundops/contracts";
 import { replaceMeterReading } from "./calendarClient";
+import { clearMeterOutbox, readMeterOutbox, writeMeterOutbox } from "./locationOutbox";
 import { reportDelayMs } from "./liveActivity";
 
-export function useMeterReporter(apiUrl: string, token: string, onUnauthorized: () => void): {
+export function useMeterReporter(apiUrl: string, token: string, userId: string, onUnauthorized: () => void): {
   queueMeterReport: (report: ReplaceMeterReadingRequest, immediate: boolean) => void;
   resetMeterReporter: () => void;
 } {
@@ -22,11 +23,16 @@ export function useMeterReporter(apiUrl: string, token: string, onUnauthorized: 
       return;
     }
     sentAtRef.current = Date.now();
+    await writeMeterOutbox(userId, report);
     const result = await replaceMeterReading(apiUrl, tokenRef.current, report);
     if (result === "unauthorized") {
       onUnauthorizedRef.current();
+      return;
     }
-  }, [apiUrl]);
+    if (typeof result === "object" && pendingRef.current === null) {
+      await clearMeterOutbox(userId);
+    }
+  }, [apiUrl, userId]);
 
   const queueMeterReport = useCallback(
     (report: ReplaceMeterReadingRequest, immediate: boolean) => {
@@ -63,6 +69,18 @@ export function useMeterReporter(apiUrl: string, token: string, onUnauthorized: 
     pendingRef.current = null;
     sentAtRef.current = null;
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readMeterOutbox(userId).then((stored) => {
+      if (!cancelled && stored) {
+        queueMeterReport(stored, true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [queueMeterReport, userId]);
 
   useEffect(() => resetMeterReporter, [resetMeterReporter]);
 

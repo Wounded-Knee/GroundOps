@@ -10,10 +10,12 @@ import {
 } from "./availability";
 import { checkInAvailability, putAvailability, readAvailability } from "./availabilityClient";
 import { recordAvailabilityCheckIn } from "./availabilityKeepalive";
+import { readAvailabilityCache, writeAvailabilityCache } from "./readCache";
 
 export function useAvailabilitySession(input: {
   apiUrl: string;
   sessionToken: string | null;
+  userId: string | null;
   onSessionRejected: () => Promise<void>;
   onCalendarChanged: () => void;
 }): {
@@ -23,7 +25,7 @@ export function useAvailabilitySession(input: {
   availabilityMessage: string | null;
   toggleAvailability: () => void;
 } {
-  const { apiUrl, sessionToken } = input;
+  const { apiUrl, sessionToken, userId } = input;
   const onSessionRejectedRef = useRef(input.onSessionRejected);
   const onCalendarChangedRef = useRef(input.onCalendarChanged);
   onSessionRejectedRef.current = input.onSessionRejected;
@@ -154,12 +156,25 @@ export function useAvailabilitySession(input: {
         return;
       }
       if (result === "unreachable") {
-        setAvailabilityMessage("Availability could not be loaded.");
+        const cached = userId ? await readAvailabilityCache(userId) : null;
+        if (cancelled) {
+          return;
+        }
+        if (!cached) {
+          setAvailabilityMessage("Availability could not be loaded.");
+          return;
+        }
+        loaded = true;
+        setAvailabilityLoaded(true);
+        remember(cached);
         return;
       }
       loaded = true;
       setAvailabilityLoaded(true);
       remember(result);
+      if (userId) {
+        await writeAvailabilityCache(userId, result);
+      }
       for (const envelope of pending) {
         applyLive(envelope);
       }
@@ -172,7 +187,7 @@ export function useAvailabilitySession(input: {
       unsubscribe();
       toggleAvailabilityRef.current = () => undefined;
     };
-  }, [apiUrl, sessionToken]);
+  }, [apiUrl, sessionToken, userId]);
 
   return { availability, availabilityLoaded, availabilityBusy, availabilityMessage, toggleAvailability };
 }

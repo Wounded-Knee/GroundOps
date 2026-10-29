@@ -1,4 +1,5 @@
 import type { GeoCoordinate } from "@groundops/contracts";
+import { sql } from "drizzle-orm";
 import {
   boolean,
   doublePrecision,
@@ -94,13 +95,19 @@ export const locationObservation = pgTable(
     driverId: uuid("driver_id")
       .notNull()
       .references(() => driver.id),
+    clientId: uuid("client_id"),
     sortieId: uuid("sortie_id").references(() => sortie.id),
     observedAt: timestamp("observed_at", { withTimezone: true, mode: "date" }).notNull(),
     latitude: doublePrecision("latitude").notNull(),
     longitude: doublePrecision("longitude").notNull(),
     accuracyMeters: doublePrecision("accuracy_meters"),
   },
-  (table) => [index("location_observation_driver_id_observed_at_idx").on(table.driverId, table.observedAt)],
+  (table) => [
+    index("location_observation_driver_id_observed_at_idx").on(table.driverId, table.observedAt),
+    uniqueIndex("location_observation_driver_client_id_key")
+      .on(table.driverId, table.clientId)
+      .where(sql`${table.clientId} IS NOT NULL`),
+  ],
 );
 
 /** Latest meter snapshot for one driver. The navigating phone replaces this row. */

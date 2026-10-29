@@ -36,7 +36,7 @@ These directories are the required shape. The scaffold creates them. Product beh
 
 The client is **Expo + React Native + TypeScript**, as the architectural specification requires.
 
-The client displays server state, sends commands, reports observations, and receives live updates. It does not establish authoritative operational state.
+The client displays server state, sends commands, reports observations, and receives live updates. It may show a pending author, revise, or drag with a provisional window until the server accepts that command. It does not establish authoritative operational state.
 
 ## 2.2 Server
 
@@ -52,7 +52,7 @@ Domain rules are plain TypeScript modules. The HTTP framework does not own them.
 
 Commands, queries, and observations are **HTTP JSON**.
 
-A location observation is one of those HTTP writes. The schedule computation that turns an arrival and that position into a cached sortie window also runs on the server, in the request that needs it. The routing call is provider-replaceable. Its result is stored on the sortie row, including the address of the place the start drive used. A location fix is published on the bus addressed to that user. The gateway delivers it only to that user's sessions.
+A location observation is one of those HTTP writes. The schedule computation that turns an arrival and that position into a cached sortie window also runs on the server, in the request that needs it. The client may show a provisional window before that request is accepted. The traffic-aware computation and the stored window still happen on the server when the command is accepted. The routing call is provider-replaceable. Its result is stored on the sortie row, including the address of the place the start drive used. A location fix is published on the bus addressed to that user. The gateway delivers it only to that user's sessions.
 
 The server commits authoritative state, then publishes the resulting domain event. Connected clients hear that event through the server's WebSocket gateway.
 

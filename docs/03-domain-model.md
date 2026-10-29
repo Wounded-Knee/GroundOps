@@ -50,11 +50,13 @@ An explicit act by a person: accepting responsibility, rejecting an assignment, 
 
 An assertion is evidence of what the person did. It becomes authoritative operational state only after the server accepts the corresponding command.
 
+A pending author, revise, or drag is that kind of assertion. The client may display it with a provisional window before the server has accepted the command. That display is not authoritative state and it is not an operational event. The event is written when the server accepts the command.
+
 ## 2.4 Authoritative state
 
 The server's committed operational facts: who is responsible, whether a sortie is complete, whether a driver is available, what a facility protocol says a participant's state is, and which vehicle the driver is currently operating.
 
-Clients display state, send commands, and report observations. A client does not establish authoritative assignment, responsibility, completion, or facility state on its own.
+Clients display state, send commands, and report observations. A client may show a pending command and a provisional window. A client does not establish authoritative assignment, responsibility, completion, or facility state on its own.
 
 ## 2.5 Current state and history
 

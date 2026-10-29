@@ -4,9 +4,15 @@ import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
-import { clearCalendarCache } from "./calendarCache";
+import { clearOfflineStore } from "./localDatabase";
 import { createSession, readCurrentUser, revokeSession } from "./sessionClient";
-import { deleteStoredSession, readStoredSession, writeStoredSession } from "./sessionStore";
+import {
+  deleteStoredSession,
+  readStoredSession,
+  readStoredUser,
+  writeStoredSession,
+  writeStoredUser,
+} from "./sessionStore";
 import { stopLocationObservationUpdates } from "./locationObservationReporting";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -35,6 +41,7 @@ export type Phase =
       user: User;
       live: "authenticated" | "closed";
       signOutMessage: string | null;
+      profileFresh: boolean;
     };
 
 export function useSession(input: {
@@ -100,6 +107,48 @@ export function useSession(input: {
     };
   }, [apiUrl]);
 
+  const profileToken = phase.status === "signed-in" ? phase.token : null;
+  const profileFresh = phase.status === "signed-in" ? phase.profileFresh : true;
+
+  useEffect(() => {
+    if (!profileToken || profileFresh) {
+      return;
+    }
+    const token = profileToken;
+    let cancelled = false;
+    const refresh = async () => {
+      const current = await readCurrentUser(apiUrl, token);
+      if (cancelled) {
+        return;
+      }
+      if (current === "unauthorized") {
+        await onSessionRejected();
+        return;
+      }
+      if (current === "unreachable") {
+        return;
+      }
+      try {
+        await writeStoredUser(current);
+      } catch {
+        // The shell already has the cached profile. The next retry writes it again.
+      }
+      setPhase((existing) =>
+        existing.status === "signed-in" && existing.token === token
+          ? { ...existing, user: current, profileFresh: true }
+          : existing,
+      );
+    };
+    void refresh();
+    const timer = setInterval(() => {
+      void refresh();
+    }, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [apiUrl, onSessionRejected, profileFresh, profileToken]);
+
   const onSignIn = useCallback(async () => {
     setSubmitting(true);
     setPhase({ status: "signed-out", message: null });
@@ -135,6 +184,7 @@ export function useSession(input: {
         return;
       }
       await writeStoredSession(created.token);
+      await writeStoredUser(created.user);
       resetChromeRef.current();
       setPhase({
         status: "signed-in",
@@ -142,6 +192,7 @@ export function useSession(input: {
         user: created.user,
         live: "closed",
         signOutMessage: null,
+        profileFresh: true,
       });
     } catch (error) {
       if (__DEV__) {
@@ -216,8 +267,28 @@ async function restoreStoredSession(
     return;
   }
   if (current === "unreachable") {
-    setPhase({ status: "offline", message: "Could not reach the server." });
+    const cached = await readCachedUser();
+    if (cancelled()) {
+      return;
+    }
+    if (!cached) {
+      setPhase({ status: "offline", message: "Could not reach the server." });
+      return;
+    }
+    setPhase({
+      status: "signed-in",
+      token,
+      user: cached,
+      live: "closed",
+      signOutMessage: null,
+      profileFresh: false,
+    });
     return;
+  }
+  try {
+    await writeStoredUser(current);
+  } catch {
+    // Sign-in still proceeds. The next profile read writes the cache.
   }
   setPhase({
     status: "signed-in",
@@ -225,12 +296,21 @@ async function restoreStoredSession(
     user: current,
     live: "closed",
     signOutMessage: null,
+    profileFresh: true,
   });
+}
+
+async function readCachedUser(): Promise<User | null> {
+  try {
+    return await readStoredUser();
+  } catch {
+    return null;
+  }
 }
 
 async function forgetCalendarCache(): Promise<void> {
   try {
-    await clearCalendarCache();
+    await clearOfflineStore();
   } catch {
     // A later sign-in discards a cache stored for a different user.
   }

@@ -1,6 +1,7 @@
 import type { RealtimeEnvelope } from "@groundops/contracts";
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { readActivity } from "./calendarClient";
+import { readActivityCache, writeActivityCache } from "./readCache";
 import {
   applyEnvelope,
   applySnapshot,
@@ -15,6 +16,7 @@ import { deliverAvailabilityEnvelope } from "./availability";
 export function useAccountActivity(input: {
   apiUrl: string;
   sessionToken: string | null;
+  userId: string | null;
   generation: MutableRefObject<number>;
   onSessionRejected: () => Promise<void>;
   onCalendarChanged: () => void;
@@ -24,7 +26,7 @@ export function useAccountActivity(input: {
   setActivity: Dispatch<SetStateAction<AccountActivity>>;
   socketLink: SocketState;
 } {
-  const { apiUrl, sessionToken, generation } = input;
+  const { apiUrl, sessionToken, userId, generation } = input;
   const onSessionRejectedRef = useRef(input.onSessionRejected);
   const onCalendarChangedRef = useRef(input.onCalendarChanged);
   const setLiveRef = useRef(input.setLive);
@@ -33,6 +35,22 @@ export function useAccountActivity(input: {
   setLiveRef.current = input.setLive;
   const [activity, setActivity] = useState<AccountActivity>(emptyActivity);
   const [socketLink, setSocketLink] = useState<SocketState>("idle");
+
+  useEffect(() => {
+    if (!userId) {
+      setActivity(emptyActivity);
+      return;
+    }
+    let cancelled = false;
+    void readActivityCache(userId).then((cached) => {
+      if (!cancelled && cached) {
+        setActivity(applySnapshot(cached));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   useEffect(() => {
     if (!sessionToken) {
@@ -112,8 +130,16 @@ export function useAccountActivity(input: {
         await onSessionRejectedRef.current();
         return;
       }
-      if (snapshot !== "unreachable") {
+      if (snapshot === "unreachable") {
+        const cached = userId ? await readActivityCache(userId) : null;
+        if (cached) {
+          state = applySnapshot(cached);
+        }
+      } else {
         state = applySnapshot(snapshot);
+        if (userId) {
+          await writeActivityCache(userId, snapshot);
+        }
       }
       ready = true;
       let calendarChanged = false;
