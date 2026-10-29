@@ -1,6 +1,7 @@
 import { StyleSheet, View } from "react-native";
 import { AvailabilityStatus } from "./AvailabilityStatus";
-import { MeterStrip, type MeterDisplay } from "./MeterStrip";
+import type { MeterDisplay } from "./meterDisplay";
+import { MeterStrip } from "./MeterStrip";
 import { progressFraction } from "./meter";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";

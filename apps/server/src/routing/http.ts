@@ -1,12 +1,8 @@
 import type { DrivingRoute, GeoCoordinate, PlaceSuggestion } from "@groundops/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { ActiveSession } from "../identity/sessions.js";
-
-const coordinateSchema = z.object({
-  latitude: z.number().gte(-90).lte(90),
-  longitude: z.number().gte(-180).lte(180),
-});
+import { sendDomainResult } from "../http/result.js";
+import { coordinateSchema } from "../http/schemas.js";
 
 const placeSuggestionsBody = z.object({
   query: z.string(),
@@ -18,10 +14,7 @@ const drivingRouteBody = z.object({
   destination: coordinateSchema,
 });
 
-const reverseGeocodeBody = coordinateSchema;
-
 export type RoutingDeps = {
-  findSession: (authorization: string | undefined) => Promise<ActiveSession | null>;
   suggestPlaces: (query: string, bias: GeoCoordinate | null) => Promise<PlaceSuggestion[] | "failed">;
   computeDrivingRoute: (
     origin: GeoCoordinate,
@@ -32,8 +25,7 @@ export type RoutingDeps = {
 
 export function registerRoutingRoutes(app: FastifyInstance, deps: RoutingDeps): void {
   app.post("/place-suggestions", async (request, reply) => {
-    const session = await deps.findSession(oneHeader(request.headers.authorization));
-    if (!session) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
 
@@ -49,14 +41,13 @@ export function registerRoutingRoutes(app: FastifyInstance, deps: RoutingDeps): 
 
     const suggestions = await deps.suggestPlaces(query, parsed.data.bias ?? null);
     if (suggestions === "failed") {
-      return reply.code(502).send({ error: "provider failed" });
+      return sendDomainResult(reply, suggestions);
     }
     return reply.send({ suggestions });
   });
 
   app.post("/driving-routes", async (request, reply) => {
-    const session = await deps.findSession(oneHeader(request.headers.authorization));
-    if (!session) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
 
@@ -66,34 +57,26 @@ export function registerRoutingRoutes(app: FastifyInstance, deps: RoutingDeps): 
     }
 
     const route = await deps.computeDrivingRoute(parsed.data.origin, parsed.data.destination);
-    if (route === "failed") {
-      return reply.code(502).send({ error: "provider failed" });
-    }
-    if (route === "no-route") {
-      return reply.code(422).send({ error: "no route" });
+    if (typeof route === "string") {
+      return sendDomainResult(reply, route);
     }
     return reply.send({ route });
   });
 
   app.post("/reverse-geocode", async (request, reply) => {
-    const session = await deps.findSession(oneHeader(request.headers.authorization));
-    if (!session) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
 
-    const parsed = reverseGeocodeBody.safeParse(request.body);
+    const parsed = coordinateSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
 
     const address = await deps.lookupAddress(parsed.data);
     if (address === null || address.trim().length === 0) {
-      return reply.code(502).send({ error: "provider failed" });
+      return sendDomainResult(reply, "failed");
     }
     return reply.send({ address: address.trim() });
   });
-}
-
-function oneHeader(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
 }

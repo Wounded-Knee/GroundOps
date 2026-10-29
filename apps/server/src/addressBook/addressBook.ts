@@ -7,7 +7,7 @@ import type {
   User,
 } from "@groundops/contracts";
 import { and, asc, desc, eq, exists, inArray, or, sql } from "drizzle-orm";
-import { ensureDriver } from "../calendar/calendar.js";
+import { ensureDriver, type DriverDb } from "../identity/driver.js";
 import { db } from "../db.js";
 import { addressBookCompanyShare, addressBookEntry, addressBookPhoneStar, driverCompany } from "../schema.js";
 
@@ -77,7 +77,7 @@ export async function createAddressBookEntry(
   const nickname = input.nickname.trim();
   const placeName = input.placeName.trim();
   const label = input.label.trim();
-  if (label.length === 0 || !coordinateOk(input.latitude, input.longitude)) {
+  if (label.length === 0) {
     return "invalid";
   }
   const author = await ensureDriver(person);
@@ -112,7 +112,7 @@ export async function updateAddressBookEntry(
   if (moves && (label === undefined || latitude === undefined || longitude === undefined)) {
     return "invalid";
   }
-  if (label !== undefined && (label.length === 0 || latitude === undefined || longitude === undefined || !coordinateOk(latitude, longitude))) {
+  if (label !== undefined && (label.length === 0 || latitude === undefined || longitude === undefined)) {
     return "invalid";
   }
   if (nickname === undefined && placeName === undefined && label === undefined && patch.favorite === undefined) {
@@ -322,10 +322,24 @@ function presentEntry(row: EntryRow, flags: { owned: boolean; companyShared: boo
   };
 }
 
-function presentStar(row: typeof addressBookPhoneStar.$inferSelect): PhoneAddressStar {
-  return { contactId: row.contactId, addressId: row.addressId };
+/** Deletes saved places, company grants, and phone stars for one driver. */
+export async function deleteOwnedByDriver(tx: DriverDb, driverId: string): Promise<void> {
+  const entries = await tx
+    .select({ id: addressBookEntry.id })
+    .from(addressBookEntry)
+    .where(eq(addressBookEntry.driverId, driverId));
+  if (entries.length > 0) {
+    await tx.delete(addressBookCompanyShare).where(
+      inArray(
+        addressBookCompanyShare.entryId,
+        entries.map((entry) => entry.id),
+      ),
+    );
+  }
+  await tx.delete(addressBookEntry).where(eq(addressBookEntry.driverId, driverId));
+  await tx.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, driverId));
 }
 
-function coordinateOk(latitude: number, longitude: number): boolean {
-  return latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+function presentStar(row: typeof addressBookPhoneStar.$inferSelect): PhoneAddressStar {
+  return { contactId: row.contactId, addressId: row.addressId };
 }

@@ -1,8 +1,9 @@
 import type { AddressBookEntryPatch } from "@groundops/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
-import { findActiveSession } from "../identity/sessions.js";
-import { readBearer } from "../identity/tokens.js";
+import { sendDomainResult } from "../http/result.js";
+import { coordinateSchema } from "../http/schemas.js";
+import { registerRequestSession } from "../http/session.js";
 import {
   createAddressBookEntry,
   deleteAddressBookEntry,
@@ -20,16 +21,16 @@ const createBody = z.object({
   nickname: z.string().optional().default(""),
   placeName: z.string().optional().default(""),
   label: z.string(),
-  latitude: z.number().gte(-90).lte(90),
-  longitude: z.number().gte(-180).lte(180),
+  latitude: coordinateSchema.shape.latitude,
+  longitude: coordinateSchema.shape.longitude,
 });
 
 const patchBody = z.object({
   nickname: z.string().optional(),
   placeName: z.string().optional(),
   label: z.string().optional(),
-  latitude: z.number().gte(-90).lte(90).optional(),
-  longitude: z.number().gte(-180).lte(180).optional(),
+  latitude: coordinateSchema.shape.latitude.optional(),
+  longitude: coordinateSchema.shape.longitude.optional(),
   favorite: z.boolean().optional(),
 });
 
@@ -43,81 +44,78 @@ const phoneStarBody = z.object({
 });
 
 export function registerAddressBookRoutes(app: FastifyInstance): void {
+  registerRequestSession(app);
+
   app.get("/address-book", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    return reply.send(await readAddressBook(active.user));
+    return reply.send(await readAddressBook(request.session.user));
   });
 
   app.post("/address-book", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const parsed = createBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const created = await createAddressBookEntry(active.user, parsed.data);
+    const created = await createAddressBookEntry(request.session.user, parsed.data);
     if (created === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
+      return sendDomainResult(reply, created);
     }
     return reply.code(201).send(created);
   });
 
   app.post("/address-book/phone-stars", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const parsed = phoneStarBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const starred = await starPhoneAddress(active.user, parsed.data);
+    const starred = await starPhoneAddress(request.session.user, parsed.data);
     if (starred === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
+      return sendDomainResult(reply, starred);
     }
     return reply.code(204).send();
   });
 
   app.delete("/address-book/phone-stars", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const parsed = phoneStarBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const cleared = await unstarPhoneAddress(active.user, parsed.data);
+    const cleared = await unstarPhoneAddress(request.session.user, parsed.data);
     if (cleared === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
+      return sendDomainResult(reply, cleared);
     }
     return reply.code(204).send();
   });
 
   app.post("/address-book/:id/company-share", async (request, reply) => {
-    return shareRoute(request.headers.authorization, request.params, reply, shareAddressBookEntryWithCompany);
+    return shareRoute(request.session, request.params, reply, shareAddressBookEntryWithCompany);
   });
 
   app.delete("/address-book/:id/company-share", async (request, reply) => {
-    return shareRoute(request.headers.authorization, request.params, reply, unshareAddressBookEntryWithCompany);
+    return shareRoute(request.session, request.params, reply, unshareAddressBookEntryWithCompany);
   });
 
   app.post("/address-book/:id/platform-share", async (request, reply) => {
-    return shareRoute(request.headers.authorization, request.params, reply, shareAddressBookEntryWithPlatform);
+    return shareRoute(request.session, request.params, reply, shareAddressBookEntryWithPlatform);
   });
 
   app.delete("/address-book/:id/platform-share", async (request, reply) => {
-    return shareRoute(request.headers.authorization, request.params, reply, unshareAddressBookEntryWithPlatform);
+    return shareRoute(request.session, request.params, reply, unshareAddressBookEntryWithPlatform);
   });
 
   app.patch("/address-book/:id", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const params = idParams.safeParse(request.params);
@@ -144,71 +142,48 @@ export function registerAddressBookRoutes(app: FastifyInstance): void {
     if (parsed.data.favorite !== undefined) {
       patch.favorite = parsed.data.favorite;
     }
-    return sendEntry(reply, await updateAddressBookEntry(active.user, params.data.id, patch));
+    const result = await updateAddressBookEntry(request.session.user, params.data.id, patch);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
+    }
+    return reply.send(result);
   });
 
   app.delete("/address-book/:id", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const params = idParams.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const removed = await deleteAddressBookEntry(active.user, params.data.id);
+    const removed = await deleteAddressBookEntry(request.session.user, params.data.id);
     if (removed === "missing") {
-      return reply.code(404).send({ error: "not found" });
+      return sendDomainResult(reply, removed);
     }
     return reply.code(204).send();
   });
 }
 
 async function shareRoute(
-  authorization: string | string[] | undefined,
+  session: { user: Parameters<typeof shareAddressBookEntryWithCompany>[0] } | null,
   params: unknown,
   reply: FastifyReply,
-  share: (person: Parameters<typeof shareAddressBookEntryWithCompany>[0], id: string) => ReturnType<typeof shareAddressBookEntryWithCompany>,
+  share: (
+    person: Parameters<typeof shareAddressBookEntryWithCompany>[0],
+    id: string,
+  ) => ReturnType<typeof shareAddressBookEntryWithCompany>,
 ) {
-  const active = await findPresentedSession(authorization);
-  if (!active) {
+  if (!session) {
     return reply.code(401).send({ error: "unauthorized" });
   }
   const parsed = idParams.safeParse(params);
   if (!parsed.success) {
     return reply.code(400).send({ error: "invalid request" });
   }
-  const result = await share(active.user, parsed.data.id);
-  if (result === "missing") {
-    return reply.code(404).send({ error: "not found" });
-  }
-  if (result === "forbidden") {
-    return reply.code(403).send({ error: "forbidden" });
+  const result = await share(session.user, parsed.data.id);
+  if (typeof result === "string") {
+    return sendDomainResult(reply, result);
   }
   return reply.send(result);
-}
-
-function sendEntry(
-  reply: FastifyReply,
-  result: Awaited<ReturnType<typeof updateAddressBookEntry>>,
-) {
-  if (result === "invalid") {
-    return reply.code(400).send({ error: "invalid request" });
-  }
-  if (result === "missing") {
-    return reply.code(404).send({ error: "not found" });
-  }
-  return reply.send(result);
-}
-
-async function findPresentedSession(authorization: string | string[] | undefined) {
-  const token = readBearer(oneHeader(authorization));
-  if (!token) {
-    return null;
-  }
-  return findActiveSession(token);
-}
-
-function oneHeader(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
 }

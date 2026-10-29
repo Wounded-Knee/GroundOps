@@ -5,17 +5,24 @@ import { setRealtimePublisher } from "./realtime.js";
 import { closeDatabase, pingDatabase } from "./db.js";
 import { registerGateway } from "./gateway.js";
 import { migrateDatabase } from "./migrate.js";
-import { findActiveSession } from "./identity/sessions.js";
-import { readBearer } from "./identity/tokens.js";
+import { readGoogleClientIds } from "./identity/google.js";
+import { registerSessionRoutes } from "./identity/http.js";
+import { registerRequestSession } from "./http/session.js";
 import { registerRoutingRoutes } from "./routing/http.js";
-import { computeDrivingRoute, lookupAddress, suggestPlaces } from "./routing/google.js";
+import { computeDriveDuration, computeDrivingRoute, lookupAddress, suggestPlaces } from "./routing/google.js";
 import { registerCalendarRoutes } from "./calendar/http.js";
 import { registerLocalCors } from "./cors.js";
 import { registerPlatformRoutes } from "./platform/http.js";
-import { registerSessionRoutes } from "./routes.js";
 import { registerAvailabilityRoutes } from "./availability/http.js";
 import { registerAddressBookRoutes } from "./addressBook/http.js";
 import { startAvailabilityMaintenance } from "./availability/maintenance.js";
+
+const googleClientIds = readGoogleClientIds();
+if (googleClientIds.length === 0) {
+  throw new Error(
+    "At least one of GOOGLE_WEB_CLIENT_ID, GOOGLE_ANDROID_CLIENT_ID, or GOOGLE_IOS_CLIENT_ID is required",
+  );
+}
 
 const port = Number(process.env.PORT ?? 3000);
 const host = "0.0.0.0";
@@ -33,20 +40,25 @@ setRealtimePublisher(
 
 await migrateDatabase();
 registerLocalCors(app);
+registerRequestSession(app);
 await app.register(websocket);
-registerSessionRoutes(app);
+registerSessionRoutes(app, googleClientIds);
 registerAvailabilityRoutes(app);
 registerPlatformRoutes(app);
-registerCalendarRoutes(app);
+registerCalendarRoutes(
+  app,
+  {
+    driveDuration: computeDriveDuration,
+    lookupAddress,
+    now: () => new Date(),
+  },
+  {
+    computeDrivingRoute: (origin, destination, intermediates) =>
+      computeDrivingRoute(origin, destination, intermediates),
+  },
+);
 registerAddressBookRoutes(app);
 registerRoutingRoutes(app, {
-  findSession: async (authorization) => {
-    const token = readBearer(authorization);
-    if (!token) {
-      return null;
-    }
-    return findActiveSession(token);
-  },
   suggestPlaces,
   computeDrivingRoute,
   lookupAddress,

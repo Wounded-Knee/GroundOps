@@ -1,45 +1,33 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { findActiveSession } from "../identity/sessions.js";
-import { readBearer } from "../identity/tokens.js";
+import { sendDomainResult } from "../http/result.js";
+import { coordinateSchema, stopSchema, tariffSchema } from "../http/schemas.js";
+import { registerRequestSession } from "../http/session.js";
+import { ensureDriver } from "../identity/driver.js";
 import {
-  assertStopArrival,
-  authorSortie,
-  commenceSortie,
-  completeSortie,
-  passengerLegUnderway,
-  defaultScheduleDeps,
-  ensureDriver,
-  extendStopWait,
-  previewSortie,
-  readActivity,
-  readCalendar,
-  recordObservation,
-  reviseSortie,
-  type ObservationInput,
-  type ScheduleDeps,
-  type SortieInput,
-} from "./calendar.js";
-import { defaultSortieRouteDeps, computeSortieDrivingRoute, type SortieRouteDeps } from "./sortieRoute.js";
-import { applyAutomaticAvailability, applyDeferredAvailability, applyGuidanceAvailability } from "../availability/automatic.js";
-import { readAvailabilityIntervals } from "../availability/availability.js";
+  authorWithAvailability,
+  commenceWithAvailability,
+  completeWithAvailability,
+  driveSortieWithAvailability,
+  extendWaitWithAvailability,
+  loadCalendar,
+  recordWithAvailability,
+  reviseWithAvailability,
+} from "./application.js";
+import { previewSortie } from "./authoring.js";
+import { assertStopArrival } from "./lifecycle.js";
+import { readActivity } from "./activity.js";
 import { clearMeterReading, replaceMeterReading } from "./meterReading.js";
+import type { SortieRouteDeps } from "./sortieRoute.js";
+import { defaultScheduleDeps, type ObservationInput, type ScheduleDeps, type SortieInput } from "./support.js";
 import { readTariff, replaceTariff } from "./tariff.js";
-
-const stopBody = z.object({
-  label: z.string(),
-  latitude: z.number(),
-  longitude: z.number(),
-  waitMinutes: z.number().int().nonnegative(),
-  passenger: z.boolean(),
-});
 
 const writeBody = z.object({
   label: z.string(),
   arrivalAt: z.string().nullable(),
   passengerName: z.string().nullable(),
   passengerPhone: z.string().nullable(),
-  stops: z.array(stopBody),
+  stops: z.array(stopSchema),
 });
 
 const previewBody = writeBody.extend({
@@ -48,8 +36,8 @@ const previewBody = writeBody.extend({
 
 const observationBody = z.object({
   observedAt: z.string(),
-  latitude: z.number(),
-  longitude: z.number(),
+  latitude: coordinateSchema.shape.latitude,
+  longitude: coordinateSchema.shape.longitude,
   accuracyMeters: z.number().nullable(),
   sortieId: z.uuid().nullable().optional(),
 });
@@ -72,20 +60,9 @@ const stopPositionParams = z.object({
   position: z.coerce.number().int().nonnegative(),
 });
 
-const coordinateSchema = z.object({
-  latitude: z.number().gte(-90).lte(90),
-  longitude: z.number().gte(-180).lte(180),
-});
-
 const sortieRouteBody = z.object({
   origin: coordinateSchema,
   firstStopPosition: z.number().int().nonnegative(),
-});
-
-const tariffBody = z.object({
-  flagCents: z.number().int().nonnegative(),
-  perMileCents: z.number().int().nonnegative(),
-  perWaitMinuteCents: z.number().int().nonnegative(),
 });
 
 const meterBody = z.object({
@@ -106,70 +83,59 @@ function guidanceRequested(body: unknown): boolean | "invalid" {
   return parsed.success ? parsed.data.guidance === true : "invalid";
 }
 
+const failedRoute: SortieRouteDeps = {
+  computeDrivingRoute: async () => "failed",
+};
+
 export function registerCalendarRoutes(
   app: FastifyInstance,
   deps: ScheduleDeps = defaultScheduleDeps,
-  routeDeps: SortieRouteDeps = defaultSortieRouteDeps,
+  routeDeps: SortieRouteDeps = failedRoute,
 ): void {
-  async function onLead(user: Parameters<typeof applyAutomaticAvailability>[0]): Promise<void> {
-    await applyAutomaticAvailability(user, "lead", deps.now());
-  }
-
-  async function onAvailable(user: Parameters<typeof applyAutomaticAvailability>[0], event: "commencement" | "conclusion"): Promise<void> {
-    await applyAutomaticAvailability(user, event, deps.now());
-  }
+  registerRequestSession(app);
 
   app.post("/drivers/current", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    const driver = await ensureDriver(active.user);
-    return reply.send(driver);
+    return reply.send(await ensureDriver(request.session.user));
   });
 
   app.get("/fare-rates", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    const tariff = await readTariff(active.user);
+    const tariff = await readTariff(request.session.user);
     if (tariff === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
+      return sendDomainResult(reply, tariff);
     }
     return reply.send(tariff);
   });
 
   app.put("/fare-rates", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    const parsed = tariffBody.safeParse(request.body);
+    const parsed = tariffSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await replaceTariff(active.user, parsed.data);
-    if (result === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
-    }
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
+    const result = await replaceTariff(request.session.user, parsed.data);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
     return reply.send(result);
   });
 
   app.get("/activity", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    return reply.send(await readActivity(active.user, deps));
+    return reply.send(await readActivity(request.session.user, deps));
   });
 
   app.put("/meter-reading", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const parsed = meterBody.safeParse(request.body);
@@ -178,137 +144,94 @@ export function registerCalendarRoutes(
     }
     const { overviewPath, ...reading } = parsed.data;
     const result = await replaceMeterReading(
-      active.user,
+      request.session.user,
       overviewPath === undefined ? reading : { ...reading, overviewPath },
     );
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
-    }
-    if (result === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
-    }
-    if (result === "not-in-progress") {
-      return reply.code(409).send({ error: "not in progress" });
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
     return reply.send(result);
   });
 
   app.delete("/meter-reading", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    const result = await clearMeterReading(active.user);
+    const result = await clearMeterReading(request.session.user);
     if (result === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
+      return sendDomainResult(reply, result);
     }
     return reply.code(204).send();
   });
 
   app.get("/calendar", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-
     const parsed = rangeQuery.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const from = new Date(parsed.data.from);
-    const to = new Date(parsed.data.to);
-    const result = await readCalendar(active.user, from, to, deps);
-    if (result === "invalid-range") {
-      return reply.code(400).send({ error: "invalid request" });
+    const result = await loadCalendar(
+      request.session.user,
+      new Date(parsed.data.from),
+      new Date(parsed.data.to),
+      deps,
+    );
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
-    if (result === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
-    }
-    const availability = await readAvailabilityIntervals(active.user.id, from, to);
-    return reply.send({ sorties: result, availability });
+    return reply.send(result);
   });
 
   app.post("/sorties", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-
     const input = readWrite(request.body);
     if (!input) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await authorSortie(active.user, input, deps);
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
+    const result = await authorWithAvailability(request.session.user, input, deps);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
-    if (result === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
-    }
-    if (result === "no-location") {
-      return reply.code(409).send({ error: "no location" });
-    }
-    if (result === "unavailable") {
-      return reply.code(503).send({ error: "schedule unavailable" });
-    }
-    await onLead(active.user);
     return reply.code(201).send(result);
   });
 
   app.post("/sorties/preview", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-
     const preview = readPreview(request.body);
     if (!preview) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await previewSortie(active.user, preview.input, preview.sortieId, deps);
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
-    }
-    if (result === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
-    }
-    if (result === "no-location") {
-      return reply.code(409).send({ error: "no location" });
+    const result = await previewSortie(request.session.user, preview.input, preview.sortieId, deps);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
     return reply.send(result);
   });
 
   app.patch("/sorties/:id", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-
     const params = sortieParams.safeParse(request.params);
     const input = readWrite(request.body);
     if (!params.success || !input) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await reviseSortie(active.user, params.data.id, input, deps);
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
+    const result = await reviseWithAvailability(request.session.user, params.data.id, input, deps);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
-    if (result === "not-found") {
-      return reply.code(404).send({ error: "not found" });
-    }
-    if (result === "no-location") {
-      return reply.code(409).send({ error: "no location" });
-    }
-    if (result === "unavailable") {
-      return reply.code(503).send({ error: "schedule unavailable" });
-    }
-    await onLead(active.user);
     return reply.send(result);
   });
 
   app.post("/sorties/:id/commence", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const params = sortieParams.safeParse(request.params);
@@ -319,96 +242,60 @@ export function registerCalendarRoutes(
     if (guidance === "invalid") {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await commenceSortie(active.user, params.data.id, deps);
-    if (result === "not-found") {
-      return reply.code(404).send({ error: "not found" });
-    }
-    if (result === "no-location") {
-      return reply.code(409).send({ error: "no location" });
-    }
-    if (result === "unavailable") {
-      return reply.code(503).send({ error: "schedule unavailable" });
-    }
-    const fareBearing = result.stops.some((stop) => stop.passenger);
-    if (guidance) {
-      await applyGuidanceAvailability(active.user, deps.now());
-    } else {
-      await applyAutomaticAvailability(active.user, "commencement", deps.now(), fareBearing);
+    const result = await commenceWithAvailability(request.session.user, params.data.id, guidance, deps);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
     return reply.send(result);
   });
 
   app.post("/sorties/:id/complete", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const params = sortieParams.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await completeSortie(active.user, params.data.id, deps);
-    if (result === "not-found") {
-      return reply.code(404).send({ error: "not found" });
+    const result = await completeWithAvailability(request.session.user, params.data.id, deps);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
-    if (result === "not-commenced") {
-      return reply.code(409).send({ error: "not commenced" });
-    }
-    await onAvailable(active.user, "conclusion");
     return reply.send(result);
   });
 
   app.post("/sorties/:id/stops/:position/arrive", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const params = stopPositionParams.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await assertStopArrival(active.user, params.data.id, params.data.position, deps);
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
-    }
-    if (result === "not-found") {
-      return reply.code(404).send({ error: "not found" });
-    }
-    if (result === "not-commenced") {
-      return reply.code(409).send({ error: "not commenced" });
+    const result = await assertStopArrival(request.session.user, params.data.id, params.data.position, deps);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
     return reply.send(result);
   });
 
   app.post("/sorties/:id/stops/:position/extend-wait", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const params = stopPositionParams.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await extendStopWait(active.user, params.data.id, params.data.position, deps);
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
+    const result = await extendWaitWithAvailability(request.session.user, params.data.id, params.data.position, deps);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
-    if (result === "not-found") {
-      return reply.code(404).send({ error: "not found" });
-    }
-    if (result === "no-location") {
-      return reply.code(409).send({ error: "no location" });
-    }
-    if (result === "unavailable") {
-      return reply.code(503).send({ error: "schedule unavailable" });
-    }
-    await onLead(active.user);
     return reply.send(result);
   });
 
   app.post("/sorties/:id/driving-route", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const params = sortieParams.safeParse(request.params);
@@ -416,52 +303,32 @@ export function registerCalendarRoutes(
     if (!params.success || !body.success) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await computeSortieDrivingRoute(
-      active.user,
+    const result = await driveSortieWithAvailability(
+      request.session.user,
       params.data.id,
       body.data.origin,
       body.data.firstStopPosition,
       routeDeps,
+      deps,
     );
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
-    }
-    if (result === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
-    }
-    if (result === "not-found") {
-      return reply.code(404).send({ error: "not found" });
-    }
-    if (result === "failed") {
-      return reply.code(502).send({ error: "provider failed" });
-    }
-    if (result === "no-route") {
-      return reply.code(422).send({ error: "no route" });
-    }
-    if (await passengerLegUnderway(active.user, params.data.id, body.data.firstStopPosition)) {
-      await applyAutomaticAvailability(active.user, "commencement", deps.now(), true);
+    if (typeof result === "string") {
+      return sendDomainResult(reply, result);
     }
     return reply.send({ route: result });
   });
 
   app.post("/location-observations", async (request, reply) => {
-    const active = await findPresentedSession(request.headers.authorization);
-    if (!active) {
+    if (!request.session) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-
     const input = readObservation(request.body);
     if (!input) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const result = await recordObservation(active.user, input, deps);
-    if (result === "invalid") {
-      return reply.code(400).send({ error: "invalid request" });
+    const result = await recordWithAvailability(request.session.user, input, deps);
+    if (result !== "ok") {
+      return sendDomainResult(reply, result);
     }
-    if (result === "no-driver") {
-      return reply.code(409).send({ error: "no driver" });
-    }
-    await applyDeferredAvailability(active.user, deps.now());
     return reply.code(204).send();
   });
 }
@@ -512,16 +379,4 @@ function readObservation(body: unknown): ObservationInput | null {
     accuracyMeters: parsed.data.accuracyMeters,
     sortieId: parsed.data.sortieId ?? null,
   };
-}
-
-async function findPresentedSession(authorization: string | string[] | undefined) {
-  const token = readBearer(oneHeader(authorization));
-  if (!token) {
-    return null;
-  }
-  return findActiveSession(token);
-}
-
-function oneHeader(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
 }

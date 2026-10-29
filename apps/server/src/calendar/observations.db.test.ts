@@ -38,6 +38,35 @@ import {
 } from "./calendar.js";
 import { registerCalendarRoutes } from "./http.js";
 import { computeWindow } from "./schedule.js";
+import {
+  companiesFor,
+  destinationStop,
+  driverCount,
+  driverFix,
+  eventsFor,
+  hopMeters,
+  lineDriveDuration,
+  linePoints,
+  lineStop,
+  lineT,
+  originStop,
+  placeDriver,
+  pointA,
+  pointB,
+  pointC,
+  pointD,
+  pointE,
+  removeUser,
+  scheduleDeps,
+  scheduleNow,
+  shownDeparture,
+  task,
+  taskJson,
+  hopSeconds,
+  northOf,
+  waypointStop,
+  type DriveCall,
+} from "./calendarDb.js";
 
 before(async () => {
   await migrateDatabase();
@@ -47,541 +76,7 @@ after(async () => {
   await closeDatabase();
 });
 
-describe("calendar", () => {
-  it("creates one driver and company, then reuses them", async () => {
-    const person = await createSession({
-      sub: `calendar-${crypto.randomUUID()}`,
-      displayName: "Ada Lovelace",
-      email: "ada@example.com",
-    });
-
-    try {
-      const first = await ensureDriver(person.user);
-      const second = await ensureDriver(person.user);
-      assert.equal(second.id, first.id);
-      assert.equal(second.userId, person.user.id);
-
-      const companies = await companiesFor(person.user.id);
-      assert.deepEqual(companies, ["Ada Lovelace"]);
-      assert.equal(await driverCount(person.user.id), 1);
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("names the company from the email, then from the fallback", async () => {
-    const byEmail = await createSession({
-      sub: `calendar-email-${crypto.randomUUID()}`,
-      displayName: "  ",
-      email: "pilot@example.com",
-    });
-    const byFallback = await createSession({
-      sub: `calendar-fallback-${crypto.randomUUID()}`,
-      displayName: null,
-      email: null,
-    });
-
-    try {
-      await ensureDriver(byEmail.user);
-      await ensureDriver(byFallback.user);
-      assert.deepEqual(await companiesFor(byEmail.user.id), ["pilot@example.com"]);
-      assert.deepEqual(await companiesFor(byFallback.user.id), ["Company"]);
-    } finally {
-      await removeUser(byEmail.user.id);
-      await removeUser(byFallback.user.id);
-    }
-  });
-
-  it("keeps each driver's authored sorties on their own calendar", async () => {
-    const first = await createSession({
-      sub: `calendar-a-${crypto.randomUUID()}`,
-      displayName: "First",
-      email: "first@example.com",
-    });
-    const second = await createSession({
-      sub: `calendar-b-${crypto.randomUUID()}`,
-      displayName: "Second",
-      email: "second@example.com",
-    });
-
-    try {
-      await ensureDriver(first.user);
-      await placeDriver(first.user.id);
-      await ensureDriver(second.user);
-      assert.notEqual((await ensureDriver(second.user)).id, (await ensureDriver(first.user)).id);
-
-      const from = new Date("2026-09-01T00:00:00.000Z");
-      const to = new Date("2026-10-01T00:00:00.000Z");
-      const authored = await authorSortie(
-        first.user,
-        task("  Crew move  ", new Date("2026-09-02T15:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(typeof authored, "object");
-      if (typeof authored !== "object") {
-        return;
-      }
-      assert.equal(authored.type, "task");
-      assert.equal(authored.label, "Crew move");
-      assert.equal(authored.arrivalAt, "2026-09-02T15:00:00.000Z");
-      assert.equal(authored.scheduledStart, "2026-09-02T15:00:00.000Z");
-      assert.equal(authored.scheduledEnd, "2026-09-02T16:00:00.000Z");
-      assert.equal(authored.departureAddress, "Driver location");
-
-      const earlier = await authorSortie(
-        first.user,
-        task("Earlier", new Date("2026-09-02T13:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(earlier !== "no-driver" && earlier !== "invalid", true);
-
-      const outside = await authorSortie(
-        first.user,
-        task("Outside", new Date("2026-10-01T00:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(outside !== "no-driver" && outside !== "invalid", true);
-
-      const touching = await authorSortie(
-        first.user,
-        task("Touching", new Date("2026-08-31T23:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(touching !== "no-driver" && touching !== "invalid", true);
-
-      const calendar = await readCalendar(first.user, from, to);
-      assert.equal(Array.isArray(calendar), true);
-      if (!Array.isArray(calendar) || typeof earlier !== "object") {
-        return;
-      }
-      assert.deepEqual(
-        calendar.map((item) => item.label),
-        ["Earlier", "Crew move"],
-      );
-      assert.deepEqual(
-        calendar.map((item) => item.id),
-        [...calendar].sort((left, right) => left.scheduledStart.localeCompare(right.scheduledStart) || left.id.localeCompare(right.id)).map((item) => item.id),
-      );
-
-      const otherCalendar = await readCalendar(second.user, from, to);
-      assert.deepEqual(otherCalendar, []);
-
-      const stored = await db
-        .select({
-          type: sortie.type,
-          companyId: sortie.companyId,
-          authorDriverId: sortie.authorDriverId,
-        })
-        .from(sortie)
-        .where(eq(sortie.id, authored.id));
-      assert.equal(stored[0]?.type, "task");
-      assert.equal(typeof stored[0]?.companyId, "string");
-      assert.equal(stored[0]?.authorDriverId, (await ensureDriver(first.user)).id);
-
-      const createdEvents = await eventsFor(authored.id);
-      assert.deepEqual(
-        createdEvents.map((event) => event.type),
-        ["sortie.created", "sortie.schedule_computed"],
-      );
-      assert.equal(createdEvents[0]?.label, "Crew move");
-    } finally {
-      await removeUser(first.user.id);
-      await removeUser(second.user.id);
-    }
-  });
-
-  it("revises a sortie and appends one event, and rejects a sortie with no stop", async () => {
-    const person = await createSession({
-      sub: `calendar-revise-${crypto.randomUUID()}`,
-      displayName: "Reviser",
-      email: null,
-    });
-    const other = await createSession({
-      sub: `calendar-other-${crypto.randomUUID()}`,
-      displayName: "Other",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id);
-      await ensureDriver(other.user);
-      const authored = await authorSortie(
-        person.user,
-        task("Original", new Date("2026-09-03T15:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(typeof authored === "object", true);
-      if (typeof authored !== "object") {
-        return;
-      }
-
-      const empty = await authorSortie(
-        person.user,
-        task("Nope", new Date("2026-09-03T15:00:00.000Z"), { stops: [] }),
-        scheduleDeps,
-      );
-      assert.equal(empty, "invalid");
-      assert.equal((await eventsFor(authored.id)).length, 1);
-
-      const revised = await reviseSortie(
-        person.user,
-        authored.id,
-        task("Updated", new Date("2026-09-04T15:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(typeof revised === "object", true);
-      if (typeof revised !== "object") {
-        return;
-      }
-      assert.equal(revised.label, "Updated");
-      assert.equal(revised.id, authored.id);
-
-      const history = await eventsFor(authored.id);
-      assert.deepEqual(
-        history.map((event) => event.type),
-        ["sortie.created", "sortie.revised"],
-      );
-      assert.equal(history[1]?.label, "Updated");
-
-      const stolen = await reviseSortie(
-        other.user,
-        authored.id,
-        task("Stolen", new Date("2026-09-04T15:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(stolen, "not-found");
-      assert.equal((await eventsFor(authored.id)).length, 2);
-
-      const missing = await reviseSortie(
-        person.user,
-        crypto.randomUUID(),
-        task("Missing", new Date("2026-09-04T15:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(missing, "not-found");
-    } finally {
-      await removeUser(person.user.id);
-      await removeUser(other.user.id);
-    }
-  });
-
-  it("rejects a calendar read and an author before a driver exists", async () => {
-    const person = await createSession({
-      sub: `calendar-none-${crypto.randomUUID()}`,
-      displayName: null,
-      email: "none@example.com",
-    });
-
-    try {
-      const calendar = await readCalendar(
-        person.user,
-        new Date("2026-09-01T00:00:00.000Z"),
-        new Date("2026-10-01T00:00:00.000Z"),
-      );
-      const authored = await authorSortie(
-        person.user,
-        task("Early", new Date("2026-09-02T15:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(calendar, "no-driver");
-      assert.equal(authored, "no-driver");
-      assert.equal(await driverCount(person.user.id), 0);
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("rejects a missing session on every calendar route", async () => {
-    const app = Fastify();
-    registerCalendarRoutes(app);
-    const endpoints = [
-      { method: "POST" as const, url: "/drivers/current" },
-      { method: "GET" as const, url: "/calendar?from=2026-09-01T00:00:00.000Z&to=2026-10-01T00:00:00.000Z" },
-      { method: "POST" as const, url: "/sorties" },
-      { method: "POST" as const, url: "/sorties/preview" },
-      { method: "PATCH" as const, url: `/sorties/${crypto.randomUUID()}` },
-      { method: "POST" as const, url: "/location-observations" },
-    ];
-    for (const endpoint of endpoints) {
-      const response = await app.inject(endpoint);
-      assert.equal(response.statusCode, 401);
-    }
-    await app.close();
-  });
-
-  it("returns only the caller's server-recorded availability, including a lapse", async () => {
-    const person = await createSession({
-      sub: `calendar-availability-${crypto.randomUUID()}`,
-      displayName: "Available",
-      email: null,
-    });
-    const other = await createSession({
-      sub: `calendar-availability-other-${crypto.randomUUID()}`,
-      displayName: "Other",
-      email: null,
-    });
-    const app = Fastify();
-    registerCalendarRoutes(app);
-    try {
-      const own = await ensureDriver(person.user);
-      const theirs = await ensureDriver(other.user);
-      const on = new Date("2026-10-11T14:00:00.000Z");
-      const lapse = new Date("2026-10-11T15:00:00.000Z");
-      const restored = new Date("2026-10-11T16:00:00.000Z");
-      await db.insert(driverAvailabilityEvent).values([
-        { driverId: own.id, available: true, current: true, recordedAt: on },
-        { driverId: own.id, available: true, current: false, recordedAt: lapse },
-        { driverId: own.id, available: true, current: true, recordedAt: restored },
-        { driverId: theirs.id, available: true, current: true, recordedAt: on },
-      ]);
-
-      const day = await app.inject({
-        method: "GET",
-        url: "/calendar?from=2026-10-11T00:00:00.000Z&to=2026-10-12T00:00:00.000Z",
-        headers: { authorization: `Bearer ${person.token}` },
-      });
-      assert.equal(day.statusCode, 200);
-      assert.deepEqual(day.json().availability, [
-        { start: on.toISOString(), end: lapse.toISOString() },
-        { start: restored.toISOString(), end: null },
-      ]);
-
-      const clipped = await app.inject({
-        method: "GET",
-        url: "/calendar?from=2026-10-11T14:30:00.000Z&to=2026-10-11T15:30:00.000Z",
-        headers: { authorization: `Bearer ${person.token}` },
-      });
-      assert.equal(clipped.statusCode, 200);
-      assert.deepEqual(clipped.json().availability, [
-        { start: "2026-10-11T14:30:00.000Z", end: lapse.toISOString() },
-      ]);
-    } finally {
-      await app.close();
-      await removeUser(person.user.id);
-      await removeUser(other.user.id);
-    }
-  });
-
-  it("serves author and revise over HTTP for the session that owns the sortie", async () => {
-    const person = await createSession({
-      sub: `calendar-http-${crypto.randomUUID()}`,
-      displayName: "Http",
-      email: null,
-    });
-    const app = Fastify();
-    registerCalendarRoutes(app, scheduleDeps);
-
-    try {
-      const ensured = await app.inject({
-        method: "POST",
-        url: "/drivers/current",
-        headers: { authorization: `Bearer ${person.token}` },
-      });
-      assert.equal(ensured.statusCode, 200);
-      const again = await app.inject({
-        method: "POST",
-        url: "/drivers/current",
-        headers: { authorization: `Bearer ${person.token}` },
-      });
-      assert.equal(again.statusCode, 200);
-      assert.equal(again.json().id, ensured.json().id);
-
-      const from = "2026-09-01T00:00:00.000Z";
-      const to = "2026-10-01T00:00:00.000Z";
-      const observed = await app.inject({
-        method: "POST",
-        url: "/location-observations",
-        headers: { authorization: `Bearer ${person.token}` },
-        payload: {
-          observedAt: "2026-09-01T12:00:00.000Z",
-          latitude: driverFix.latitude,
-          longitude: driverFix.longitude,
-          accuracyMeters: 8,
-        },
-      });
-      assert.equal(observed.statusCode, 204);
-
-      const created = await app.inject({
-        method: "POST",
-        url: "/sorties",
-        headers: { authorization: `Bearer ${person.token}` },
-        payload: taskJson("Http sortie", "2026-09-08T12:00:00.000Z"),
-      });
-      assert.equal(created.statusCode, 201);
-      assert.equal(created.json().arrivalAt, "2026-09-08T12:00:00.000Z");
-      assert.equal(created.json().scheduledStart, "2026-09-08T12:00:00.000Z");
-      assert.equal(created.json().scheduledEnd, "2026-09-08T13:00:00.000Z");
-      assert.equal(created.json().departureAddress, "Driver location");
-      const sortieId = created.json().id as string;
-
-      const blank = await app.inject({
-        method: "POST",
-        url: "/sorties",
-        headers: { authorization: `Bearer ${person.token}` },
-        payload: { ...taskJson(" ", "2026-09-08T12:00:00.000Z"), stops: [] },
-      });
-      assert.equal(blank.statusCode, 400);
-
-      const backwards = await app.inject({
-        method: "GET",
-        url: `/calendar?from=${to}&to=${from}`,
-        headers: { authorization: `Bearer ${person.token}` },
-      });
-      assert.equal(backwards.statusCode, 400);
-
-      const revised = await app.inject({
-        method: "PATCH",
-        url: `/sorties/${sortieId}`,
-        headers: { authorization: `Bearer ${person.token}` },
-        payload: taskJson("Http revised", "2026-09-09T12:00:00.000Z"),
-      });
-      assert.equal(revised.statusCode, 200);
-
-      const calendar = await app.inject({
-        method: "GET",
-        url: `/calendar?from=${from}&to=${to}`,
-        headers: { authorization: `Bearer ${person.token}` },
-      });
-      assert.equal(calendar.statusCode, 200);
-      assert.equal(calendar.json().sorties[0].label, "Http revised");
-      assert.equal(calendar.json().sorties[0].type, "task");
-      assert.equal(calendar.json().sorties[0].stops.length, 2);
-    } finally {
-      await app.close();
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("stores passenger fields and ordered stops, and rejects a bad phone or a missing stop", async () => {
-    const person = await createSession({
-      sub: `calendar-stops-${crypto.randomUUID()}`,
-      displayName: "Stops",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id);
-      const badPhone = await authorSortie(
-        person.user,
-        task("Phone", new Date("2026-09-05T15:00:00.000Z"), {
-          passengerPhone: "555",
-        }),
-        scheduleDeps,
-      );
-      const noStop = await authorSortie(
-        person.user,
-        task("One", new Date("2026-09-05T15:00:00.000Z"), {
-          stops: [],
-        }),
-        scheduleDeps,
-      );
-      const singleStop = await authorSortie(
-        person.user,
-        task("Waypoint", new Date("2026-09-05T15:00:00.000Z"), {
-          stops: [waypointStop],
-        }),
-        scheduleDeps,
-      );
-      assert.equal(badPhone, "invalid");
-      assert.equal(noStop, "invalid");
-      assert.equal(typeof singleStop, "object");
-
-      const authored = await authorSortie(
-        person.user,
-        task("Passenger", new Date("2026-09-05T15:00:00.000Z"), {
-          passengerName: "  Ada  ",
-          passengerPhone: "5551234567",
-          stops: [originStop, waypointStop, destinationStop],
-        }),
-        scheduleDeps,
-      );
-      assert.equal(typeof authored === "object", true);
-      if (typeof authored !== "object") {
-        return;
-      }
-      assert.equal(authored.passengerName, "Ada");
-      assert.equal(authored.passengerPhone, "5551234567");
-      assert.deepEqual(
-        authored.stops.map((stop) => stop.label),
-        ["Origin", "Waypoint", "Destination"],
-      );
-
-      const calendar = await readCalendar(
-        person.user,
-        new Date("2026-09-01T00:00:00.000Z"),
-        new Date("2026-10-01T00:00:00.000Z"),
-      );
-      assert.equal(Array.isArray(calendar), true);
-      if (!Array.isArray(calendar)) {
-        return;
-      }
-      const listed = calendar.find((sortie) => sortie.id === authored.id);
-      assert.deepEqual(
-        listed?.stops.map((stop) => stop.label),
-        ["Origin", "Waypoint", "Destination"],
-      );
-
-      const created = await eventsFor(authored.id);
-      assert.equal(created[0]?.passengerPhone, "5551234567");
-      assert.deepEqual(
-        created[0]?.stops.map((stop) => stop.label),
-        ["Origin", "Waypoint", "Destination"],
-      );
-
-      const revised = await reviseSortie(
-        person.user,
-        authored.id,
-        task("Passenger", new Date("2026-09-06T15:00:00.000Z"), {
-          passengerName: "Ada",
-          passengerPhone: "5551234567",
-          stops: [originStop, destinationStop],
-        }),
-        scheduleDeps,
-      );
-      assert.equal(typeof revised === "object", true);
-      if (typeof revised !== "object") {
-        return;
-      }
-      assert.deepEqual(
-        revised.stops.map((stop) => stop.label),
-        ["Origin", "Destination"],
-      );
-      const storedStops = await db
-        .select({ label: sortieStop.label, position: sortieStop.position })
-        .from(sortieStop)
-        .where(eq(sortieStop.sortieId, authored.id))
-        .orderBy(sortieStop.position);
-      assert.deepEqual(
-        storedStops.map((stop) => stop.label),
-        ["Origin", "Destination"],
-      );
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("rejects an author when the driver has no stored location", async () => {
-    const person = await createSession({
-      sub: `calendar-noloc-${crypto.randomUUID()}`,
-      displayName: "Nowhere",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      const authored = await authorSortie(
-        person.user,
-        task("Unplaced", new Date("2026-09-02T15:00:00.000Z")),
-        scheduleDeps,
-      );
-      assert.equal(authored, "no-location");
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
+describe("sortie observations", () => {
   it("sets start and end from the approach and onward drive times", async () => {
     const arrival = new Date("2026-09-02T15:00:00.000Z");
     const departures: string[] = [];
@@ -610,7 +105,6 @@ describe("calendar", () => {
     assert.equal(window.scheduledStart.toISOString(), "2026-09-02T14:20:00.000Z");
     assert.equal(window.scheduledEnd.toISOString(), "2026-09-02T16:30:00.000Z");
   });
-
   it("keeps the cached window until the driver moves five miles, then recomputes it", async () => {
     const person = await createSession({
       sub: `calendar-move-${crypto.randomUUID()}`,
@@ -682,7 +176,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("leaves an ended sortie and a failed recompute unchanged", async () => {
     const person = await createSession({
       sub: `calendar-ended-${crypto.randomUUID()}`,
@@ -796,69 +289,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
-  it("accepts one address and computes an immediate arrival when no time is sent", async () => {
-    const person = await createSession({
-      sub: `calendar-one-${crypto.randomUUID()}`,
-      displayName: "One",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id);
-      const pickup = await authorSortie(
-        person.user,
-        task("", null, { stops: [originStop] }),
-        scheduleDeps,
-      );
-      assert.equal(typeof pickup, "object");
-      if (typeof pickup !== "object") {
-        return;
-      }
-      assert.equal(pickup.label, "");
-      assert.equal(pickup.arrivalAuthored, false);
-      assert.equal(pickup.arrivalAt, scheduleNow.toISOString());
-      assert.equal(pickup.scheduledStart, scheduleNow.toISOString());
-      assert.equal(pickup.scheduledEnd, scheduleNow.toISOString());
-      assert.equal(pickup.stops[0]?.passenger, false);
-      assert.equal(pickup.stops[0]?.label, "Origin");
-
-      const destination = await authorSortie(
-        person.user,
-        task("", null, { stops: [destinationStop] }),
-        scheduleDeps,
-      );
-      assert.equal(typeof destination, "object");
-      if (typeof destination !== "object") {
-        return;
-      }
-      assert.equal(destination.arrivalAuthored, false);
-      assert.equal(destination.arrivalAt, "2026-09-01T01:00:00.000Z");
-      assert.equal(destination.scheduledStart, scheduleNow.toISOString());
-      assert.equal(destination.scheduledEnd, "2026-09-01T01:00:00.000Z");
-      assert.equal(destination.stops[0]?.passenger, true);
-      assert.equal(destination.stops[0]?.label, "Destination");
-
-      const authoredPickup = new Date("2026-09-02T15:00:00.000Z");
-      const held = await authorSortie(
-        person.user,
-        task("", authoredPickup, { stops: [originStop] }),
-        scheduleDeps,
-      );
-      assert.equal(typeof held, "object");
-      if (typeof held !== "object") {
-        return;
-      }
-      assert.equal(held.arrivalAuthored, true);
-      assert.equal(held.arrivalAt, authoredPickup.toISOString());
-      assert.equal(held.scheduledStart, authoredPickup.toISOString());
-      assert.equal(held.scheduledEnd, authoredPickup.toISOString());
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
   it("starts a later sortie from the previous sortie's destination", async () => {
     const person = await createSession({
       sub: `calendar-chain-${crypto.randomUUID()}`,
@@ -943,7 +373,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("drives a future sortie from the current fix after an earlier sortie has ended", async () => {
     const person = await createSession({
       sub: `calendar-ended-origin-${crypto.randomUUID()}`,
@@ -1019,7 +448,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("recomputes a chained sortie from a nearby fix once the predecessor has ended", async () => {
     const person = await createSession({
       sub: `calendar-ended-nearby-${crypto.randomUUID()}`,
@@ -1140,7 +568,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("keeps the next drive on an in-progress terminal after the scheduled end passes", async () => {
     const person = await createSession({
       sub: `calendar-in-progress-origin-${crypto.randomUUID()}`,
@@ -1283,7 +710,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("does not leave the next drive at an older unfinished stop after a later sortie is completed", async () => {
     const person = await createSession({
       sub: `calendar-abandoned-origin-${crypto.randomUUID()}`,
@@ -1386,7 +812,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("replaces a stale origin once the driver is at the next stop", async () => {
     const person = await createSession({
       sub: `calendar-at-pickup-${crypto.randomUUID()}`,
@@ -1452,7 +877,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("starts a one-stop sortie from GPS C to D ten minutes before arrival T", async () => {
     const person = await createSession({
       sub: `calendar-line-cd-${crypto.randomUUID()}`,
@@ -1501,7 +925,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("recomputes a future C-to-D start when the vehicle moves to A and then B", async () => {
     const person = await createSession({
       sub: `calendar-line-cdb-${crypto.randomUUID()}`,
@@ -1579,7 +1002,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("recomputes Stan's approach from Brittany's destination D on the A–E line", async () => {
     const person = await createSession({
       sub: `calendar-line-stan-${crypto.randomUUID()}`,
@@ -1677,7 +1099,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
   it("includes stop wait minutes in the scheduled end and onward departure", async () => {
     const arrival = new Date("2026-09-02T15:00:00.000Z");
     const departures: string[] = [];
@@ -1706,66 +1127,6 @@ describe("calendar", () => {
     assert.equal(window.scheduledStart.toISOString(), "2026-09-02T14:30:00.000Z");
     assert.equal(window.scheduledEnd.toISOString(), "2026-09-02T16:30:00.000Z");
   });
-
-  it("seals actualStart on commence and preserves it on in-progress revise", async () => {
-    const person = await createSession({
-      sub: `calendar-commence-${crypto.randomUUID()}`,
-      displayName: "Commence",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id);
-      const arrival = new Date("2026-09-02T15:00:00.000Z");
-      const authored = await authorSortie(person.user, task("Seal", arrival), scheduleDeps);
-      assert.equal(typeof authored, "object");
-      if (typeof authored !== "object") {
-        return;
-      }
-      assert.equal(authored.actualStart, null);
-
-      const commenceNow = new Date("2026-09-02T14:20:00.000Z");
-      const commenced = await commenceSortie(person.user, authored.id, {
-        ...scheduleDeps,
-        now: () => commenceNow,
-      });
-      assert.equal(typeof commenced, "object");
-      if (typeof commenced !== "object") {
-        return;
-      }
-      assert.equal(commenced.actualStart, commenceNow.toISOString());
-      assert.equal(commenced.scheduledStart, authored.scheduledStart);
-
-      const again = await commenceSortie(person.user, authored.id, {
-        ...scheduleDeps,
-        now: () => new Date("2026-09-02T14:25:00.000Z"),
-      });
-      assert.equal(typeof again, "object");
-      if (typeof again !== "object") {
-        return;
-      }
-      assert.equal(again.actualStart, commenceNow.toISOString());
-
-      const revised = await reviseSortie(
-        person.user,
-        authored.id,
-        task("Seal", arrival),
-        scheduleDeps,
-      );
-      assert.equal(typeof revised, "object");
-      if (typeof revised !== "object") {
-        return;
-      }
-      assert.equal(revised.actualStart, commenceNow.toISOString());
-
-      const events = await eventsFor(authored.id);
-      assert.ok(events.some((event) => event.type === "sortie.commenced"));
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
   it("infers stop arrival and departure from GPS and completes with actualEnd", async () => {
     const person = await createSession({
       sub: `calendar-actuals-${crypto.randomUUID()}`,
@@ -1933,143 +1294,6 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
-  it("asserts stop arrival and extends wait while in progress", async () => {
-    const person = await createSession({
-      sub: `calendar-dwell-${crypto.randomUUID()}`,
-      displayName: "Dwell",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id);
-      const arrival = new Date("2026-09-02T15:00:00.000Z");
-      const authored = await authorSortie(
-        person.user,
-        task("Dwell", arrival, {
-          stops: [
-            { ...originStop, waitMinutes: 5 },
-            { ...destinationStop, waitMinutes: 0 },
-          ],
-        }),
-        scheduleDeps,
-      );
-      assert.equal(typeof authored, "object");
-      if (typeof authored !== "object") {
-        return;
-      }
-      const endBefore = authored.scheduledEnd;
-
-      const commenced = await commenceSortie(person.user, authored.id, {
-        ...scheduleDeps,
-        now: () => new Date("2026-09-02T14:20:00.000Z"),
-      });
-      assert.equal(typeof commenced, "object");
-      if (typeof commenced !== "object") {
-        return;
-      }
-
-      const arriveNow = new Date("2026-09-02T15:00:00.000Z");
-      const arrived = await assertStopArrival(person.user, authored.id, 0, {
-        ...scheduleDeps,
-        now: () => arriveNow,
-      });
-      assert.equal(typeof arrived, "object");
-      if (typeof arrived !== "object") {
-        return;
-      }
-      assert.equal(arrived.stops[0]?.actualArrivedAt, arriveNow.toISOString());
-
-      const again = await assertStopArrival(person.user, authored.id, 0, {
-        ...scheduleDeps,
-        now: () => new Date("2026-09-02T15:01:00.000Z"),
-      });
-      assert.equal(typeof again, "object");
-      if (typeof again !== "object") {
-        return;
-      }
-      assert.equal(again.stops[0]?.actualArrivedAt, arriveNow.toISOString());
-
-      const extended = await extendStopWait(person.user, authored.id, 0, scheduleDeps);
-      assert.equal(typeof extended, "object");
-      if (typeof extended !== "object") {
-        return;
-      }
-      assert.equal(extended.stops[0]?.waitMinutes, 6);
-      assert.ok(new Date(extended.scheduledEnd).getTime() > new Date(endBefore).getTime());
-
-      const events = await eventsFor(authored.id);
-      assert.ok(events.some((event) => event.type === "sortie.stop_arrival_asserted"));
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("includes completed sorties in calendar range via coalesced end", async () => {
-    const person = await createSession({
-      sub: `calendar-coalesce-end-${crypto.randomUUID()}`,
-      displayName: "CoalesceEnd",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id);
-      const arrival = new Date("2026-09-02T15:00:00.000Z");
-      const authored = await authorSortie(person.user, task("Short", arrival), {
-        ...scheduleDeps,
-        driveDuration: async () => 60,
-      });
-      assert.equal(typeof authored, "object");
-      if (typeof authored !== "object") {
-        return;
-      }
-      await commenceSortie(person.user, authored.id, {
-        ...scheduleDeps,
-        driveDuration: async () => 60,
-        now: () => new Date("2026-09-02T14:50:00.000Z"),
-      });
-      const completed = await completeSortie(person.user, authored.id, {
-        ...scheduleDeps,
-        now: () => new Date("2026-09-02T14:55:00.000Z"),
-      });
-      assert.equal(typeof completed, "object");
-      if (typeof completed !== "object") {
-        return;
-      }
-
-      const during = await readCalendar(
-        person.user,
-        new Date("2026-09-02T14:52:00.000Z"),
-        new Date("2026-09-02T14:54:00.000Z"),
-      );
-      assert.ok(Array.isArray(during));
-      if (!Array.isArray(during)) {
-        return;
-      }
-      assert.ok(during.some((item) => item.id === authored.id));
-
-      // After actualEnd but still before scheduledEnd — coalesced end must exclude it.
-      assert.ok(new Date(completed.scheduledEnd).getTime() > new Date("2026-09-02T14:56:00.000Z").getTime());
-      const afterActual = await readCalendar(
-        person.user,
-        new Date("2026-09-02T14:56:00.000Z"),
-        new Date("2026-09-02T15:30:00.000Z"),
-      );
-      assert.ok(Array.isArray(afterActual));
-      if (!Array.isArray(afterActual)) {
-        return;
-      }
-      assert.equal(
-        afterActual.some((item) => item.id === authored.id),
-        false,
-      );
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
   it("does not recompute a commenced sortie from a later GPS fix", async () => {
     const person = await createSession({
       sub: `calendar-sealed-${crypto.randomUUID()}`,
@@ -2122,517 +1346,4 @@ describe("calendar", () => {
       await removeUser(person.user.id);
     }
   });
-
-  it("lists a later sortie whose arrival no longer fits the draft", async () => {
-    const person = await createSession({
-      sub: `calendar-preview-tight-${crypto.randomUUID()}`,
-      displayName: "Preview tight",
-      email: null,
-    });
-    const calls: DriveCall[] = [];
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id, pointA);
-      const deps: ScheduleDeps = {
-        now: () => scheduleNow,
-        lookupAddress: async () => "Driver location",
-        driveDuration: lineDriveDuration(calls),
-      };
-      const stan = await authorSortie(
-        person.user,
-        {
-          label: "Stan",
-          arrivalAt: new Date(lineT.getTime() + 40 * 60 * 1000),
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointA, "A", false), lineStop(pointB, "B", true)],
-        },
-        deps,
-      );
-      assert.equal(typeof stan, "object");
-      if (typeof stan !== "object") {
-        return;
-      }
-      const before = await eventsFor(stan.id);
-      const preview = await previewSortie(
-        person.user,
-        {
-          label: "Brittany",
-          arrivalAt: new Date(lineT.getTime() + 20 * 60 * 1000),
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
-        },
-        null,
-        deps,
-      );
-      assert.deepEqual(preview, { endangered: [{ id: stan.id, label: "Stan" }] });
-      const after = await eventsFor(stan.id);
-      assert.deepEqual(after, before);
-      const driverId = (await ensureDriver(person.user)).id;
-      const stored = await db.select({ id: sortie.id }).from(sortie).where(eq(sortie.authorDriverId, driverId));
-      assert.deepEqual(
-        stored.map((row) => row.id),
-        [stan.id],
-      );
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("does not list a later sortie that still fits around the draft", async () => {
-    const person = await createSession({
-      sub: `calendar-preview-gap-${crypto.randomUUID()}`,
-      displayName: "Preview gap",
-      email: null,
-    });
-    const calls: DriveCall[] = [];
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id, pointA);
-      const deps: ScheduleDeps = {
-        now: () => scheduleNow,
-        lookupAddress: async () => "Driver location",
-        driveDuration: lineDriveDuration(calls),
-      };
-      const stan = await authorSortie(
-        person.user,
-        {
-          label: "Stan",
-          arrivalAt: new Date(lineT.getTime() + 120 * 60 * 1000),
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointA, "A", false), lineStop(pointB, "B", true)],
-        },
-        deps,
-      );
-      assert.equal(typeof stan, "object");
-      if (typeof stan !== "object") {
-        return;
-      }
-      const preview = await previewSortie(
-        person.user,
-        {
-          label: "Brittany",
-          arrivalAt: new Date(lineT.getTime() + 20 * 60 * 1000),
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
-        },
-        null,
-        deps,
-      );
-      assert.deepEqual(preview, { endangered: [] });
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("does not list the sortie being revised", async () => {
-    const person = await createSession({
-      sub: `calendar-preview-revise-${crypto.randomUUID()}`,
-      displayName: "Preview revise",
-      email: null,
-    });
-    const calls: DriveCall[] = [];
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id, pointA);
-      const deps: ScheduleDeps = {
-        now: () => scheduleNow,
-        lookupAddress: async () => "Driver location",
-        driveDuration: lineDriveDuration(calls),
-      };
-      const stan = await authorSortie(
-        person.user,
-        {
-          label: "",
-          arrivalAt: new Date(lineT.getTime() + 40 * 60 * 1000),
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointA, "A", false), lineStop(pointB, "B", true)],
-        },
-        deps,
-      );
-      const brittany = await authorSortie(
-        person.user,
-        {
-          label: "Brittany",
-          arrivalAt: new Date(lineT.getTime() + 20 * 60 * 1000),
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
-        },
-        deps,
-      );
-      assert.equal(typeof stan, "object");
-      assert.equal(typeof brittany, "object");
-      if (typeof stan !== "object" || typeof brittany !== "object") {
-        return;
-      }
-      const preview = await previewSortie(
-        person.user,
-        {
-          label: "Brittany",
-          arrivalAt: new Date(lineT.getTime() + 20 * 60 * 1000),
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointC, "C", false), lineStop(pointD, "D", true)],
-        },
-        brittany.id,
-        deps,
-      );
-      assert.deepEqual(preview, { endangered: [{ id: stan.id, label: "A" }] });
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("returns no endangered sorties when the draft itself has no route", async () => {
-    const person = await createSession({
-      sub: `calendar-preview-unrouted-${crypto.randomUUID()}`,
-      displayName: "Preview unrouted",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id, pointA);
-      const deps: ScheduleDeps = {
-        now: () => scheduleNow,
-        lookupAddress: async () => "Driver location",
-        driveDuration: async (origin, destination) => (destination.latitude === 12 ? "failed" : 600),
-      };
-      const stan = await authorSortie(
-        person.user,
-        {
-          label: "Stan",
-          arrivalAt: new Date(lineT.getTime() + 40 * 60 * 1000),
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointA, "A", false)],
-        },
-        deps,
-      );
-      assert.equal(typeof stan, "object");
-      if (typeof stan !== "object") {
-        return;
-      }
-      const preview = await previewSortie(
-        person.user,
-        {
-          label: "Nowhere",
-          arrivalAt: lineT,
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop({ latitude: 12, longitude: -74 }, "Nowhere", true)],
-        },
-        null,
-        deps,
-      );
-      assert.deepEqual(preview, { endangered: [] });
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("does not list a sortie that was just ended when previewing an immediate reposition", async () => {
-    const person = await createSession({
-      sub: `calendar-preview-ended-${crypto.randomUUID()}`,
-      displayName: "Preview ended",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      await placeDriver(person.user.id);
-      const arrival = new Date("2026-09-02T15:00:00.000Z");
-      const authored = await authorSortie(person.user, task("Trip", arrival), scheduleDeps);
-      assert.equal(typeof authored, "object");
-      if (typeof authored !== "object") {
-        return;
-      }
-
-      const commenceNow = new Date("2026-09-02T14:20:00.000Z");
-      const commenced = await commenceSortie(person.user, authored.id, {
-        ...scheduleDeps,
-        now: () => commenceNow,
-      });
-      assert.equal(typeof commenced, "object");
-      if (typeof commenced !== "object") {
-        return;
-      }
-      assert.equal(commenced.scheduledEnd, "2026-09-02T16:00:00.000Z");
-
-      const completeNow = new Date("2026-09-02T15:10:00.000Z");
-      const completed = await completeSortie(person.user, authored.id, {
-        ...scheduleDeps,
-        now: () => completeNow,
-      });
-      assert.equal(typeof completed, "object");
-      if (typeof completed !== "object") {
-        return;
-      }
-      assert.equal(completed.actualEnd, completeNow.toISOString());
-
-      const preview = await previewSortie(
-        person.user,
-        {
-          label: "",
-          arrivalAt: null,
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop({ latitude: 41, longitude: -73 }, "Elsewhere", false)],
-        },
-        null,
-        { ...scheduleDeps, now: () => completeNow },
-      );
-      assert.deepEqual(preview, { endangered: [] });
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
-
-  it("requires a location to preview an immediate departure", async () => {
-    const person = await createSession({
-      sub: `calendar-preview-location-${crypto.randomUUID()}`,
-      displayName: "Preview location",
-      email: null,
-    });
-
-    try {
-      await ensureDriver(person.user);
-      const preview = await previewSortie(
-        person.user,
-        {
-          label: "",
-          arrivalAt: null,
-          passengerName: null,
-          passengerPhone: null,
-          stops: [lineStop(pointD, "D", true)],
-        },
-        null,
-        scheduleDeps,
-      );
-      assert.equal(preview, "no-location");
-    } finally {
-      await removeUser(person.user.id);
-    }
-  });
 });
-
-async function companiesFor(userId: string): Promise<string[]> {
-  const rows = await db
-    .select({ name: company.name })
-    .from(company)
-    .innerJoin(driverCompany, eq(driverCompany.companyId, company.id))
-    .innerJoin(driver, eq(driver.id, driverCompany.driverId))
-    .where(eq(driver.userId, userId));
-  return rows.map((row) => row.name);
-}
-
-async function shownDeparture(
-  person: Parameters<typeof readCalendar>[0],
-  sortieId: string,
-  deps: ScheduleDeps,
-): Promise<string | undefined> {
-  const calendar = await readCalendar(
-    person,
-    new Date("2026-01-01T00:00:00.000Z"),
-    new Date("2027-01-01T00:00:00.000Z"),
-    deps,
-  );
-  if (!Array.isArray(calendar)) {
-    return undefined;
-  }
-  return calendar.find((item) => item.id === sortieId)?.departureAddress;
-}
-
-async function driverCount(userId: string): Promise<number> {
-  const rows = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId));
-  return rows.length;
-}
-
-async function eventsFor(
-  sortieId: string,
-): Promise<{ type: string; label: string; passengerPhone: string | null; stops: { label: string }[] }[]> {
-  return db
-    .select({
-      type: operationalEvent.type,
-      label: operationalEvent.label,
-      passengerPhone: operationalEvent.passengerPhone,
-      stops: operationalEvent.stops,
-    })
-    .from(operationalEvent)
-    .where(eq(operationalEvent.sortieId, sortieId))
-    .orderBy(operationalEvent.recordedAt);
-}
-
-const originStop = {
-  label: "Origin",
-  latitude: 40.7128,
-  longitude: -74.006,
-  waitMinutes: 0,
-  passenger: false,
-};
-const destinationStop = {
-  label: "Destination",
-  latitude: 40.758,
-  longitude: -73.9855,
-  waitMinutes: 0,
-  passenger: true,
-};
-const waypointStop = {
-  label: "Waypoint",
-  latitude: 40.73,
-  longitude: -73.99,
-  waitMinutes: 0,
-  passenger: true,
-};
-
-const driverFix = { latitude: 40, longitude: -74 };
-const scheduleNow = new Date("2026-09-01T00:00:00.000Z");
-
-const hopMeters = 10 * 1609.344;
-const hopSeconds = 600;
-const lineT = new Date("2026-09-02T15:00:00.000Z");
-const pointA = { latitude: 40, longitude: -74 };
-const pointB = northOf(pointA, hopMeters);
-const pointC = northOf(pointB, hopMeters);
-const pointD = northOf(pointC, hopMeters);
-const pointE = northOf(pointD, hopMeters);
-const linePoints = [pointA, pointB, pointC, pointD, pointE];
-
-type DriveCall = {
-  origin: { latitude: number; longitude: number };
-  destination: { latitude: number; longitude: number };
-  intermediates: { latitude: number; longitude: number }[];
-};
-
-const scheduleDeps: ScheduleDeps = {
-  now: () => scheduleNow,
-  driveDuration: async (origin, destination) =>
-    destination.latitude === originStop.latitude && origin.latitude !== originStop.latitude ? 0 : 3600,
-  lookupAddress: async () => "Driver location",
-};
-
-function northOf(
-  from: { latitude: number; longitude: number },
-  meters: number,
-): { latitude: number; longitude: number } {
-  return { latitude: from.latitude + meters / 111_320, longitude: from.longitude };
-}
-
-function lineStop(
-  point: { latitude: number; longitude: number },
-  label: string,
-  passenger: boolean,
-): SortieInput["stops"][number] {
-  return {
-    label,
-    latitude: point.latitude,
-    longitude: point.longitude,
-    waitMinutes: 0,
-    passenger,
-  };
-}
-
-function lineIndex(coordinate: { latitude: number; longitude: number }): number | null {
-  const index = linePoints.findIndex(
-    (point) => point.latitude === coordinate.latitude && point.longitude === coordinate.longitude,
-  );
-  return index >= 0 ? index : null;
-}
-
-function lineDriveDuration(calls: DriveCall[]): ScheduleDeps["driveDuration"] {
-  return async (origin, destination, intermediates) => {
-    calls.push({
-      origin: { latitude: origin.latitude, longitude: origin.longitude },
-      destination: { latitude: destination.latitude, longitude: destination.longitude },
-      intermediates: intermediates.map((point) => ({
-        latitude: point.latitude,
-        longitude: point.longitude,
-      })),
-    });
-    const from = lineIndex(origin);
-    const to = lineIndex(destination);
-    assert.notEqual(from, null);
-    assert.notEqual(to, null);
-    if (from === null || to === null) {
-      return "failed";
-    }
-    return Math.abs(to - from) * hopSeconds;
-  };
-}
-
-function task(label: string, arrivalAt: Date | null, extra?: Partial<SortieInput>): SortieInput {
-  return {
-    label,
-    arrivalAt,
-    passengerName: null,
-    passengerPhone: null,
-    stops: [originStop, destinationStop],
-    ...extra,
-  };
-}
-
-function taskJson(label: string, arrivalAt: string) {
-  return {
-    label,
-    arrivalAt,
-    passengerName: null,
-    passengerPhone: null,
-    stops: [originStop, destinationStop],
-  };
-}
-
-async function placeDriver(
-  userId: string,
-  coordinate: { latitude: number; longitude: number } = driverFix,
-): Promise<void> {
-  const rows = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId));
-  const row = rows[0];
-  if (!row) {
-    throw new Error("driver missing");
-  }
-  await db.insert(locationObservation).values({
-    driverId: row.id,
-    observedAt: new Date("2026-09-01T12:00:00.000Z"),
-    latitude: coordinate.latitude,
-    longitude: coordinate.longitude,
-    accuracyMeters: 8,
-  });
-}
-
-async function removeUser(userId: string): Promise<void> {
-  const drivers = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId));
-  for (const row of drivers) {
-    await db.delete(addressBookEntry).where(eq(addressBookEntry.driverId, row.id));
-    await db.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, row.id));
-    await db.delete(driverMeterReading).where(eq(driverMeterReading.driverId, row.id));
-    await db.delete(locationObservation).where(eq(locationObservation.driverId, row.id));
-    const sorties = await db.select({ id: sortie.id }).from(sortie).where(eq(sortie.authorDriverId, row.id));
-    for (const item of sorties) {
-      await db.delete(operationalEvent).where(eq(operationalEvent.sortieId, item.id));
-      await db.delete(sortieStop).where(eq(sortieStop.sortieId, item.id));
-    }
-    await db.delete(sortie).where(eq(sortie.authorDriverId, row.id));
-    await db.delete(driverTariff).where(eq(driverTariff.driverId, row.id));
-    const links = await db
-      .select({ companyId: driverCompany.companyId })
-      .from(driverCompany)
-      .where(eq(driverCompany.driverId, row.id));
-    await db.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, row.id));
-    await db.delete(driverCompany).where(eq(driverCompany.driverId, row.id));
-    await db.delete(driver).where(eq(driver.id, row.id));
-    for (const link of links) {
-      await db.delete(company).where(eq(company.id, link.companyId));
-    }
-  }
-  await db.delete(session).where(eq(session.userId, userId));
-  await db.delete(userCredential).where(eq(userCredential.userId, userId));
-  await db.delete(user).where(eq(user.id, userId));
-}

@@ -23,11 +23,23 @@ npx expo install --fix      # fix incompatible package versions
 
 Run lint and typecheck before declaring any task done.
 
-## Navigation & Routing
+## Navigation
 
-- Use **Expo Router** for all navigation. Routes live in `src/app/` — every file there is a screen, `_layout.tsx` files define navigators. Keep non-route code (components, hooks, utils) outside `src/app/`.
-- Import `Link`, `router`, and `useLocalSearchParams` from `expo-router`.
-- Docs: https://docs.expo.dev/router/introduction.md
+This app does not use Expo Router. There is no `src/app/` directory.
+
+- `index.ts` registers the root component.
+- `App.tsx` is the shell. It owns session phase, the signed-in tab, the compose dialog, the account websocket, availability, and Android overlay consent.
+- Signed-in navigation is a `destination` string (`navigation`, `addresses`, `calendar`, `settings`, `directory`) set by `BottomNav`. It is not a file-based router.
+- On native, `NavigationScreen` stays mounted under the other tabs so an active route survives a tab change. Calendar, addresses, settings, and directory are covers on top of the map.
+- On web, the map screen mounts only while that tab is selected.
+
+## Platform files
+
+Metro loads a `*.web.tsx` file instead of the native file on web:
+
+- `src/AppFrame.web.tsx` omits `react-native-keyboard-controller`.
+- `src/NavigationScreen.web.tsx` is a read-only account overview. It is not the native guidance screen.
+- `src/GeofenceEditor.web.tsx` renders nothing. Settings does not open the geofence editor on web.
 
 ## Building with EAS
 
@@ -36,6 +48,7 @@ Docs: https://docs.expo.dev/eas/index.md
 
 ## Rules
 
-- If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
+- `ios/` is generated (Continuous Native Generation). Do not create it by hand.
+- `android/` is committed because picture-in-picture guidance needs a customized host. `modules/always-on-top/app.plugin.js` writes the picture-in-picture lifecycle into `android/app/src/main/java/com/groundops/app/MainActivity.kt` (`guidanceKeptAlive`, `onPause`, `onPictureInPictureModeChanged`). Do not regenerate `android/` in a way that drops that host. Other native behavior belongs in `app.json` and config plugins.
 - Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
 - Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md

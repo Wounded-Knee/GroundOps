@@ -9,6 +9,7 @@ import {
   type PlaceSuggestionsResponse,
   type RouteStep,
 } from "@groundops/contracts";
+import { fetchAuthorized, isRecord } from "./authorizedFetch";
 
 const maneuverSet = new Set<string>(maneuvers);
 
@@ -19,21 +20,18 @@ export async function requestPlaceSuggestions(
   bias: GeoCoordinate | null,
 ): Promise<PlaceSuggestion[] | "failed" | "unauthorized"> {
   const body: PlaceSuggestionsRequest = bias ? { query, bias } : { query };
+  const response = await fetchAuthorized(`${apiUrl}/place-suggestions`, token, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response === "unauthorized") {
+    return "unauthorized";
+  }
+  if (response === "unreachable" || !response.ok) {
+    return "failed";
+  }
   try {
-    const response = await fetch(`${apiUrl}/place-suggestions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (!response.ok) {
-      return "failed";
-    }
     const payload: unknown = await response.json();
     if (!isRecord(payload) || !Array.isArray(payload.suggestions)) {
       return "failed";
@@ -59,21 +57,18 @@ export async function requestReverseGeocode(
   token: string,
   position: GeoCoordinate,
 ): Promise<string | "failed" | "unauthorized"> {
+  const response = await fetchAuthorized(`${apiUrl}/reverse-geocode`, token, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(position),
+  });
+  if (response === "unauthorized") {
+    return "unauthorized";
+  }
+  if (response === "unreachable" || !response.ok) {
+    return "failed";
+  }
   try {
-    const response = await fetch(`${apiUrl}/reverse-geocode`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(position),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (!response.ok) {
-      return "failed";
-    }
     const payload: unknown = await response.json();
     if (!isRecord(payload) || typeof payload.address !== "string" || payload.address.trim().length === 0) {
       return "failed";
@@ -91,21 +86,18 @@ export async function requestDrivingRoute(
   destination: GeoCoordinate,
 ): Promise<DrivingRoute | "failed" | "unauthorized"> {
   const body: DrivingRouteRequest = { origin, destination };
+  const response = await fetchAuthorized(`${apiUrl}/driving-routes`, token, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response === "unauthorized") {
+    return "unauthorized";
+  }
+  if (response === "unreachable" || !response.ok) {
+    return "failed";
+  }
   try {
-    const response = await fetch(`${apiUrl}/driving-routes`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (!response.ok) {
-      return "failed";
-    }
     const payload: unknown = await response.json();
     if (!isRecord(payload)) {
       return "failed";
@@ -124,21 +116,18 @@ export async function requestSortieDrivingRoute(
   origin: GeoCoordinate,
   firstStopPosition: number,
 ): Promise<DrivingRoute | "failed" | "unauthorized"> {
+  const response = await fetchAuthorized(`${apiUrl}/sorties/${sortieId}/driving-route`, token, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ origin, firstStopPosition }),
+  });
+  if (response === "unauthorized") {
+    return "unauthorized";
+  }
+  if (response === "unreachable" || !response.ok) {
+    return "failed";
+  }
   try {
-    const response = await fetch(`${apiUrl}/sorties/${sortieId}/driving-route`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ origin, firstStopPosition }),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (!response.ok) {
-      return "failed";
-    }
     const payload: unknown = await response.json();
     if (!isRecord(payload)) {
       return "failed";
@@ -237,6 +226,3 @@ function isMeters(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}

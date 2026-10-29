@@ -5,6 +5,8 @@ import Fastify from "fastify";
 import type { ActiveSession } from "../identity/sessions.js";
 import { registerRoutingRoutes, type RoutingDeps } from "./http.js";
 
+type SessionLookup = (authorization: string | undefined) => Promise<ActiveSession | null>;
+
 const session: ActiveSession = {
   sessionId: "session",
   user: { id: "user", displayName: null, email: null, platformAdministrator: false },
@@ -134,8 +136,15 @@ describe("routing http", () => {
   });
 });
 
-function appWith(deps: RoutingDeps) {
+function appWith(deps: RoutingDeps & { findSession: SessionLookup }) {
   const app = Fastify();
+  app.decorateRequest("session", null);
+  app.decorateRequest("sessionToken", null);
+  app.addHook("preHandler", async (request) => {
+    const header = request.headers.authorization;
+    const authorization = Array.isArray(header) ? header[0] : header;
+    request.session = await deps.findSession(authorization);
+  });
   registerRoutingRoutes(app, deps);
   return app;
 }

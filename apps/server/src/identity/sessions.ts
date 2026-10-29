@@ -1,6 +1,7 @@
 import type { User } from "@groundops/contracts";
 import { and, eq, isNull } from "drizzle-orm";
 import { isPlatformAdministrator } from "../platform/administrator.js";
+import { isUniqueViolation } from "./driver.js";
 import type { GoogleIdentity } from "./google.js";
 import { hashSessionToken, newSessionToken } from "./tokens.js";
 import { db } from "../db.js";
@@ -134,17 +135,4 @@ function presentUser(row: { id: string; displayName: string | null; email: strin
     email: row.email,
     platformAdministrator: isPlatformAdministrator(row.email),
   };
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) {
-    return false;
-  }
-  if ("code" in error && error.code === "23505") {
-    return true;
-  }
-  if ("cause" in error) {
-    return isUniqueViolation(error.cause);
-  }
-  return false;
 }

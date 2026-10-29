@@ -1,8 +1,9 @@
 import type { GeoCoordinate, MeterReading, ReplaceMeterReadingRequest, User } from "@groundops/contracts";
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { db } from "../db.js";
+import { findDriver } from "../identity/driver.js";
 import { meterCleared, meterUpdated, publishRealtime } from "../realtime.js";
-import { driver, driverMeterReading, sortie } from "../schema.js";
+import { driverMeterReading, sortie } from "../schema.js";
 
 export type MeterReadingInput = ReplaceMeterReadingRequest;
 
@@ -15,7 +16,7 @@ export async function replaceMeterReading(
   if (!validReading(input)) {
     return "invalid";
   }
-  const author = await findDriver(person.id);
+  const author = await findDriver(db, person.id);
   if (!author) {
     return "no-driver";
   }
@@ -89,7 +90,7 @@ export async function clearDriverMeter(driverId: string, userId: string): Promis
 }
 
 export async function clearMeterReading(person: User): Promise<"ok" | "no-driver"> {
-  const author = await findDriver(person.id);
+  const author = await findDriver(db, person.id);
   if (!author) {
     return "no-driver";
   }
@@ -136,11 +137,6 @@ function toMeter(row: {
     overviewPath: row.overviewPath,
     updatedAt: row.updatedAt.toISOString(),
   };
-}
-
-async function findDriver(userId: string): Promise<{ id: string } | null> {
-  const rows = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId)).limit(1);
-  return rows[0] ?? null;
 }
 
 function validReading(input: MeterReadingInput): boolean {

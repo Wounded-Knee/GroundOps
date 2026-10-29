@@ -1,4 +1,3 @@
-import type { Tariff } from "@groundops/contracts";
 import { useEffect, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type ViewStyle } from "react-native";
 import { formatSeconds } from "./guidance";
@@ -10,6 +9,7 @@ import {
   meterCharges,
 } from "./meter";
 import { countdownRemainingSeconds } from "./sortieDwell";
+import type { MeterDisplay } from "./meterDisplay";
 import { useTheme } from "./ThemeProvider";
 import { withAlpha, type ThemeColors } from "./theme";
 
@@ -22,25 +22,7 @@ export function meterPanelHeight(windowHeight: number): number {
   return Math.max(0, windowHeight * 0.25 - 2 * em);
 }
 
-export type MeterDisplay = {
-  milesTraveled: number;
-  waitSeconds: number;
-  remainingMeters: number;
-  baselineRemainingMeters: number;
-  estimatedDurationSeconds: number;
-  turnRemainingMeters: number;
-  turnBaselineMeters: number;
-  tariff: Tariff | null;
-  canArrive: boolean;
-  dwelling: boolean;
-  waitEndsAt: number | null;
-  meterPaused: boolean;
-  flashFare: boolean;
-  showOnward: boolean;
-  showCommence: boolean;
-  pendingNextLeg: boolean;
-  flagDropped: boolean;
-};
+export type { MeterDisplay } from "./meterDisplay";
 
 export function MeterStrip({
   reading,

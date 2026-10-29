@@ -11,6 +11,7 @@ import type {
   DirectoryUserList,
   DirectoryUserRequest,
 } from "@groundops/contracts";
+import { fetchAuthorized, isRecord } from "./authorizedFetch";
 
 export type DirectoryFailure = "unauthorized" | "forbidden" | "invalid" | "missing" | "in-use" | "unreachable";
 
@@ -56,20 +57,16 @@ export async function putCompanyMember(
   companyId: string,
   body: DirectoryMemberRequest,
 ): Promise<DirectoryMember | DirectoryFailure> {
-  try {
-    const response = await fetch(`${apiUrl}/companies/${companyId}/members`, {
-      method: "PUT",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      return failureFromStatus(response.status);
-    }
-    const payload: unknown = await response.json();
-    return isMember(payload) ? payload : "unreachable";
-  } catch {
-    return "unreachable";
+  const response = await directoryFetch(apiUrl, token, `/companies/${companyId}/members`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!(response instanceof Response)) {
+    return response;
   }
+  const payload: unknown = await response.json();
+  return isMember(payload) ? payload : "unreachable";
 }
 
 export async function deleteCompanyMember(
@@ -147,18 +144,12 @@ async function readList<T>(
   path: string,
   parse: (value: unknown) => value is T,
 ): Promise<T | DirectoryFailure> {
-  try {
-    const response = await fetch(`${apiUrl}${path}`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      return failureFromStatus(response.status);
-    }
-    const body: unknown = await response.json();
-    return parse(body) ? body : "unreachable";
-  } catch {
-    return "unreachable";
+  const response = await directoryFetch(apiUrl, token, path);
+  if (!(response instanceof Response)) {
+    return response;
   }
+  const body: unknown = await response.json();
+  return parse(body) ? body : "unreachable";
 }
 
 async function writeNamed(
@@ -168,20 +159,16 @@ async function writeNamed(
   path: string,
   body: DirectoryNameRequest,
 ): Promise<DirectoryCompany | DirectoryFailure> {
-  try {
-    const response = await fetch(`${apiUrl}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      return failureFromStatus(response.status);
-    }
-    const payload: unknown = await response.json();
-    return isNamed(payload) ? payload : "unreachable";
-  } catch {
-    return "unreachable";
+  const response = await directoryFetch(apiUrl, token, path, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!(response instanceof Response)) {
+    return response;
   }
+  const payload: unknown = await response.json();
+  return isNamed(payload) ? payload : "unreachable";
 }
 
 async function writeUser(
@@ -191,35 +178,40 @@ async function writeUser(
   path: string,
   body: DirectoryUserRequest,
 ): Promise<DirectoryUser | DirectoryFailure> {
-  try {
-    const response = await fetch(`${apiUrl}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      return failureFromStatus(response.status);
-    }
-    const payload: unknown = await response.json();
-    return isDirectoryUser(payload) ? payload : "unreachable";
-  } catch {
-    return "unreachable";
+  const response = await directoryFetch(apiUrl, token, path, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!(response instanceof Response)) {
+    return response;
   }
+  const payload: unknown = await response.json();
+  return isDirectoryUser(payload) ? payload : "unreachable";
 }
 
 async function remove(apiUrl: string, token: string, path: string): Promise<"ok" | DirectoryFailure> {
-  try {
-    const response = await fetch(`${apiUrl}${path}`, {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 204) {
-      return "ok";
-    }
-    return failureFromStatus(response.status);
-  } catch {
-    return "unreachable";
+  const response = await directoryFetch(apiUrl, token, path, { method: "DELETE" });
+  if (!(response instanceof Response)) {
+    return response;
   }
+  return response.status === 204 ? "ok" : failureFromStatus(response.status);
+}
+
+async function directoryFetch(
+  apiUrl: string,
+  token: string,
+  path: string,
+  init?: RequestInit,
+): Promise<Response | DirectoryFailure> {
+  const response = await fetchAuthorized(`${apiUrl}${path}`, token, init);
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (!response.ok && response.status !== 204) {
+    return failureFromStatus(response.status);
+  }
+  return response;
 }
 
 function failureFromStatus(status: number): DirectoryFailure {
@@ -285,6 +277,3 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}

@@ -1,11 +1,6 @@
-import {
-  availabilityThresholdMaxMinutes,
-  type AvailabilitySettings,
-  type GeoCoordinate,
-  type User,
-} from "@groundops/contracts";
+import type { AvailabilitySettings, GeoCoordinate, User } from "@groundops/contracts";
 import { eq } from "drizzle-orm";
-import { ensureDriver } from "../calendar/calendar.js";
+import { ensureDriver } from "../identity/driver.js";
 import { db } from "../db.js";
 import { driver } from "../schema.js";
 import { settleAvailabilitySettings } from "./automatic.js";
@@ -40,10 +35,7 @@ export async function replaceAvailabilitySettings(
   person: User,
   settings: AvailabilitySettings,
   now: Date = new Date(),
-): Promise<AvailabilitySettings | "invalid"> {
-  if (!isValidAvailabilitySettings(settings)) {
-    return "invalid";
-  }
+): Promise<AvailabilitySettings> {
   const ensured = await ensureDriver(person);
   const geofence = settings.geofence.map((point) => ({
     latitude: point.latitude,
@@ -65,38 +57,6 @@ export async function replaceAvailabilitySettings(
     autoSetAvailable: settings.autoSetAvailable,
     geofence,
   };
-}
-
-export function isValidAvailabilitySettings(settings: AvailabilitySettings): boolean {
-  return (
-    Number.isInteger(settings.thresholdMinutes) &&
-    settings.thresholdMinutes >= 0 &&
-    settings.thresholdMinutes <= availabilityThresholdMaxMinutes &&
-    typeof settings.autoSetUnavailable === "boolean" &&
-    typeof settings.autoSetAvailable === "boolean" &&
-    isValidRing(settings.geofence)
-  );
-}
-
-function isValidRing(ring: GeoCoordinate[]): boolean {
-  if (!Array.isArray(ring)) {
-    return false;
-  }
-  if (ring.length === 0) {
-    return true;
-  }
-  if (ring.length < 3) {
-    return false;
-  }
-  return ring.every(
-    (point) =>
-      Number.isFinite(point.latitude) &&
-      point.latitude >= -90 &&
-      point.latitude <= 90 &&
-      Number.isFinite(point.longitude) &&
-      point.longitude >= -180 &&
-      point.longitude <= 180,
-  );
 }
 
 function sanitizeRing(value: unknown): GeoCoordinate[] {

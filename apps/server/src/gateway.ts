@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { Subscription } from "@nats-io/transport-node";
-import { z } from "zod";
+import { realtimeEnvelopeSchema } from "./http/schemas.js";
 import { findActiveSession } from "./identity/sessions.js";
 import { readBearer } from "./identity/tokens.js";
 
@@ -19,13 +19,6 @@ type AuthenticatedSocket = {
 
 export const socketOpen = 1;
 const sockets = new Set<AuthenticatedSocket>();
-
-const realtimeEnvelope = z.object({
-  id: z.uuid(),
-  type: z.string().min(1),
-  userId: z.uuid(),
-  recordedAt: z.string().min(1),
-});
 
 /**
  * Session token from `Authorization: Bearer`, or from the web handshake.
@@ -123,7 +116,7 @@ async function acceptSocket(socket: ClientSocket, token: string | null): Promise
 
 async function forward(app: FastifyInstance, subscription: Subscription): Promise<void> {
   for await (const message of subscription) {
-    const parsed = realtimeEnvelope.safeParse(readJson(message.string()));
+    const parsed = realtimeEnvelopeSchema.safeParse(readJson(message.string()));
     if (!parsed.success) {
       app.log.warn("dropped realtime payload that is not an envelope");
       continue;

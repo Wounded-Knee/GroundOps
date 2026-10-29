@@ -7,7 +7,7 @@ import type {
   Sortie,
   SortieStop,
 } from "@groundops/contracts";
-import type { MeterDisplay } from "./MeterStrip";
+import type { MeterDisplay } from "./meterDisplay";
 
 export type AccountActivity = {
   location: LocationFix | null;

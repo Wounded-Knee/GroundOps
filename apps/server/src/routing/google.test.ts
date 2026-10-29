@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { computeDriveDuration, computeDrivingRoute, lookupAddress, mapGoogleRoute, mapManeuver, suggestPlaces } from "./google.js";
+import { computeDriveDuration, computeDrivingRoute, lookupAddress, suggestPlaces } from "./google.js";
+import { mapGoogleRoute, mapManeuver } from "./googleRoute.js";
 
 const encoded = "_p~iF~ps|U_ulLnnqC_mqNvxq`@";
 

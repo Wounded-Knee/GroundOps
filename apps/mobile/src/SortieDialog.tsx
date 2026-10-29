@@ -7,7 +7,6 @@ import { PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextIn
 import { AddressPicker } from "./AddressPicker";
 import { aestheticAddress } from "./aestheticAddress";
 import { resolveApiUrl } from "./apiUrl";
-import { previewSortie, scheduleConflictMessage } from "./calendarClient";
 import {
   arrivalFromDateInput,
   arrivalFromTimeInput,
@@ -23,7 +22,9 @@ import {
 } from "./calendarTime";
 import { applyPassengerToggle, repairPassengerSpan } from "./passengerSpan";
 import { requestReverseGeocode } from "./routingClient";
+import { indexAtOffset, moveStop, rowTranslate, type StopDrag } from "./sortieDrag";
 import { useTheme } from "./ThemeProvider";
+import { useSortiePreview } from "./useSortiePreview";
 import type { ThemeColors } from "./theme";
 
 const apiUrl = resolveApiUrl();
@@ -48,12 +49,6 @@ export type DialogDraft = {
 };
 
 type PickerTarget = "arrival-date" | "arrival-time";
-
-type StopDrag = {
-  index: number;
-  dy: number;
-  target: number;
-};
 
 export function SortieDialog({
   draft,
@@ -89,9 +84,15 @@ export function SortieDialog({
   const [editingIndex, setEditingIndex] = useState<number | null>(draft.focusStopIndex ?? null);
   const [drag, setDrag] = useState<StopDrag | null>(null);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
-  const [conflict, setConflict] = useState<string | null>(null);
+  const conflict = useSortiePreview({
+    apiUrl,
+    token,
+    arrival,
+    sortieId: draft.sortieId,
+    stops,
+    onUnauthorized,
+  });
   const gpsSeeded = useRef(false);
-  const previewRequest = useRef(0);
   const stopsRef = useRef(stops);
   stopsRef.current = stops;
   const rowHeights = useRef<number[]>([]);
@@ -102,41 +103,6 @@ export function SortieDialog({
   useEffect(() => {
     return () => scrollLock.current?.(false);
   }, []);
-
-  useEffect(() => {
-    const chosen = previewStops(stops);
-    if (chosen.length === 0) {
-      previewRequest.current += 1;
-      setConflict(null);
-      return;
-    }
-    const requestId = ++previewRequest.current;
-    const timer = setTimeout(() => {
-      void (async () => {
-        const result = await previewSortie(apiUrl, token, {
-          label: "",
-          arrivalAt: arrival ? arrival.toISOString() : null,
-          passengerName: null,
-          passengerPhone: null,
-          stops: chosen,
-          sortieId: draft.sortieId,
-        });
-        if (requestId !== previewRequest.current) {
-          return;
-        }
-        if (result === "unauthorized") {
-          onUnauthorized();
-          return;
-        }
-        if (typeof result === "string") {
-          setConflict(null);
-          return;
-        }
-        setConflict(scheduleConflictMessage(result.endangered.map((item) => item.label)));
-      })();
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [arrival, draft.sortieId, onUnauthorized, stops, token]);
 
   useEffect(() => {
     if (draft.sortieId !== null || gpsSeeded.current) {
@@ -694,17 +660,6 @@ function WebPicker({ mode, value, onPicked }: { mode: "date" | "time"; value: Da
   });
 }
 
-function previewStops(drafts: StopDraft[]): SortieStopWrite[] {
-  const stops: SortieStopWrite[] = [];
-  for (const draft of drafts) {
-    const stop = toStop(draft);
-    if (stop) {
-      stops.push(stop);
-    }
-  }
-  return stops;
-}
-
 function chosenStops(drafts: StopDraft[]): SortieStopWrite[] | null {
   if (drafts.length === 0) {
     return null;
@@ -834,58 +789,6 @@ function withRepairedPassengers(stops: StopDraft[]): StopDraft[] {
     stops,
     repairPassengerSpan(stops.map((stop) => stop.passenger)),
   );
-}
-
-function moveStop(stops: StopDraft[], from: number, to: number): StopDraft[] {
-  if (from === to || from < 0 || to < 0 || from >= stops.length || to >= stops.length) {
-    return stops;
-  }
-  const next = stops.slice();
-  const [moved] = next.splice(from, 1);
-  if (!moved) {
-    return stops;
-  }
-  next.splice(to, 0, moved);
-  return next;
-}
-
-function indexAtOffset(heights: readonly number[], from: number, dy: number, count: number): number {
-  if (count <= 1) {
-    return 0;
-  }
-  const safe = Array.from({ length: count }, (_, index) => {
-    const height = heights[index] ?? 0;
-    return height > 0 ? height : 64;
-  });
-  const fromTop = safe.slice(0, from).reduce((sum, height) => sum + height, 0);
-  const center = fromTop + dy + (safe[from] ?? 64) / 2;
-  let cursor = 0;
-  for (let index = 0; index < safe.length; index += 1) {
-    const height = safe[index] ?? 64;
-    if (center < cursor + height) {
-      return index;
-    }
-    cursor += height;
-  }
-  return safe.length - 1;
-}
-
-function rowTranslate(index: number, drag: StopDrag | null, heights: readonly number[]): number {
-  if (!drag) {
-    return 0;
-  }
-  if (index === drag.index) {
-    return drag.dy;
-  }
-  const measured = heights[drag.index] ?? 0;
-  const span = measured > 0 ? measured : 64;
-  if (drag.index < drag.target && index > drag.index && index <= drag.target) {
-    return -span;
-  }
-  if (drag.target < drag.index && index >= drag.target && index < drag.index) {
-    return span;
-  }
-  return 0;
 }
 
 async function currentGpsPlace(

@@ -80,7 +80,6 @@ describe("driver tariff", () => {
       perWaitMinuteCents: 50,
     });
     assert.deepEqual(await readTariff(person.user), saved);
-    assert.equal(await replaceTariff(person.user, { flagCents: -1, perMileCents: 0, perWaitMinuteCents: 0 }), "invalid");
     await removeUser(person.user.id);
   });
 
@@ -107,6 +106,14 @@ describe("driver tariff", () => {
     });
     assert.equal(put.statusCode, 200);
     assert.deepEqual(put.json(), { flagCents: 100, perMileCents: 200, perWaitMinuteCents: 30 });
+    const rejected = await app.inject({
+      method: "PUT",
+      url: "/fare-rates",
+      headers: { authorization: `Bearer ${person.token}`, "content-type": "application/json" },
+      payload: { flagCents: -1, perMileCents: 0, perWaitMinuteCents: 0 },
+    });
+    assert.equal(rejected.statusCode, 400);
+    assert.deepEqual(await readTariff(person.user), { flagCents: 100, perMileCents: 200, perWaitMinuteCents: 30 });
     const denied = await app.inject({ method: "GET", url: "/fare-rates" });
     assert.equal(denied.statusCode, 401);
     await app.close();

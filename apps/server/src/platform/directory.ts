@@ -1,18 +1,16 @@
 import type { DirectoryCompany, DirectoryFacility, DirectoryMember, DirectoryUser } from "@groundops/contracts";
 import { and, asc, eq, inArray } from "drizzle-orm";
+import { deleteOwnedByDriver as deleteAddressBookOwnedByDriver } from "../addressBook/addressBook.js";
+import { deleteOwnedByDriver as deleteAvailabilityOwnedByDriver } from "../availability/availability.js";
+import { deleteOwnedByDriver as deleteSortieOwnedByDriver, driverHasOperationalRecords } from "../calendar/owned.js";
 import { db } from "../db.js";
+import { deleteOwnedByDriver as deleteDriverOwnedByDriver } from "../identity/driver.js";
 import {
   addressBookCompanyShare,
-  addressBookEntry,
-  addressBookPhoneStar,
   company,
   driver,
-  driverAvailabilityEvent,
   driverCompany,
-  driverMeterReading,
-  driverTariff,
   facility,
-  locationObservation,
   session,
   sortie,
   user,
@@ -286,69 +284,20 @@ export async function deleteDirectoryUser(callerId: string, userId: string): Pro
     }
     const drivers = await tx.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId)).limit(1);
     const driverRow = drivers[0];
-    if (driverRow && (await driverHasOperations(tx, driverRow.id))) {
+    if (driverRow && (await driverHasOperationalRecords(tx, driverRow.id))) {
       return "in-use";
     }
     if (driverRow) {
-      const entries = await tx
-        .select({ id: addressBookEntry.id })
-        .from(addressBookEntry)
-        .where(eq(addressBookEntry.driverId, driverRow.id));
-      if (entries.length > 0) {
-        await tx.delete(addressBookCompanyShare).where(
-          inArray(
-            addressBookCompanyShare.entryId,
-            entries.map((entry) => entry.id),
-          ),
-        );
-      }
-      await tx.delete(addressBookEntry).where(eq(addressBookEntry.driverId, driverRow.id));
-      await tx.delete(addressBookPhoneStar).where(eq(addressBookPhoneStar.driverId, driverRow.id));
-      await tx.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, driverRow.id));
-      await tx.delete(driverCompany).where(eq(driverCompany.driverId, driverRow.id));
-      await tx.delete(driver).where(eq(driver.id, driverRow.id));
+      await deleteSortieOwnedByDriver(tx, driverRow.id);
+      await deleteAddressBookOwnedByDriver(tx, driverRow.id);
+      await deleteAvailabilityOwnedByDriver(tx, driverRow.id);
+      await deleteDriverOwnedByDriver(tx, driverRow.id);
     }
     await tx.delete(session).where(eq(session.userId, userId));
     await tx.delete(userCredential).where(eq(userCredential.userId, userId));
     await tx.delete(user).where(eq(user.id, userId));
     return "ok";
   });
-}
-
-async function driverHasOperations(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  driverId: string,
-): Promise<boolean> {
-  const sorties = await tx
-    .select({ id: sortie.id })
-    .from(sortie)
-    .where(eq(sortie.authorDriverId, driverId))
-    .limit(1);
-  if (sorties[0]) {
-    return true;
-  }
-  const fixes = await tx
-    .select({ id: locationObservation.id })
-    .from(locationObservation)
-    .where(eq(locationObservation.driverId, driverId))
-    .limit(1);
-  if (fixes[0]) {
-    return true;
-  }
-  const meters = await tx
-    .select({ id: driverMeterReading.id })
-    .from(driverMeterReading)
-    .where(eq(driverMeterReading.driverId, driverId))
-    .limit(1);
-  if (meters[0]) {
-    return true;
-  }
-  const tariffs = await tx
-    .select({ id: driverTariff.id })
-    .from(driverTariff)
-    .where(eq(driverTariff.driverId, driverId))
-    .limit(1);
-  return Boolean(tariffs[0]);
 }
 
 function requiredName(value: string): string | null {

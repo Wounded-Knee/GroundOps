@@ -1,11 +1,10 @@
-import type { AvailabilityInterval, PlaceSuggestion, Sortie, SortieWriteRequest } from "@groundops/contracts";
+import type { PlaceSuggestion, Sortie, SortieWriteRequest } from "@groundops/contracts";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Alert,
-  AppState,
   PanResponder,
   PixelRatio,
   Platform,
@@ -21,15 +20,8 @@ import {
 import { availableYellow } from "./AvailabilityStatus";
 import { saveChosenPlace } from "./addressBookStore";
 import { resolveApiUrl } from "./apiUrl";
-import { readCalendarCache, writeCalendarCache } from "./calendarCache";
-import {
-  authorSortie,
-  commenceSortie,
-  ensureCurrentDriver,
-  requestCalendar,
-  requestTariff,
-  reviseSortie,
-} from "./calendarClient";
+import { commenceSortie, requestTariff } from "./calendarClient";
+import { useCalendar, type CalendarReady as Ready } from "./useCalendar";
 import { coalescedEndDate, coalescedStartDate } from "./sortieStart";
 import {
   availabilityBlocksOnDay,
@@ -86,30 +78,6 @@ const waypointTitleClearance = 34;
 
 const apiUrl = resolveApiUrl();
 
-type Ready = {
-  status: "ready";
-  scope: CalendarScope;
-  anchor: Date;
-  sorties: Sortie[];
-  availability: AvailabilityInterval[];
-  live: boolean;
-  message: string | null;
-  dialog: DialogDraft | null;
-};
-
-function emptyCalendar(anchor: Date): Ready {
-  return {
-    status: "ready",
-    scope: "day",
-    anchor,
-    sorties: [],
-    availability: [],
-    live: false,
-    message: null,
-    dialog: null,
-  };
-}
-
 type GridBox = {
   x: number;
   y: number;
@@ -141,7 +109,6 @@ export function CalendarScreen({
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
-  const [screen, setScreen] = useState<Ready>(() => emptyCalendar(new Date()));
   const [hourPx, setHourPx] = useState(hourHeight);
   const [pinchShift, setPinchShift] = useState(0);
   const [pinchActive, setPinchActive] = useState(false);
@@ -151,8 +118,17 @@ export function CalendarScreen({
   const [agendaTab, setAgendaTab] = useState<"upcoming" | "history">("upcoming");
   const [expandedSortieId, setExpandedSortieId] = useState<string | null>(null);
   const [agendaScrollLocked, setAgendaScrollLocked] = useState(false);
-  const generation = useRef(0);
-  const saving = useRef(false);
+  const { screen, setScreen, showPeriod, commit } = useCalendar({
+    userId,
+    token,
+    reloadToken,
+    onUnauthorized,
+    clearHeld: () => setHeld(null),
+    closeDialogChrome: () => {
+      setExpandedSortieId(null);
+      setAgendaScrollLocked(false);
+    },
+  });
   const gridRef = useRef<View>(null);
   const gridBox = useRef<GridBox | null>(null);
   const columnWidth = useRef(0);
@@ -175,9 +151,6 @@ export function CalendarScreen({
   const pendingZoomScroll = useRef<number | null>(null);
 
   hourPxRef.current = hourPx;
-
-  const shown = useRef({ scope: screen.scope, anchor: screen.anchor, live: screen.live });
-  shown.current = { scope: screen.scope, anchor: screen.anchor, live: screen.live };
 
   function scrollNowIntoCenter(at: Date = now): void {
     if (screen.scope === "month" || screen.scope === "agenda") {
@@ -295,7 +268,7 @@ export function CalendarScreen({
       focalNow: focalInView,
     };
     setPinchActive(true);
-    hourScroll.current?.measureInWindow((_x, y, _width, height) => {
+    measureScrollInWindow(hourScroll.current, (y, height) => {
       const previousTop = hourScrollBox.current.y;
       hourScrollBox.current = { y, height };
       if (pinch.current.active && Math.abs(previousTop - y) > 1) {
@@ -343,206 +316,6 @@ export function CalendarScreen({
     scrollYRef.current = y;
     hourScroll.current?.scrollTo({ y, animated: false });
   }, [hourPx, pinchShift]);
-
-  useEffect(() => {
-    const current = ++generation.current;
-    void load("day", new Date(), current);
-  }, [token, userId]);
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 30_000);
-    return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
-    if (reloadToken === 0) {
-      return;
-    }
-    const current = ++generation.current;
-    void load(shown.current.scope, shown.current.anchor, current);
-  }, [reloadToken]);
-
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (state) => {
-      if (state !== "active" || !shown.current.live) {
-        return;
-      }
-      const current = ++generation.current;
-      void load(shown.current.scope, shown.current.anchor, current);
-    });
-    return () => sub.remove();
-  }, [token, userId]);
-
-  async function load(scope: CalendarScope, anchor: Date, current: number): Promise<void> {
-    const range = visibleRange(scope, anchor);
-    void readCalendarCache(userId).then((cached) => {
-      if (generation.current !== current || !cached) {
-        return;
-      }
-      setScreen((prev) =>
-        prev.live || prev.message ? prev : { ...prev, sorties: cached.sorties, availability: cached.availability },
-      );
-    });
-
-    const ensured = await ensureCurrentDriver(apiUrl, token);
-    if (generation.current !== current) {
-      return;
-    }
-    if (ensured === "unauthorized") {
-      onUnauthorized();
-      return;
-    }
-    if (ensured === "unreachable") {
-      await showCached(scope, anchor, current);
-      return;
-    }
-
-    const calendar = await requestCalendar(apiUrl, token, range.from.toISOString(), range.to.toISOString());
-    if (generation.current !== current) {
-      return;
-    }
-    if (calendar === "unauthorized") {
-      onUnauthorized();
-      return;
-    }
-    if (calendar === "unreachable" || calendar === "rejected") {
-      await showCached(scope, anchor, current);
-      return;
-    }
-
-    await writeCalendarCache({
-      userId,
-      from: range.from.toISOString(),
-      to: range.to.toISOString(),
-      sorties: calendar.sorties,
-      availability: calendar.availability,
-    });
-    if (generation.current !== current) {
-      return;
-    }
-    setScreen((prev) => ({
-      ...prev,
-      scope,
-      anchor,
-      sorties: calendar.sorties,
-      availability: calendar.availability,
-      live: true,
-      message: saveFailureMessage(prev.message) ? prev.message : null,
-      dialog: withFreshSortie(prev.dialog, calendar.sorties),
-    }));
-  }
-
-  async function showCached(scope: CalendarScope, anchor: Date, current: number): Promise<void> {
-    const cached = await readCalendarCache(userId);
-    if (generation.current !== current) {
-      return;
-    }
-    setScreen((prev) => ({
-      ...prev,
-      scope,
-      anchor,
-      sorties: cached?.sorties ?? [],
-      availability: cached?.availability ?? [],
-      live: false,
-      message: cached ? couldNotRefresh : couldNotLoad,
-      dialog: null,
-    }));
-  }
-
-  function showPeriod(scope: CalendarScope, anchor: Date): void {
-    setHeld(null);
-    setExpandedSortieId(null);
-    setAgendaScrollLocked(false);
-    const current = ++generation.current;
-    setScreen((currentScreen) => ({
-      ...currentScreen,
-      scope,
-      anchor,
-      dialog: null,
-      message: currentScreen.live ? null : currentScreen.message,
-    }));
-    void load(scope, anchor, current);
-  }
-
-  async function commit(ready: Ready, sortieId: string | null, body: SortieWriteRequest): Promise<void> {
-    if (!ready.live || saving.current) {
-      if (!saving.current) {
-        setHeld(null);
-        if (!ready.live) {
-          setScreen((prev) => (prev.message ? prev : { ...prev, message: notSaved }));
-        }
-      }
-      return;
-    }
-    saving.current = true;
-    const current = generation.current;
-    const saved = sortieId
-      ? await reviseSortie(apiUrl, token, sortieId, body)
-      : await authorSortie(apiUrl, token, body);
-    saving.current = false;
-    if (saved === "unauthorized") {
-      setHeld(null);
-      onUnauthorized();
-      return;
-    }
-    if (saved === "no-location") {
-      setHeld(null);
-      setScreen((prev) => ({ ...prev, message: locationRequired }));
-      return;
-    }
-    if (typeof saved === "string") {
-      setHeld(null);
-      setScreen((prev) => ({ ...prev, message: notSaved }));
-      return;
-    }
-
-    // sortie.updated reloads the calendar and bumps generation before this fetch
-    // resolves. Close first so that reload cannot leave the dialog open with no error.
-    setExpandedSortieId(null);
-    setAgendaScrollLocked(false);
-    setScreen((prev) => ({ ...prev, dialog: null, message: null }));
-
-    if (generation.current !== current) {
-      setHeld(null);
-      return;
-    }
-
-    const range = visibleRange(ready.scope, ready.anchor);
-    const calendar = await requestCalendar(apiUrl, token, range.from.toISOString(), range.to.toISOString());
-    if (generation.current !== current) {
-      setHeld(null);
-      return;
-    }
-    if (calendar === "unauthorized") {
-      setHeld(null);
-      onUnauthorized();
-      return;
-    }
-    if (typeof calendar === "string") {
-      setHeld(null);
-      setScreen((prev) => ({ ...prev, live: false, message: couldNotRefresh }));
-      return;
-    }
-    await writeCalendarCache({
-      userId,
-      from: range.from.toISOString(),
-      to: range.to.toISOString(),
-      sorties: calendar.sorties,
-      availability: calendar.availability,
-    });
-    if (generation.current !== current) {
-      setHeld(null);
-      return;
-    }
-    setHeld(null);
-    setScreen((prev) => ({
-      ...prev,
-      sorties: calendar.sorties,
-      availability: calendar.availability,
-      live: true,
-      message: prev.dialog ? prev.message : null,
-    }));
-  }
 
   function openDialog(ready: Ready, dialog: DialogDraft): void {
     if (!ready.live) {
@@ -852,7 +625,7 @@ export function CalendarScreen({
                 style={styles.gridScroll}
                 onLayout={(event) => {
                   hourScrollViewportH.current = event.nativeEvent.layout.height;
-                  hourScroll.current?.measureInWindow((_x, y, _width, measuredHeight) => {
+                  measureScrollInWindow(hourScroll.current, (y, measuredHeight) => {
                     hourScrollBox.current = { y, height: measuredHeight };
                   });
                   if (!pinch.current.active) {
@@ -1367,19 +1140,16 @@ function MonthChip({
   );
 }
 
-function saveFailureMessage(message: string | null): boolean {
-  return message === notSaved || message === locationRequired;
-}
-
-function withFreshSortie(dialog: DialogDraft | null, sorties: Sortie[]): DialogDraft | null {
-  if (!dialog?.sortie) {
-    return dialog;
-  }
-  const fresh = sorties.find((item) => item.id === dialog.sortie?.id);
-  if (!fresh || fresh === dialog.sortie) {
-    return dialog;
-  }
-  return { ...dialog, sortie: fresh };
+function measureScrollInWindow(
+  view: ScrollView | null,
+  onMeasure: (y: number, height: number) => void,
+): void {
+  const host = view as
+    | (ScrollView & {
+        measureInWindow?: (callback: (x: number, y: number, width: number, height: number) => void) => void;
+      })
+    | null;
+  host?.measureInWindow?.((_x, y, _width, height) => onMeasure(y, height));
 }
 
 function markersOnBlock(

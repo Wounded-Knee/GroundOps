@@ -1,12 +1,9 @@
-import type { RealtimeEnvelope, PlaceSuggestion, Sortie, SortieWriteRequest, User } from "@groundops/contracts";
-import * as AuthSession from "expo-auth-session";
-import * as Crypto from "expo-crypto";
-import * as WebBrowser from "expo-web-browser";
+import type { PlaceSuggestion, Sortie, SortieWriteRequest } from "@groundops/contracts";
 import { StatusBar } from "expo-status-bar";
 import * as QuickActions from "expo-quick-actions";
 import type { Action } from "expo-quick-actions";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppFrame } from "./src/AppFrame";
 import { resolveApiUrl } from "./src/apiUrl";
 import { AddressBookScreen } from "./src/AddressBookScreen";
@@ -31,31 +28,13 @@ import { BottomNav, type SignedInDestination } from "./src/BottomNav";
 import { DirectoryScreen } from "./src/DirectoryScreen";
 import { CalendarScreen } from "./src/CalendarScreen";
 import { LocationReporter } from "./src/LocationReporter";
-import { clearCalendarCache } from "./src/calendarCache";
-import { authorSortie, completeSortie, ensureCurrentDriver, readActivity, reviseSortie } from "./src/calendarClient";
-import {
-  applyEnvelope,
-  applySnapshot,
-  completedSortie,
-  emptyActivity,
-  meterDisplayForActivity,
-  readRealtimeEnvelope,
-  type AccountActivity,
-} from "./src/liveActivity";
+import { completeSortie } from "./src/calendarClient";
+import { saveSortieDraft } from "./src/saveSortie";
+import { completedSortie, emptyActivity, meterDisplayForActivity, type AccountActivity } from "./src/liveActivity";
 import { formatUsPhone } from "./src/calendarTime";
 import { AppWideStatus } from "./src/AppWideStatus";
-import type { MeterDisplay } from "./src/MeterStrip";
-import {
-  applyAvailabilityEnvelope,
-  applyAvailabilitySnapshot,
-  availabilityCheckInMs,
-  deliverAvailabilityEnvelope,
-  emptyAvailability,
-  subscribeAvailability,
-  type AvailabilityView,
-} from "./src/availability";
-import { checkInAvailability, putAvailability, readAvailability } from "./src/availabilityClient";
-import { recordAvailabilityCheckIn } from "./src/availabilityKeepalive";
+import type { MeterDisplay } from "./src/meterDisplay";
+import { AccountOverview } from "./src/AccountOverview";
 import { NavigationScreen } from "./src/NavigationScreen";
 import type { SortieGuideCommand } from "./src/sortieGuide";
 import type { PlaceGuideCommand } from "./src/placeGuide";
@@ -68,71 +47,22 @@ import {
   placesFromSortie,
   type DialogDraft,
 } from "./src/SortieDialog";
-import {
-  createSession,
-  openAuthenticatedSocket,
-  readCurrentUser,
-  revokeSession,
-} from "./src/sessionClient";
-import { deleteStoredSession, readStoredSession, writeStoredSession } from "./src/sessionStore";
-import { stopLocationObservationUpdates } from "./src/locationObservationReporting";
-import type { SocketState } from "./src/networkStatus";
 import { useNetworkStatus } from "./src/useNetworkStatus";
 import { ThemeProvider, useTheme } from "./src/ThemeProvider";
 import type { ThemeColors } from "./src/theme";
 import { VisualAlert } from "./src/VisualAlert";
-import {
-  armNativeAlert,
-  canDrawOverlays,
-  clearNativeAlert,
-  dismissAlwaysOnTop,
-  isAlwaysOnTopActive,
-  promptOverlayPermission,
-  rememberAlertPrefs,
-  setAlwaysOnTopEligible,
-  setNativeOverlayActive,
-  subscribeAlwaysOnTop,
-} from "./src/alwaysOnTop";
-import { ensureAlwaysOnTopConsentLoaded, rememberAlwaysOnTopConsentAsked } from "./src/alwaysOnTopConsent";
-import { shouldAskAlwaysOnTopConsent } from "./src/alwaysOnTopLogic";
-import {
-  ensureVisualAlertPrefsLoaded,
-  getVisualAlertPrefs,
-  subscribeVisualAlertPrefs,
-  type VisualAlertPrefs,
-} from "./src/visualAlertPrefs";
-
-WebBrowser.maybeCompleteAuthSession();
+import { useAccountActivity } from "./src/useAccountActivity";
+import { useAlwaysOnTop } from "./src/useAlwaysOnTop";
+import { useAvailabilitySession } from "./src/useAvailabilitySession";
+import { useSession } from "./src/useSession";
 
 const apiUrl = resolveApiUrl();
-const googleClient = googleClientForPlatform();
-const nativeGoogleSignIn = Platform.OS !== "web";
-const redirectUri = nativeGoogleSignIn
-  ? nativeGoogleRedirectUri(googleClient.id)
-  : AuthSession.makeRedirectUri({ path: "redirect" });
-const googleDiscovery = {
-  authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
-  tokenEndpoint: "https://oauth2.googleapis.com/token",
-};
 const notSaved = "The sortie was not saved.";
 const locationRequired = "Location is required to schedule the sortie.";
 
 if (__DEV__) {
-  console.log(`Google redirect URI: ${redirectUri}`);
   console.log(`API URL: ${apiUrl}`);
 }
-
-type Phase =
-  | { status: "loading" }
-  | { status: "signed-out"; message: string | null }
-  | { status: "offline"; message: string }
-  | {
-      status: "signed-in";
-      token: string;
-      user: User;
-      live: "authenticated" | "closed";
-      signOutMessage: string | null;
-    };
 
 export default function App() {
   return (
@@ -143,42 +73,64 @@ export default function App() {
 }
 
 function AppContent() {
-  const { colors, scheme } = useTheme();
-  const styles = createStyles(colors);
-  const [phase, setPhase] = useState<Phase>({ status: "loading" });
-  const [nonce, setNonce] = useState(() => Crypto.randomUUID());
-  const [submitting, setSubmitting] = useState(false);
+  const { scheme, styles } = useAppStyles();
+  const liveGeneration = useRef(0);
+  const invalidateLive = useCallback(() => {
+    liveGeneration.current += 1;
+  }, []);
+  const setActivityRef = useRef<(activity: AccountActivity) => void>(() => undefined);
   const [destination, setDestination] = useState<SignedInDestination>("navigation");
   const [compose, setCompose] = useState<DialogDraft | null>(null);
   const [composeMessage, setComposeMessage] = useState<string | null>(null);
   const [calendarReload, setCalendarReload] = useState(0);
-  const [activity, setActivity] = useState<AccountActivity>(emptyActivity);
   const [calendarScopeCycle, setCalendarScopeCycle] = useState(0);
   const [sortieGuide, setSortieGuide] = useState<SortieGuideCommand | null>(null);
   const [placeGuide, setPlaceGuide] = useState<PlaceGuideCommand | null>(null);
   const [deadhead, setDeadhead] = useState<DeadheadCommand | null>(null);
   const [meterReading, setMeterReading] = useState<MeterDisplay | null>(null);
   const [statusChromeHeight, setStatusChromeHeight] = useState(0);
-  const [availability, setAvailability] = useState<AvailabilityView>(emptyAvailability);
-  const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
-  const [availabilityBusy, setAvailabilityBusy] = useState(false);
-  const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
-  const toggleAvailabilityRef = useRef<() => void>(() => undefined);
-  const [visualAlert, setVisualAlert] = useState<VisualAlertPrefs>(getVisualAlertPrefs);
-  const [navigationActive, setNavigationActive] = useState(false);
-  const [floating, setFloating] = useState(false);
-  const [overlayGranted, setOverlayGranted] = useState(false);
-  const [overlayChecked, setOverlayChecked] = useState(false);
-  const [overlayReady, setOverlayReady] = useState(false);
-  const [consentAsked, setConsentAsked] = useState(false);
-  const [consentReady, setConsentReady] = useState(false);
-  const askedConsent = useRef(false);
-  const promptingConsent = useRef(false);
-  const floatingRef = useRef(false);
-  const navigationActiveRef = useRef(false);
-  floatingRef.current = floating;
-  navigationActiveRef.current = navigationActive;
-  const [socketLink, setSocketLink] = useState<SocketState>("idle");
+  const bumpCalendar = useCallback(() => {
+    setCalendarReload((current) => current + 1);
+  }, []);
+  const resetChrome = useCallback(() => {
+    setDestination("navigation");
+    setCompose(null);
+    setComposeMessage(null);
+    setSortieGuide(null);
+    setPlaceGuide(null);
+    setDeadhead(null);
+    clearAddressBookCache();
+    void clearPublishedShortcuts();
+    setMeterReading(null);
+    setActivityRef.current(emptyActivity);
+  }, []);
+  const {
+    phase,
+    submitting,
+    onSignIn,
+    onSignOut,
+    onRetry,
+    onSessionRejected,
+    onUnauthorized,
+    setLive,
+  } = useSession({ apiUrl, resetChrome, invalidateLive });
+  const { activity, setActivity, socketLink } = useAccountActivity({
+    apiUrl,
+    sessionToken: phase.status === "signed-in" ? phase.token : null,
+    generation: liveGeneration,
+    onSessionRejected,
+    onCalendarChanged: bumpCalendar,
+    setLive,
+  });
+  setActivityRef.current = setActivity;
+  const { availability, availabilityLoaded, availabilityBusy, availabilityMessage, toggleAvailability } =
+    useAvailabilitySession({
+      apiUrl,
+      sessionToken: phase.status === "signed-in" ? phase.token : null,
+      onSessionRejected,
+      onCalendarChanged: bumpCalendar,
+    });
+  const { visualAlert, floating, onActiveNavigationChange } = useAlwaysOnTop(phase.status);
   const networkFault = useNetworkStatus(apiUrl, socketLink);
   const endGuidanceRef = useRef<(() => void) | null>(null);
   const meterArriveRef = useRef<(() => void) | null>(null);
@@ -186,7 +138,6 @@ function AppContent() {
   const meterOnwardRef = useRef<(() => void) | null>(null);
   const meterCommenceRef = useRef<(() => void) | null>(null);
   const applySortieUpdateRef = useRef<((sortie: Sortie) => void) | null>(null);
-  const generation = useRef(0);
   const composeSaving = useRef(false);
   const pendingShortcutId = useRef<string | null>(null);
   const phaseRef = useRef(phase);
@@ -194,174 +145,6 @@ function AppContent() {
   const openShortcutRef = useRef<(token: string, userId: string, entryId: string) => Promise<void>>(
     async () => undefined,
   );
-
-  useEffect(() => {
-    void ensureVisualAlertPrefsLoaded();
-    return subscribeVisualAlertPrefs(() => {
-      setVisualAlert(getVisualAlertPrefs());
-    });
-  }, []);
-
-  const onActiveNavigationChange = useCallback((active: boolean) => {
-    setNavigationActive(active);
-  }, []);
-
-  useEffect(() => {
-    if (Platform.OS !== "android") {
-      return;
-    }
-    setOverlayGranted(canDrawOverlays());
-    setOverlayChecked(true);
-    setFloating(isAlwaysOnTopActive());
-    void ensureAlwaysOnTopConsentLoaded().then((asked) => {
-      setConsentAsked(asked);
-      setConsentReady(true);
-    });
-    const appState = AppState.addEventListener("change", (state) => {
-      setFloating(isAlwaysOnTopActive());
-      if (state !== "active") {
-        return;
-      }
-      promptingConsent.current = false;
-      const granted = canDrawOverlays();
-      setOverlayGranted(granted);
-      if (navigationActiveRef.current && granted) {
-        setAlwaysOnTopEligible(true);
-      }
-    });
-    const unsubscribe = subscribeAlwaysOnTop(setFloating);
-    return () => {
-      appState.remove();
-      unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (Platform.OS !== "android" || !navigationActive) {
-      return;
-    }
-    const sync = () => {
-      const active = isAlwaysOnTopActive();
-      setFloating((current) => (current === active ? current : active));
-    };
-    sync();
-    const timer = setInterval(sync, 200);
-    return () => clearInterval(timer);
-  }, [navigationActive]);
-
-  useEffect(() => {
-    if (Platform.OS !== "android") {
-      return;
-    }
-    if (promptingConsent.current || !overlayGranted) {
-      setAlwaysOnTopEligible(false);
-    } else {
-      setAlwaysOnTopEligible(navigationActive);
-    }
-    if (floatingRef.current && (!navigationActive || !overlayGranted)) {
-      dismissAlwaysOnTop();
-    }
-  }, [navigationActive, overlayGranted]);
-
-  useEffect(() => {
-    if (Platform.OS !== "android" || !overlayChecked || !consentReady || phase.status === "loading") {
-      return;
-    }
-    if (!shouldAskAlwaysOnTopConsent({ granted: overlayGranted, asked: consentAsked || askedConsent.current })) {
-      return;
-    }
-    askedConsent.current = true;
-    setConsentAsked(true);
-    promptingConsent.current = true;
-    setAlwaysOnTopEligible(false);
-    void rememberAlwaysOnTopConsentAsked();
-    promptOverlayPermission();
-  }, [overlayChecked, consentReady, consentAsked, overlayGranted, phase.status]);
-
-  useEffect(() => {
-    if (Platform.OS !== "android") {
-      return;
-    }
-    if (!floating || !overlayGranted) {
-      setNativeOverlayActive(false);
-      setOverlayReady(false);
-      clearNativeAlert();
-      return;
-    }
-    rememberAlertPrefs(visualAlert);
-    armNativeAlert(visualAlert);
-    setOverlayReady(true);
-    setNativeOverlayActive(true);
-  }, [floating, overlayGranted, visualAlert]);
-
-  const [request, , promptAsync] = AuthSession.useAuthRequest(
-    {
-      clientId: googleClient.id,
-      redirectUri,
-      responseType: nativeGoogleSignIn
-        ? AuthSession.ResponseType.Code
-        : AuthSession.ResponseType.IdToken,
-      scopes: ["openid", "profile", "email"],
-      usePKCE: nativeGoogleSignIn,
-      // Multiple Google accounts share the same display name here; always show the chooser.
-      prompt: AuthSession.Prompt.SelectAccount,
-      extraParams: nativeGoogleSignIn ? undefined : { nonce },
-    },
-    googleDiscovery,
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function restore(): Promise<void> {
-      let token: string | null;
-      try {
-        token = await readStoredSession();
-      } catch (error) {
-        if (!cancelled) {
-          setPhase({ status: "offline", message: errorMessage(error) });
-        }
-        return;
-      }
-
-      if (!token) {
-        if (!cancelled) {
-          setPhase({ status: "signed-out", message: null });
-        }
-        return;
-      }
-
-      const current = await readCurrentUser(apiUrl, token);
-      if (cancelled) {
-        return;
-      }
-      if (current === "unauthorized") {
-        await deleteStoredSession();
-        await forgetCalendarCache();
-        if (!cancelled) {
-          resetChrome();
-          setPhase({ status: "signed-out", message: null });
-        }
-        return;
-      }
-      if (current === "unreachable") {
-        setPhase({ status: "offline", message: "Could not reach the server." });
-        return;
-      }
-      setPhase({
-        status: "signed-in",
-        token,
-        user: current,
-        live: "closed",
-        signOutMessage: null,
-      });
-    }
-
-    void restore();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const sessionToken = phase.status === "signed-in" ? phase.token : null;
   const signedInUserId = phase.status === "signed-in" ? phase.user.id : null;
@@ -482,293 +265,6 @@ function AppContent() {
     };
   }, [sessionToken, signedInUserId]);
 
-  useEffect(() => {
-    if (!sessionToken) {
-      setSocketLink("idle");
-      return;
-    }
-
-    const token = sessionToken;
-    setSocketLink("connecting");
-    const effectGeneration = generation.current;
-    let cancelled = false;
-    let connection = 0;
-    let socket: WebSocket | null = null;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let attempt = 0;
-    let ready = false;
-    let buffer: RealtimeEnvelope[] = [];
-    let state = emptyActivity;
-
-    const connect = () => {
-      if (cancelled || generation.current !== effectGeneration) {
-        return;
-      }
-      const connectionId = ++connection;
-      ready = false;
-      buffer = [];
-      socket = openAuthenticatedSocket(apiUrl, token);
-
-      socket.onopen = () => {
-        if (cancelled || connectionId !== connection || generation.current !== effectGeneration) {
-          return;
-        }
-        attempt = 0;
-        setSocketLink("open");
-        setPhase((current) =>
-          current.status === "signed-in" && current.token === token
-            ? { ...current, live: "authenticated" }
-            : current,
-        );
-        void loadSnapshot(connectionId);
-      };
-
-      socket.onmessage = (event) => {
-        if (cancelled || connectionId !== connection || generation.current !== effectGeneration) {
-          return;
-        }
-        const envelope = readRealtimeEnvelope(readJson(typeof event.data === "string" ? event.data : ""));
-        if (!envelope) {
-          return;
-        }
-        if (envelope.type === "availability.updated") {
-          deliverAvailabilityEnvelope(envelope);
-          return;
-        }
-        if (!ready) {
-          buffer.push(envelope);
-          return;
-        }
-        const applied = applyEnvelope(state, envelope);
-        state = applied.state;
-        setActivity(state);
-        if (applied.calendarChanged) {
-          setCalendarReload((current) => current + 1);
-        }
-      };
-
-      socket.onclose = () => {
-        if (cancelled || connectionId !== connection || generation.current !== effectGeneration) {
-          return;
-        }
-        void handleClose();
-      };
-    };
-
-    async function loadSnapshot(connectionId: number): Promise<void> {
-      const snapshot = await readActivity(apiUrl, token);
-      if (cancelled || connectionId !== connection || generation.current !== effectGeneration) {
-        return;
-      }
-      if (snapshot === "unauthorized") {
-        await onSessionRejected();
-        return;
-      }
-      if (snapshot !== "unreachable") {
-        state = applySnapshot(snapshot);
-      }
-      ready = true;
-      let calendarChanged = false;
-      for (const envelope of buffer) {
-        if (envelope.type === "availability.updated") {
-          deliverAvailabilityEnvelope(envelope);
-          continue;
-        }
-        const applied = applyEnvelope(state, envelope);
-        state = applied.state;
-        calendarChanged = calendarChanged || applied.calendarChanged;
-      }
-      buffer = [];
-      setActivity(state);
-      if (calendarChanged) {
-        setCalendarReload((current) => current + 1);
-      }
-    }
-
-    async function handleClose(): Promise<void> {
-      const current = await readCurrentUser(apiUrl, token);
-      if (cancelled || generation.current !== effectGeneration) {
-        return;
-      }
-      if (current === "unauthorized") {
-        await onSessionRejected();
-        return;
-      }
-      setSocketLink("down");
-      setPhase((existing) =>
-        existing.status === "signed-in" && existing.token === token
-          ? { ...existing, live: "closed" }
-          : existing,
-      );
-      const delay = Math.min(15000, 1000 * 2 ** attempt);
-      attempt += 1;
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        connect();
-      }, delay);
-    }
-
-    connect();
-    return () => {
-      cancelled = true;
-      generation.current += 1;
-      if (retryTimer) {
-        clearTimeout(retryTimer);
-      }
-      socket?.close();
-    };
-  }, [sessionToken]);
-
-  useEffect(() => {
-    if (!sessionToken) {
-      setAvailability(emptyAvailability);
-      setAvailabilityLoaded(false);
-      setAvailabilityBusy(false);
-      setAvailabilityMessage(null);
-      toggleAvailabilityRef.current = () => undefined;
-      return;
-    }
-
-    const token = sessionToken;
-    let cancelled = false;
-    let loaded = false;
-    let saving = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const pending: Parameters<typeof applyAvailabilityEnvelope>[1][] = [];
-    const view = { ...emptyAvailability };
-
-    function stopPings(): void {
-      if (timer) {
-        clearInterval(timer);
-      }
-      timer = null;
-    }
-
-    function startPings(): void {
-      if (timer) {
-        return;
-      }
-      timer = setInterval(() => {
-        void ping();
-      }, availabilityCheckInMs);
-      void ping();
-    }
-
-    function remember(next: AvailabilityView): void {
-      view.asOf = next.asOf;
-      view.available = next.available;
-      view.current = next.current;
-      setAvailability({ ...view });
-      if (next.available) {
-        startPings();
-      } else {
-        stopPings();
-      }
-    }
-
-    async function ping(): Promise<void> {
-      const result = await checkInAvailability(apiUrl, token);
-      if (cancelled) {
-        return;
-      }
-      if (result === "unauthorized") {
-        stopPings();
-        await onSessionRejected();
-        return;
-      }
-      if (result === "unreachable") {
-        return;
-      }
-      await recordAvailabilityCheckIn(Date.now());
-      remember(applyAvailabilitySnapshot(view, result));
-    }
-
-    toggleAvailabilityRef.current = () => {
-      if (!loaded || saving) {
-        return;
-      }
-      saving = true;
-      setAvailabilityBusy(true);
-      setAvailabilityMessage(null);
-      void (async () => {
-        const result = await putAvailability(apiUrl, token, !view.available);
-        if (cancelled) {
-          return;
-        }
-        saving = false;
-        setAvailabilityBusy(false);
-        if (result === "unauthorized") {
-          await onSessionRejected();
-          return;
-        }
-        if (result === "unreachable") {
-          setAvailabilityMessage("Availability was not saved.");
-          return;
-        }
-        remember(applyAvailabilitySnapshot(view, result));
-      })();
-    };
-
-    function applyLive(envelope: Parameters<typeof applyAvailabilityEnvelope>[1]): void {
-      const previous = view.current;
-      const next = applyAvailabilityEnvelope(view, envelope);
-      remember(next);
-      if (next.current !== previous) {
-        setCalendarReload((count) => count + 1);
-      }
-    }
-
-    const unsubscribe = subscribeAvailability((envelope) => {
-      if (!loaded) {
-        pending.push(envelope);
-        return;
-      }
-      applyLive(envelope);
-    });
-
-    void (async () => {
-      const result = await readAvailability(apiUrl, token);
-      if (cancelled) {
-        return;
-      }
-      if (result === "unauthorized") {
-        await onSessionRejected();
-        return;
-      }
-      if (result === "unreachable") {
-        setAvailabilityMessage("Availability could not be loaded.");
-        return;
-      }
-      loaded = true;
-      setAvailabilityLoaded(true);
-      remember(result);
-      for (const envelope of pending) {
-        applyLive(envelope);
-      }
-      pending.length = 0;
-    })();
-
-    return () => {
-      cancelled = true;
-      stopPings();
-      unsubscribe();
-      toggleAvailabilityRef.current = () => undefined;
-    };
-  }, [sessionToken]);
-
-  function resetChrome(): void {
-    setDestination("navigation");
-    setCompose(null);
-    setComposeMessage(null);
-    setSortieGuide(null);
-    setPlaceGuide(null);
-    setDeadhead(null);
-    clearAddressBookCache();
-    void clearPublishedShortcuts();
-    setMeterReading(null);
-    setActivity(emptyActivity);
-  }
-
   async function openDeadheadShortcut(token: string, userId: string, entryId: string): Promise<void> {
     setDestination("navigation");
     const loaded = await ensureAddressBookLoaded(apiUrl, token);
@@ -819,117 +315,6 @@ function AppContent() {
       return;
     }
     releaseSortie(completed);
-  }
-
-  async function onSignIn(): Promise<void> {
-    setSubmitting(true);
-    setPhase({ status: "signed-out", message: null });
-    if (!googleClient.id) {
-      setPhase({
-        status: "signed-out",
-        message: `Set ${googleClient.envName} in the root .env file.`,
-      });
-      setSubmitting(false);
-      return;
-    }
-    try {
-      const result = await promptAsync();
-      setNonce(Crypto.randomUUID());
-      if (result.type === "cancel" || result.type === "dismiss") {
-        return;
-      }
-      const idToken = await readIdToken(result, request?.codeVerifier);
-      if (!idToken) {
-        if (__DEV__) {
-          console.log(`Google sign-in returned no ID token (${result.type}).`);
-        }
-        setPhase({ status: "signed-out", message: "Sign-in failed." });
-        return;
-      }
-
-      const created = await createSession(apiUrl, idToken);
-      if (created === "rejected" || created === "unreachable") {
-        if (__DEV__) {
-          console.log(`Session create ${created} at ${apiUrl}.`);
-        }
-        setPhase({ status: "signed-out", message: "Sign-in failed." });
-        return;
-      }
-      await writeStoredSession(created.token);
-      resetChrome();
-      setPhase({
-        status: "signed-in",
-        token: created.token,
-        user: created.user,
-        live: "closed",
-        signOutMessage: null,
-      });
-    } catch (error) {
-      if (__DEV__) {
-        console.log(`Google sign-in failed: ${errorMessage(error)}`);
-      }
-      setPhase({ status: "signed-out", message: "Sign-in failed." });
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function onSignOut(token: string): Promise<void> {
-    const result = await revokeSession(apiUrl, token);
-    if (result === "unreachable") {
-      setPhase((current) =>
-        current.status === "signed-in" ? { ...current, signOutMessage: "Sign-out failed." } : current,
-      );
-      return;
-    }
-    await deleteStoredSession();
-    await forgetCalendarCache();
-    await stopLocationObservationUpdates();
-    resetChrome();
-    setPhase({ status: "signed-out", message: null });
-  }
-
-  async function onSessionRejected(): Promise<void> {
-    generation.current += 1;
-    await deleteStoredSession();
-    await forgetCalendarCache();
-    await stopLocationObservationUpdates();
-    resetChrome();
-    setPhase({ status: "signed-out", message: null });
-  }
-
-  async function onRetry(): Promise<void> {
-    setPhase({ status: "loading" });
-    let token: string | null;
-    try {
-      token = await readStoredSession();
-    } catch (error) {
-      setPhase({ status: "offline", message: errorMessage(error) });
-      return;
-    }
-    if (!token) {
-      setPhase({ status: "signed-out", message: null });
-      return;
-    }
-    const current = await readCurrentUser(apiUrl, token);
-    if (current === "unauthorized") {
-      await deleteStoredSession();
-      await forgetCalendarCache();
-      resetChrome();
-      setPhase({ status: "signed-out", message: null });
-      return;
-    }
-    if (current === "unreachable") {
-      setPhase({ status: "offline", message: "Could not reach the server." });
-      return;
-    }
-    setPhase({
-      status: "signed-in",
-      token,
-      user: current,
-      live: "closed",
-      signOutMessage: null,
-    });
   }
 
   function openCompose(): void {
@@ -991,21 +376,8 @@ function AppContent() {
       return;
     }
     composeSaving.current = true;
-    const ensured = await ensureCurrentDriver(apiUrl, token);
-    if (ensured === "unauthorized") {
-      composeSaving.current = false;
-      await onSessionRejected();
-      return;
-    }
-    if (ensured === "unreachable") {
-      composeSaving.current = false;
-      setComposeMessage(notSaved);
-      return;
-    }
     const revising = compose?.sortieId ?? null;
-    const saved = revising
-      ? await reviseSortie(apiUrl, token, revising, body)
-      : await authorSortie(apiUrl, token, body);
+    const saved = await saveSortieDraft(apiUrl, token, revising, body);
     composeSaving.current = false;
     if (saved === "unauthorized") {
       await onSessionRejected();
@@ -1015,7 +387,7 @@ function AppContent() {
       setComposeMessage(locationRequired);
       return;
     }
-    if (typeof saved === "string") {
+    if (saved === "not-saved") {
       setComposeMessage(notSaved);
       return;
     }
@@ -1038,9 +410,7 @@ function AppContent() {
       loaded={availabilityLoaded}
       busy={availabilityBusy}
       message={availabilityMessage}
-      onToggleAvailability={() => {
-        toggleAvailabilityRef.current();
-      }}
+      onToggleAvailability={toggleAvailability}
       onEndSortie={() => {
         if (endGuidanceRef.current) {
           endGuidanceRef.current();
@@ -1062,11 +432,6 @@ function AppContent() {
     />
   );
   const floatingMap = Platform.OS === "android" && floating;
-  const fullScreenAlert = floatingMap && overlayGranted && overlayReady;
-  if (Platform.OS === "android") {
-    rememberAlertPrefs(visualAlert);
-    setNativeOverlayActive(fullScreenAlert);
-  }
   const screenCover = floatingMap ? [styles.cover, styles.hidden] : styles.cover;
   const overlay = (
     <VisualAlert
@@ -1088,12 +453,12 @@ function AppContent() {
         {phase.status === "offline" ? <Offline message={phase.message} onRetry={() => void onRetry()} /> : null}
         {signedIn ? (
           <>
-            <LocationReporter token={phase.token} onUnauthorized={() => void onSessionRejected()} />
+            <LocationReporter token={phase.token} onUnauthorized={onUnauthorized} />
             <View style={styles.content}>
               {Platform.OS !== "web" ? (
                 <NavigationScreen
                   token={phase.token}
-                  onUnauthorized={() => void onSessionRejected()}
+                  onUnauthorized={onUnauthorized}
                   sortieGuide={sortieGuide}
                   onSortieGuideConsumed={() => setSortieGuide(null)}
                   placeGuide={placeGuide}
@@ -1123,14 +488,7 @@ function AppContent() {
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (
                 <View style={styles.cover}>
-                  <NavigationScreen
-                    token={phase.token}
-                    onUnauthorized={() => void onSessionRejected()}
-                    accountView={{ user: phase.user, live: phase.live, activity }}
-                    networkFault={networkFault}
-                    placeGuide={placeGuide}
-                    onPlaceGuideConsumed={() => setPlaceGuide(null)}
-                  />
+                  <AccountOverview accountView={{ user: phase.user, live: phase.live, activity }} />
                 </View>
               ) : null}
               {destination === "calendar" ? (
@@ -1140,7 +498,7 @@ function AppContent() {
                     token={phase.token}
                     reloadToken={calendarReload}
                     scopeCycleToken={calendarScopeCycle}
-                    onUnauthorized={() => void onSessionRejected()}
+                    onUnauthorized={onUnauthorized}
                     onGuide={(command) => {
                       setSortieGuide(command);
                       setDestination("navigation");
@@ -1153,7 +511,7 @@ function AppContent() {
                   <AddressBookScreen
                     token={phase.token}
                     userId={phase.user.id}
-                    onUnauthorized={() => void onSessionRejected()}
+                    onUnauthorized={onUnauthorized}
                     onGuide={(command) => {
                       setPlaceGuide(command);
                       setDestination("navigation");
@@ -1168,13 +526,13 @@ function AppContent() {
                     token={phase.token}
                     signOutMessage={phase.signOutMessage}
                     onSignOut={() => void onSignOut(phase.token)}
-                    onUnauthorized={() => void onSessionRejected()}
+                    onUnauthorized={onUnauthorized}
                   />
                 </View>
               ) : null}
               {destination === "directory" && phase.user.platformAdministrator ? (
                 <View style={screenCover} pointerEvents={floatingMap ? "none" : "auto"}>
-                  <DirectoryScreen token={phase.token} onUnauthorized={() => void onSessionRejected()} />
+                  <DirectoryScreen token={phase.token} onUnauthorized={onUnauthorized} />
                 </View>
               ) : null}
               {compose ? (
@@ -1187,7 +545,7 @@ function AppContent() {
                       setCompose(null);
                       setComposeMessage(null);
                     }}
-                    onUnauthorized={() => void onSessionRejected()}
+                    onUnauthorized={onUnauthorized}
                     onSaveAddress={(place) => void saveComposeAddress(phase.token, place)}
                     onSave={(body) => void saveCompose(phase.token, body)}
                   />
@@ -1233,8 +591,7 @@ function SignIn({
   disabled: boolean;
   onSignIn: () => void;
 }) {
-  const { colors } = useTheme();
-  const styles = createStyles(colors);
+  const { styles } = useAppStyles();
   return (
     <>
       <Pressable style={styles.button} disabled={disabled} onPress={onSignIn}>
@@ -1245,17 +602,8 @@ function SignIn({
   );
 }
 
-async function forgetCalendarCache(): Promise<void> {
-  try {
-    await clearCalendarCache();
-  } catch {
-    // A later sign-in discards a cache stored for a different user.
-  }
-}
-
 function Offline({ message, onRetry }: { message: string; onRetry: () => void }) {
-  const { colors } = useTheme();
-  const styles = createStyles(colors);
+  const { styles } = useAppStyles();
   return (
     <>
       <Text style={styles.message}>{message}</Text>
@@ -1266,77 +614,14 @@ function Offline({ message, onRetry }: { message: string; onRetry: () => void })
   );
 }
 
-function readJson(text: string): unknown {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
-}
+let cachedAppStyles: { colors: ThemeColors; styles: ReturnType<typeof createStyles> } | null = null;
 
-async function readIdToken(
-  result: AuthSession.AuthSessionResult,
-  codeVerifier: string | undefined,
-): Promise<string | null> {
-  if (result.type !== "success") {
-    return null;
+function useAppStyles() {
+  const { colors, scheme } = useTheme();
+  if (cachedAppStyles?.colors !== colors) {
+    cachedAppStyles = { colors, styles: createStyles(colors) };
   }
-  const fromParams = result.params.id_token;
-  if (fromParams && fromParams.length > 0) {
-    return fromParams;
-  }
-  const fromAuthentication = result.authentication?.idToken;
-  if (fromAuthentication && fromAuthentication.length > 0) {
-    return fromAuthentication;
-  }
-  const code = result.params.code;
-  if (!code || !codeVerifier) {
-    return null;
-  }
-  const tokens = await new AuthSession.AccessTokenRequest({
-    clientId: googleClient.id,
-    redirectUri,
-    code,
-    extraParams: { code_verifier: codeVerifier },
-  }).performAsync(googleDiscovery);
-  return tokens.idToken && tokens.idToken.length > 0 ? tokens.idToken : null;
-}
-
-function nativeGoogleRedirectUri(clientId: string): string {
-  const scheme = reversedGoogleClientScheme(clientId);
-  return scheme ? `${scheme}:/oauth2redirect` : "groundops://redirect";
-}
-
-function reversedGoogleClientScheme(clientId: string): string | null {
-  const suffix = ".apps.googleusercontent.com";
-  if (!clientId.endsWith(suffix)) {
-    return null;
-  }
-  const prefix = clientId.slice(0, -suffix.length);
-  return prefix ? `com.googleusercontent.apps.${prefix}` : null;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Could not reach the server.";
-}
-
-function googleClientForPlatform(): { id: string; envName: string } {
-  if (Platform.OS === "ios") {
-    return {
-      id: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? "",
-      envName: "GOOGLE_IOS_CLIENT_ID",
-    };
-  }
-  if (Platform.OS === "android") {
-    return {
-      id: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? "",
-      envName: "GOOGLE_ANDROID_CLIENT_ID",
-    };
-  }
-  return {
-    id: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? "",
-    envName: "GOOGLE_WEB_CLIENT_ID",
-  };
+  return { colors, scheme, styles: cachedAppStyles.styles };
 }
 
 function createStyles(colors: ThemeColors) {

@@ -2,7 +2,6 @@ import type {
   DrivingRoute,
   GeoCoordinate,
   PlaceSuggestion,
-  ReplaceMeterReadingRequest,
   Sortie,
   SortieStop,
   SortieWriteRequest,
@@ -14,7 +13,7 @@ import { useKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
-import { AppState, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AddressPicker } from "./AddressPicker";
 import { NetworkStatusIcon } from "./NetworkStatusIcon";
 import type { NetworkFault } from "./networkStatus";
@@ -32,22 +31,21 @@ import {
   completeSortie,
   ensureCurrentDriver,
   extendStopWait,
-  replaceMeterReading,
   reportLocationObservation,
-  requestCalendar,
   requestTariff,
 } from "./calendarClient";
 import { setActiveSortieObservation } from "./locationObservationReporting";
-import { cancelDepartureAlerts, scheduleDepartureAlerts } from "./departureAlerts";
 import {
   ensureCountdownLeadMinutesLoaded,
   getCountdownLeadMinutes,
   subscribeCountdownLeadMinutes,
 } from "./countdownPrefs";
-import { formatCountdown, nextDeparture, showDepartureCountdown, type NextDeparture } from "./nextDeparture";
+import { formatCountdown, showDepartureCountdown } from "./nextDeparture";
+import { arrivedFixChoice, guidingSortieFixChoice, insideArrival } from "./guidanceFix";
+import { useMeterReporter } from "./useMeterReporter";
+import { useUpcomingDeparture } from "./useUpcomingDeparture";
 import {
   applyLocationFix,
-  arrivalMeters,
   bearingDeltaDegrees,
   distanceMeters,
   distanceToStepEnd,
@@ -96,13 +94,12 @@ import {
   meterCharges,
   noteFlagDrop,
   resetMeterRouteProgress,
-  stationaryDisplacementMeters,
   tickMeterWait,
   type MeterState,
 } from "./meter";
 import type { AccountActivity } from "./liveActivity";
-import { completedSortie, overviewPathForUpload, reportDelayMs, stopListKey } from "./liveActivity";
-import type { MeterDisplay } from "./MeterStrip";
+import { completedSortie, overviewPathForUpload, stopListKey } from "./liveActivity";
+import type { MeterDisplay } from "./meterDisplay";
 import { PlatformMap, type MapCamera, type MapCameraMove, type MapHandle } from "./PlatformMap";
 import { requestDrivingRoute, requestSortieDrivingRoute } from "./routingClient";
 import {
@@ -111,9 +108,7 @@ import {
   extendWaitEndsAt,
   hasLaterStop,
   isFinalStop,
-  noteArrivalDwell,
   settleArrivalDwell,
-  shouldCompleteOnLeave,
   waitEndsAtFromStop,
 } from "./sortieDwell";
 import {
@@ -272,8 +267,13 @@ export function NavigationScreen({
   const [fix, setFix] = useState<GeoCoordinate | null>(null);
   const [routeEpoch, setRouteEpoch] = useState(0);
   const [meter, setMeter] = useState<MeterState>(emptyMeter());
-  const [upcomingSorties, setUpcomingSorties] = useState<Sortie[]>([]);
-  const [clock, setClock] = useState(() => Date.now());
+  const { queueMeterReport, resetMeterReporter } = useMeterReporter(apiUrl, token, onUnauthorized);
+  const { upcoming, clock } = useUpcomingDeparture({
+    apiUrl,
+    token,
+    browsing: nav.mode === "browse",
+    onUnauthorized,
+  });
   const cameraPrefs = useSyncExternalStore(
     subscribeGuidanceCameraPrefs,
     getGuidanceCameraPrefs,
@@ -316,86 +316,6 @@ export function NavigationScreen({
   const endingSortieRef = useRef(false);
   const arrivalDwellRef = useRef(emptyArrivalDwell());
   const arrivalEnteredRef = useRef(false);
-  const nextDepartureRef = useRef<NextDeparture | null>(null);
-  const pendingMeterRef = useRef<ReplaceMeterReadingRequest | null>(null);
-  const meterSentAtRef = useRef<number | null>(null);
-  const meterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (Platform.OS === "web" || nav.mode !== "browse") {
-      return;
-    }
-    let cancelled = false;
-    async function loadUpcoming(): Promise<void> {
-      const from = new Date();
-      const to = new Date(from.getTime() + 7 * 24 * 60 * 60 * 1000);
-      const result = await requestCalendar(apiUrl, token, from.toISOString(), to.toISOString());
-      if (cancelled) {
-        return;
-      }
-      if (result === "unauthorized") {
-        onUnauthorized();
-        return;
-      }
-      if (typeof result === "string") {
-        return;
-      }
-      setUpcomingSorties(result.sorties);
-    }
-    void loadUpcoming();
-    const poll = setInterval(() => {
-      void loadUpcoming();
-    }, 60_000);
-    const appState = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        void loadUpcoming();
-      }
-    });
-    return () => {
-      cancelled = true;
-      clearInterval(poll);
-      appState.remove();
-    };
-  }, [apiUrl, token, onUnauthorized, nav.mode]);
-
-  useEffect(() => {
-    if (Platform.OS === "web" || nav.mode !== "browse") {
-      return;
-    }
-    const tick = setInterval(() => setClock(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, [nav.mode]);
-
-  const upcoming = Platform.OS === "web" || nav.mode !== "browse" ? null : nextDeparture(upcomingSorties, new Date(clock));
-  nextDepartureRef.current = upcoming;
-
-  useEffect(() => {
-    if (Platform.OS === "web") {
-      return;
-    }
-    const syncAlerts = (state: string): void => {
-      if (state === "active") {
-        void cancelDepartureAlerts();
-        return;
-      }
-      void scheduleDepartureAlerts(nextDepartureRef.current, new Date());
-    };
-    syncAlerts(AppState.currentState);
-    const sub = AppState.addEventListener("change", syncAlerts);
-    return () => {
-      sub.remove();
-      void cancelDepartureAlerts();
-    };
-  }, []);
-
-  const upcomingDepartAt = upcoming?.departAt.getTime() ?? null;
-  useEffect(() => {
-    if (Platform.OS === "web" || AppState.currentState === "active") {
-      return;
-    }
-    void scheduleDepartureAlerts(upcoming, new Date());
-  }, [upcoming?.sortieId, upcomingDepartAt]);
-
   function guidanceCameraFrom(at: GeoCoordinate, bearing: number): MapCamera {
     // Look-ahead keeps the fix near bottom-center on a heading-up camera.
     const target = offsetAlongBearing(at, bearing, guidanceLookAheadMeters);
@@ -441,43 +361,6 @@ export function NavigationScreen({
       nextRemaining,
     );
     return next;
-  }
-
-  function queueMeterReport(report: ReplaceMeterReadingRequest, immediate: boolean): void {
-    const previous = pendingMeterRef.current;
-    pendingMeterRef.current = {
-      ...report,
-      ...(report.overviewPath === undefined && previous?.overviewPath ? { overviewPath: previous.overviewPath } : {}),
-    };
-    const delay = reportDelayMs(meterSentAtRef.current, Date.now(), immediate);
-    if (meterTimerRef.current) {
-      if (!immediate) {
-        return;
-      }
-      clearTimeout(meterTimerRef.current);
-      meterTimerRef.current = null;
-    }
-    if (delay === 0) {
-      void flushMeterReport();
-      return;
-    }
-    meterTimerRef.current = setTimeout(() => {
-      meterTimerRef.current = null;
-      void flushMeterReport();
-    }, delay);
-  }
-
-  async function flushMeterReport(): Promise<void> {
-    const report = pendingMeterRef.current;
-    pendingMeterRef.current = null;
-    if (!report) {
-      return;
-    }
-    meterSentAtRef.current = Date.now();
-    const result = await replaceMeterReading(apiUrl, token, report);
-    if (result === "unauthorized") {
-      onUnauthorized();
-    }
   }
 
   function publishMeter(
@@ -1173,21 +1056,17 @@ export function NavigationScreen({
     }
     if (current.mode === "arrived" && current.kind === "sortie") {
       const stop = current.stops[current.stopPosition];
-      const outsideGeofence = stop ? distanceMeters(fix, stop) > arrivalMeters : false;
-      const resumeMeters = timingPrefs.resumeTravelMeters;
-      const resumedByGps = resumeMeters > 0 && stop ? distanceMeters(fix, stop) > resumeMeters : false;
-      const later = hasLaterStop(current.stops, current.stopPosition);
-      if (stop && (later || current.pendingNextLeg) && resumedByGps) {
+      const choice = arrivedFixChoice({
+        distanceToStopMeters: stop ? distanceMeters(fix, stop) : null,
+        resumeTravelMeters: timingPrefs.resumeTravelMeters,
+        hasLaterStop: hasLaterStop(current.stops, current.stopPosition),
+        pendingNextLeg: current.pendingNextLeg,
+        isFinal: isFinalStop(current.stops, current.stopPosition),
+        stationaryDwellMet: arrivalDwellRef.current.satisfied,
+      });
+      if (choice === "start-next-leg") {
         void startNextLeg();
-      } else if (
-        shouldCompleteOnLeave({
-          isFinal: isFinalStop(current.stops, current.stopPosition),
-          hasLaterStop: later,
-          pendingNextLeg: current.pendingNextLeg,
-          outsideGeofence,
-          stationaryDwellMet: arrivalDwellRef.current.satisfied,
-        })
-      ) {
+      } else if (choice === "end-guidance") {
         void endGuidance();
       }
       return;
@@ -1199,25 +1078,19 @@ export function NavigationScreen({
 
     if (current.kind === "sortie") {
       const target = current.stops[current.firstStopPosition];
-      const inside = Boolean(target && distanceMeters(fix, target) <= arrivalMeters);
-      const finalLeg = isFinalStop(current.stops, current.firstStopPosition);
-      if (finalLeg) {
-        const nextDwell = noteArrivalDwell(arrivalDwellRef.current, {
-          inside,
-          fix,
-          nowMs: Date.now(),
-          stationaryMeters: stationaryDisplacementMeters,
-        });
-        arrivalDwellRef.current = nextDwell;
-        if (nextDwell.satisfied) {
-          enterStopDwell(current, current.firstStopPosition, fix);
-          return;
-        }
-        if (inside) {
-          return;
-        }
-      } else if (inside) {
+      const choice = guidingSortieFixChoice({
+        inside: insideArrival(target ? distanceMeters(fix, target) : null),
+        finalLeg: isFinalStop(current.stops, current.firstStopPosition),
+        dwell: arrivalDwellRef.current,
+        fix,
+        nowMs: Date.now(),
+      });
+      arrivalDwellRef.current = choice.dwell;
+      if (choice.action === "enter-stop") {
         enterStopDwell(current, current.firstStopPosition, fix);
+        return;
+      }
+      if (choice.action === "hold") {
         return;
       }
     }
@@ -2025,12 +1898,7 @@ export function NavigationScreen({
     setMeter(emptyMeter());
     meterRef.current = emptyMeter();
     baselineRemainingRef.current = 0;
-    if (meterTimerRef.current) {
-      clearTimeout(meterTimerRef.current);
-      meterTimerRef.current = null;
-    }
-    pendingMeterRef.current = null;
-    meterSentAtRef.current = null;
+    resetMeterReporter();
     const cleared = await clearMeterReading(apiUrl, token);
     if (cleared === "unauthorized") {
       endingSortieRef.current = false;

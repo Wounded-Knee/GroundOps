@@ -101,7 +101,8 @@ export function SettingsScreen({
   const [announceLead, setAnnounceLead] = useState(defaultGuidanceTimingPrefs.announceLeadMeters);
   const [stepAdvance, setStepAdvance] = useState(defaultGuidanceTimingPrefs.stepAdvanceMeters);
   const [resumeTravel, setResumeTravel] = useState(defaultGuidanceTimingPrefs.resumeTravelMeters);
-  const [message, setMessage] = useState<string | null>(null);
+  const [tariffMessage, setTariffMessage] = useState<string | null>(null);
+  const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
   const [editable, setEditable] = useState(false);
   const [thresholdMinutes, setThresholdMinutes] = useState(defaultAvailabilitySettings.thresholdMinutes);
   const [autoSetUnavailable, setAutoSetUnavailable] = useState(defaultAvailabilitySettings.autoSetUnavailable);
@@ -188,7 +189,8 @@ export function SettingsScreen({
   useEffect(() => {
     let cancelled = false;
     async function load(): Promise<void> {
-      setMessage(null);
+      setTariffMessage(null);
+      setAvailabilityMessage(null);
       setEditable(false);
       setSettingsEditable(false);
       const camera = await ensureGuidanceCameraPrefsLoaded();
@@ -215,7 +217,8 @@ export function SettingsScreen({
         return;
       }
       if (driver === "unreachable") {
-        setMessage(couldNotLoad);
+        setTariffMessage(couldNotLoad);
+        setAvailabilityMessage(couldNotLoadAvailability);
         return;
       }
       const settings = await readAvailabilitySettings(apiUrl, token);
@@ -227,7 +230,7 @@ export function SettingsScreen({
         return;
       }
       if (settings === "unreachable") {
-        setMessage(couldNotLoadAvailability);
+        setAvailabilityMessage(couldNotLoadAvailability);
       } else {
         availabilityRef.current = {
           thresholdMinutes: settings.thresholdMinutes,
@@ -250,7 +253,7 @@ export function SettingsScreen({
         return;
       }
       if (tariff === "no-driver" || tariff === "unreachable") {
-        setMessage(couldNotLoad);
+        setTariffMessage(couldNotLoad);
         return;
       }
       const fields = {
@@ -342,7 +345,7 @@ export function SettingsScreen({
         return;
       }
       if (saved === "unreachable" || saved === "rejected") {
-        setMessage(availabilityNotSaved);
+        setAvailabilityMessage(availabilityNotSaved);
         return;
       }
       if (!sameAvailability(availabilityRef.current, snapshot)) {
@@ -353,7 +356,7 @@ export function SettingsScreen({
       setAutoSetUnavailable(saved.autoSetUnavailable);
       setAutoSetAvailable(saved.autoSetAvailable);
       setGeofence(saved.geofence);
-      setMessage((current) => (current === availabilityNotSaved ? null : current));
+      setAvailabilityMessage((current) => (current === availabilityNotSaved ? null : current));
     });
   }
 
@@ -376,12 +379,12 @@ export function SettingsScreen({
     const tariff = parseTariffFields(fieldsAtBlur.flag, fieldsAtBlur.mile, fieldsAtBlur.wait);
     if (!tariff) {
       tariffGeneration.current += 1;
-      setMessage(notSaved);
+      setTariffMessage(notSaved);
       return;
     }
     const baseline = pendingTariff.current ?? lastSavedTariff.current;
     if (baseline && sameTariff(tariff, baseline)) {
-      setMessage((current) => (current === notSaved ? null : current));
+      setTariffMessage((current) => (current === notSaved ? null : current));
       return;
     }
     pendingTariff.current = tariff;
@@ -398,7 +401,7 @@ export function SettingsScreen({
         return;
       }
       if (saved === "no-driver" || saved === "unreachable" || saved === "rejected") {
-        setMessage(notSaved);
+        setTariffMessage(notSaved);
         return;
       }
       if (
@@ -421,7 +424,7 @@ export function SettingsScreen({
       setFlagText(fields.flag);
       setMileText(fields.mile);
       setWaitText(fields.wait);
-      setMessage((current) => (current === notSaved ? null : current));
+      setTariffMessage((current) => (current === notSaved ? null : current));
     });
   }
 
@@ -472,7 +475,7 @@ export function SettingsScreen({
           onCancel={() => setGeofenceOpen(false)}
           onSave={(next) => {
             if (next === "invalid") {
-              setMessage("A geofence needs at least three vertices.");
+              setAvailabilityMessage("A geofence needs at least three vertices.");
               return;
             }
             setGeofenceOpen(false);
@@ -719,6 +722,7 @@ export function SettingsScreen({
             onBlur={onTariffEndEditing}
           />
         </View>
+        {tariffMessage ? <Text style={styles.message}>{tariffMessage}</Text> : null}
       </Section>
       <Section title="Availability">
         <SliderField
@@ -768,8 +772,8 @@ export function SettingsScreen({
             <Text style={styles.buttonText}>{geofence.length === 0 ? "Create geofence" : "Edit geofence"}</Text>
           </Pressable>
         ) : null}
+        {availabilityMessage ? <Text style={styles.message}>{availabilityMessage}</Text> : null}
       </Section>
-      {message ? <Text style={styles.message}>{message}</Text> : null}
       {Platform.OS === "android" ? (
         <Section title="Always on top">
           <Text style={styles.previewHint}>{alwaysOnTopAllowed ? "Allowed" : "Not allowed"}</Text>

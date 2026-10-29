@@ -151,26 +151,49 @@ export function DirectoryScreen({
     return couldNotLoad;
   }
 
-  async function addCompany(): Promise<void> {
+  async function runDirectoryWrite<T>(
+    request: () => Promise<T>,
+    succeeded: (result: T) => boolean,
+  ): Promise<T | null> {
     if (busy) {
-      return;
+      return null;
     }
     setBusy(true);
     setMessage(null);
-    const result = await createCompany(apiUrl, token, companyName);
-    setBusy(false);
-    if (typeof result === "string") {
-      if (!fail(result)) {
-        setMessage(explain(result));
+    try {
+      const result = await request();
+      if (!succeeded(result)) {
+        if (typeof result === "string") {
+          const failure = result as DirectoryFailure;
+          if (!fail(failure)) {
+            setMessage(explain(failure));
+          }
+        }
+        return null;
       }
+      return result;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reloadDirectory(loaded: DirectoryFailure | "ok"): Promise<void> {
+    if (loaded !== "ok" && !fail(loaded)) {
+      setMessage(couldNotLoad);
+    }
+  }
+
+  async function addCompany(): Promise<void> {
+    const result = await runDirectoryWrite(
+      () => createCompany(apiUrl, token, companyName),
+      (value) => typeof value !== "string",
+    );
+    if (!result) {
       return;
     }
     setCompanyName("");
     setEdit(null);
-    const loaded = await loadCompanies();
-    if (loaded !== "ok" && !fail(loaded)) {
-      setMessage(couldNotLoad);
-    }
+    await reloadDirectory(await loadCompanies());
   }
 
   async function reloadMembers(companyId: string): Promise<void> {
@@ -185,20 +208,19 @@ export function DirectoryScreen({
   }
 
   async function saveMember(companyId: string): Promise<void> {
-    if (!memberDraft || memberDraft.companyId !== companyId || memberDraft.userId.length === 0 || busy) {
+    if (!memberDraft || memberDraft.companyId !== companyId || memberDraft.userId.length === 0) {
       return;
     }
-    setBusy(true);
-    setMessage(null);
-    const result = await putCompanyMember(apiUrl, token, companyId, {
-      userId: memberDraft.userId,
-      administrator: memberDraft.administrator,
-    });
-    setBusy(false);
-    if (typeof result === "string") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const draft = memberDraft;
+    const result = await runDirectoryWrite(
+      () =>
+        putCompanyMember(apiUrl, token, companyId, {
+          userId: draft.userId,
+          administrator: draft.administrator,
+        }),
+      (value) => typeof value !== "string",
+    );
+    if (!result) {
       return;
     }
     setMemberDraft(null);
@@ -206,213 +228,146 @@ export function DirectoryScreen({
   }
 
   async function toggleMember(companyId: string, member: DirectoryMember): Promise<void> {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    const result = await putCompanyMember(apiUrl, token, companyId, {
-      userId: member.userId,
-      administrator: !member.administrator,
-    });
-    setBusy(false);
-    if (typeof result === "string") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const result = await runDirectoryWrite(
+      () =>
+        putCompanyMember(apiUrl, token, companyId, {
+          userId: member.userId,
+          administrator: !member.administrator,
+        }),
+      (value) => typeof value !== "string",
+    );
+    if (!result) {
       return;
     }
     await reloadMembers(companyId);
   }
 
   async function removeMember(company: DirectoryCompany, member: DirectoryMember): Promise<void> {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    const result = await deleteCompanyMember(apiUrl, token, company.id, member.userId);
-    setBusy(false);
-    if (result !== "ok") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const result = await runDirectoryWrite(
+      () => deleteCompanyMember(apiUrl, token, company.id, member.userId),
+      (value) => value === "ok",
+    );
+    if (!result) {
       return;
     }
     await reloadMembers(company.id);
   }
 
   async function addFacility(): Promise<void> {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    const result = await createFacility(apiUrl, token, facilityName);
-    setBusy(false);
-    if (typeof result === "string") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const result = await runDirectoryWrite(
+      () => createFacility(apiUrl, token, facilityName),
+      (value) => typeof value !== "string",
+    );
+    if (!result) {
       return;
     }
     setFacilityName("");
     setEdit(null);
-    const loaded = await loadFacilities();
-    if (loaded !== "ok" && !fail(loaded)) {
-      setMessage(couldNotLoad);
-    }
+    await reloadDirectory(await loadFacilities());
   }
 
   async function addUser(): Promise<void> {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    const result = await createDirectoryUser(apiUrl, token, {
-      displayName: userName,
-      email: userEmail.trim().length > 0 ? userEmail : null,
-    });
-    setBusy(false);
-    if (typeof result === "string") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const result = await runDirectoryWrite(
+      () =>
+        createDirectoryUser(apiUrl, token, {
+          displayName: userName,
+          email: userEmail.trim().length > 0 ? userEmail : null,
+        }),
+      (value) => typeof value !== "string",
+    );
+    if (!result) {
       return;
     }
     setUserName("");
     setUserEmail("");
     setEdit(null);
-    const loaded = await loadUsers();
-    if (loaded !== "ok" && !fail(loaded)) {
-      setMessage(couldNotLoad);
-    }
+    await reloadDirectory(await loadUsers());
   }
 
   async function saveEdit(): Promise<void> {
-    if (!edit || busy) {
+    if (!edit) {
       return;
     }
-    setBusy(true);
-    setMessage(null);
-    if (edit.kind === "company") {
-      const result = await updateCompany(apiUrl, token, edit.id, edit.name);
-      setBusy(false);
-      if (typeof result === "string") {
-        if (!fail(result)) {
-          setMessage(explain(result));
-        }
+    const current = edit;
+    if (current.kind === "company") {
+      const result = await runDirectoryWrite(
+        () => updateCompany(apiUrl, token, current.id, current.name),
+        (value) => typeof value !== "string",
+      );
+      if (!result) {
         return;
       }
       setEdit(null);
-      const loaded = await loadCompanies();
-      if (loaded !== "ok" && !fail(loaded)) {
-        setMessage(couldNotLoad);
-      }
+      await reloadDirectory(await loadCompanies());
       return;
     }
-    if (edit.kind === "facility") {
-      const result = await updateFacility(apiUrl, token, edit.id, edit.name);
-      setBusy(false);
-      if (typeof result === "string") {
-        if (!fail(result)) {
-          setMessage(explain(result));
-        }
+    if (current.kind === "facility") {
+      const result = await runDirectoryWrite(
+        () => updateFacility(apiUrl, token, current.id, current.name),
+        (value) => typeof value !== "string",
+      );
+      if (!result) {
         return;
       }
       setEdit(null);
-      const loaded = await loadFacilities();
-      if (loaded !== "ok" && !fail(loaded)) {
-        setMessage(couldNotLoad);
-      }
+      await reloadDirectory(await loadFacilities());
       return;
     }
-    const result = await updateDirectoryUser(apiUrl, token, edit.id, {
-      displayName: edit.displayName,
-      email: edit.email.trim().length > 0 ? edit.email : null,
-    });
-    setBusy(false);
-    if (typeof result === "string") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const result = await runDirectoryWrite(
+      () =>
+        updateDirectoryUser(apiUrl, token, current.id, {
+          displayName: current.displayName,
+          email: current.email.trim().length > 0 ? current.email : null,
+        }),
+      (value) => typeof value !== "string",
+    );
+    if (!result) {
       return;
     }
     setEdit(null);
-    const loaded = await loadUsers();
-    if (loaded !== "ok" && !fail(loaded)) {
-      setMessage(couldNotLoad);
-    }
+    await reloadDirectory(await loadUsers());
   }
 
   async function removeCompany(row: DirectoryCompany): Promise<void> {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    const result = await deleteCompany(apiUrl, token, row.id);
-    setBusy(false);
-    if (result !== "ok") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const result = await runDirectoryWrite(
+      () => deleteCompany(apiUrl, token, row.id),
+      (value) => value === "ok",
+    );
+    if (!result) {
       return;
     }
     if (edit?.kind === "company" && edit.id === row.id) {
       setEdit(null);
     }
-    const loaded = await loadCompanies();
-    if (loaded !== "ok" && !fail(loaded)) {
-      setMessage(couldNotLoad);
-    }
+    await reloadDirectory(await loadCompanies());
   }
 
   async function removeFacility(row: DirectoryFacility): Promise<void> {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    const result = await deleteFacility(apiUrl, token, row.id);
-    setBusy(false);
-    if (result !== "ok") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const result = await runDirectoryWrite(
+      () => deleteFacility(apiUrl, token, row.id),
+      (value) => value === "ok",
+    );
+    if (!result) {
       return;
     }
     if (edit?.kind === "facility" && edit.id === row.id) {
       setEdit(null);
     }
-    const loaded = await loadFacilities();
-    if (loaded !== "ok" && !fail(loaded)) {
-      setMessage(couldNotLoad);
-    }
+    await reloadDirectory(await loadFacilities());
   }
 
   async function removeUser(row: DirectoryUser): Promise<void> {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    const result = await deleteDirectoryUser(apiUrl, token, row.id);
-    setBusy(false);
-    if (result !== "ok") {
-      if (!fail(result)) {
-        setMessage(explain(result));
-      }
+    const result = await runDirectoryWrite(
+      () => deleteDirectoryUser(apiUrl, token, row.id),
+      (value) => value === "ok",
+    );
+    if (!result) {
       return;
     }
     if (edit?.kind === "user" && edit.id === row.id) {
       setEdit(null);
     }
-    const loaded = await loadUsers();
-    if (loaded !== "ok" && !fail(loaded)) {
-      setMessage(couldNotLoad);
-    }
+    await reloadDirectory(await loadUsers());
   }
 
   return (

@@ -1,7 +1,7 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { findActiveSession } from "../identity/sessions.js";
-import { readBearer } from "../identity/tokens.js";
+import { sendDomainResult } from "../http/result.js";
+import { registerRequestSession } from "../http/session.js";
 import {
   createCompany,
   createDirectoryUser,
@@ -46,8 +46,10 @@ const memberBody = z.object({
 type DirectoryResult = "invalid" | "missing" | "in-use";
 
 export function registerPlatformRoutes(app: FastifyInstance): void {
+  registerRequestSession(app);
+
   app.get("/companies", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -55,7 +57,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.post("/companies", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -71,7 +73,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.patch("/companies/:id", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -84,7 +86,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.delete("/companies/:id", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -96,7 +98,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.get("/companies/:id/members", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -112,7 +114,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.put("/companies/:id/members", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -129,7 +131,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.delete("/companies/:id/members/:userId", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -141,7 +143,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.get("/facilities", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -149,7 +151,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.post("/facilities", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -165,7 +167,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.patch("/facilities/:id", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -178,7 +180,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.delete("/facilities/:id", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -190,7 +192,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.get("/users", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -198,7 +200,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.post("/users", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -214,7 +216,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.patch("/users/:id", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -227,7 +229,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.delete("/users/:id", async (request, reply) => {
-    const gate = await requireAdministrator(request.headers.authorization);
+    const gate = requireAdministrator(request);
     if (gate === "unauthorized" || gate === "forbidden") {
       return sendGate(reply, gate);
     }
@@ -239,21 +241,16 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 }
 
-async function requireAdministrator(
-  authorization: string | string[] | undefined,
-): Promise<{ userId: string } | "unauthorized" | "forbidden"> {
-  const token = readBearer(headerValue(authorization));
-  if (!token) {
+function requireAdministrator(
+  request: FastifyRequest,
+): { userId: string } | "unauthorized" | "forbidden" {
+  if (!request.session) {
     return "unauthorized";
   }
-  const active = await findActiveSession(token);
-  if (!active) {
-    return "unauthorized";
-  }
-  if (!active.user.platformAdministrator) {
+  if (!request.session.user.platformAdministrator) {
     return "forbidden";
   }
-  return { userId: active.user.id };
+  return { userId: request.session.user.id };
 }
 
 function sendGate(reply: FastifyReply, gate: "unauthorized" | "forbidden") {
@@ -267,29 +264,12 @@ function sendResult(reply: FastifyReply, result: DirectoryResult | { id: string 
   if (typeof result === "object") {
     return reply.send(result);
   }
-  return sendFailure(reply, result);
+  return sendDomainResult(reply, result);
 }
 
 function sendDeleted(reply: FastifyReply, result: "ok" | "missing" | "in-use") {
   if (result === "ok") {
     return reply.code(204).send();
   }
-  return sendFailure(reply, result);
-}
-
-function sendFailure(reply: FastifyReply, result: DirectoryResult) {
-  if (result === "invalid") {
-    return reply.code(400).send({ error: "invalid request" });
-  }
-  if (result === "missing") {
-    return reply.code(404).send({ error: "not found" });
-  }
-  return reply.code(409).send({ error: "in use" });
-}
-
-function headerValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
+  return sendDomainResult(reply, result);
 }

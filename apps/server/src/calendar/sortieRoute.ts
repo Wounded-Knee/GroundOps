@@ -1,8 +1,8 @@
 import type { DrivingRoute, GeoCoordinate, SortieStop, User } from "@groundops/contracts";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "../db.js";
-import { computeDrivingRoute } from "../routing/google.js";
-import { driver, sortie, sortieStop } from "../schema.js";
+import { findDriver } from "../identity/driver.js";
+import { sortie, sortieStop } from "../schema.js";
 
 export type SortieRouteDeps = {
   computeDrivingRoute: (
@@ -12,30 +12,25 @@ export type SortieRouteDeps = {
   ) => Promise<DrivingRoute | "no-route" | "failed">;
 };
 
-export const defaultSortieRouteDeps: SortieRouteDeps = {
-  computeDrivingRoute: (origin, destination, intermediates) =>
-    computeDrivingRoute(origin, destination, intermediates),
-};
-
 /** Driving route from the device through the remaining stops of an authored sortie. */
 export async function computeSortieDrivingRoute(
   person: User,
   sortieId: string,
   origin: GeoCoordinate,
   firstStopPosition: number,
-  deps: SortieRouteDeps = defaultSortieRouteDeps,
+  deps: SortieRouteDeps,
 ): Promise<DrivingRoute | "no-driver" | "not-found" | "invalid" | "no-route" | "failed"> {
   if (!Number.isInteger(firstStopPosition) || firstStopPosition < 0) {
     return "invalid";
   }
-  const author = await findDriverId(person.id);
+  const author = await findDriver(db, person.id);
   if (!author) {
     return "no-driver";
   }
   const rows = await db
     .select({ id: sortie.id })
     .from(sortie)
-    .where(and(eq(sortie.id, sortieId), eq(sortie.authorDriverId, author)))
+    .where(and(eq(sortie.id, sortieId), eq(sortie.authorDriverId, author.id)))
     .limit(1);
   if (!rows[0]) {
     return "not-found";
@@ -74,9 +69,4 @@ export function remainingStopsFrom(
   firstStopPosition: number,
 ): SortieStop[] {
   return stops.slice(firstStopPosition);
-}
-
-async function findDriverId(userId: string): Promise<string | null> {
-  const rows = await db.select({ id: driver.id }).from(driver).where(eq(driver.userId, userId)).limit(1);
-  return rows[0]?.id ?? null;
 }

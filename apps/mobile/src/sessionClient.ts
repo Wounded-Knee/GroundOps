@@ -1,9 +1,6 @@
 import type { CreateSessionRequest, CreateSessionResponse, User } from "@groundops/contracts";
 import { Platform } from "react-native";
-
-const sessionKey = "groundops.session";
-
-export { sessionKey };
+import { fetchAuthorized, isRecord } from "./authorizedFetch";
 
 export async function createSession(
   apiUrl: string,
@@ -35,42 +32,26 @@ export async function readCurrentUser(
   apiUrl: string,
   token: string,
 ): Promise<User | "unauthorized" | "unreachable"> {
-  try {
-    const response = await fetch(`${apiUrl}/me`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const body: unknown = await response.json();
-    return isUser(body) ? body : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/me`, token);
+  if (typeof response === "string") {
+    return response;
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const body: unknown = await response.json();
+  return isUser(body) ? body : "unreachable";
 }
 
 export async function revokeSession(
   apiUrl: string,
   token: string,
 ): Promise<"revoked" | "unauthorized" | "unreachable"> {
-  try {
-    const response = await fetch(`${apiUrl}/sessions/current`, {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 204) {
-      return "revoked";
-    }
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    return "unreachable";
-  } catch {
-    return "unreachable";
+  const response = await fetchAuthorized(`${apiUrl}/sessions/current`, token, { method: "DELETE" });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
   }
+  return response.status === 204 ? "revoked" : "unreachable";
 }
 
 export function liveSocketUrl(apiUrl: string): string {
@@ -121,6 +102,3 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}

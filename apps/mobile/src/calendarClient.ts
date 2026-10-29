@@ -13,28 +13,22 @@ import type {
   Tariff,
 } from "@groundops/contracts";
 import { taskSortieType } from "@groundops/contracts";
+import { fetchAuthorized } from "./authorizedFetch";
 import { parseAvailabilityIntervals } from "./calendarTime";
 
 export async function ensureCurrentDriver(
   apiUrl: string,
   token: string,
 ): Promise<Driver | "unauthorized" | "unreachable"> {
-  try {
-    const response = await fetch(`${apiUrl}/drivers/current`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const body: unknown = await response.json();
-    return isDriver(body) ? body : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/drivers/current`, token, { method: "POST" });
+  if (typeof response === "string") {
+    return response;
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const body: unknown = await response.json();
+  return isDriver(body) ? body : "unreachable";
 }
 
 export async function requestCalendar(
@@ -43,27 +37,21 @@ export async function requestCalendar(
   from: string,
   to: string,
 ): Promise<CalendarResponse | "unauthorized" | "unreachable" | "rejected"> {
-  try {
-    const url = new URL(`${apiUrl}/calendar`);
-    url.searchParams.set("from", from);
-    url.searchParams.set("to", to);
-    const response = await fetch(url, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 400 || response.status === 409) {
-      return "rejected";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const body: unknown = await response.json();
-    return isCalendarResponse(body) ? body : "unreachable";
-  } catch {
+  const url = new URL(`${apiUrl}/calendar`);
+  url.searchParams.set("from", from);
+  url.searchParams.set("to", to);
+  const response = await fetchAuthorized(url, token);
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (response.status === 400 || response.status === 409) {
+    return "rejected";
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const body: unknown = await response.json();
+  return isCalendarResponse(body) ? body : "unreachable";
 }
 
 export async function authorSortie(
@@ -95,32 +83,25 @@ export async function previewSortie(
   token: string,
   body: SortiePreviewRequest,
 ): Promise<SortiePreviewResponse | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
-  try {
-    const response = await fetch(`${apiUrl}/sorties/preview`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 409 && (await readError(response)) === "no location") {
-      return "no-location";
-    }
-    if (response.status === 400 || response.status === 409) {
-      return "rejected";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const parsed: unknown = await response.json();
-    return isPreviewResponse(parsed) ? parsed : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/sorties/preview`, token, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (response.status === 409 && (await readError(response)) === "no location") {
+    return "no-location";
+  }
+  if (response.status === 400 || response.status === 409) {
+    return "rejected";
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const parsed: unknown = await response.json();
+  return isPreviewResponse(parsed) ? parsed : "unreachable";
 }
 
 export async function commenceSortie(
@@ -130,18 +111,15 @@ export async function commenceSortie(
   options?: { guidance?: boolean },
 ): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
   const guidance = options?.guidance === true;
-  try {
-    const response = await fetch(`${apiUrl}/sorties/${sortieId}/commence`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        ...(guidance ? { "content-type": "application/json" } : {}),
-      },
-      ...(guidance ? { body: JSON.stringify({ guidance: true }) } : {}),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
+  const response = await fetchAuthorized(`${apiUrl}/sorties/${sortieId}/commence`, token, {
+    method: "POST",
+    ...(guidance
+      ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ guidance: true }) }
+      : {}),
+  });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
     if (response.status === 409 && (await readError(response)) === "no location") {
       return "no-location";
     }
@@ -151,11 +129,8 @@ export async function commenceSortie(
     if (!response.ok) {
       return "unreachable";
     }
-    const parsed: unknown = await response.json();
-    return isSortie(parsed) ? parsed : "unreachable";
-  } catch {
-    return "unreachable";
-  }
+  const parsed: unknown = await response.json();
+  return isSortie(parsed) ? parsed : "unreachable";
 }
 
 export async function completeSortie(
@@ -163,25 +138,18 @@ export async function completeSortie(
   token: string,
   sortieId: string,
 ): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
-  try {
-    const response = await fetch(`${apiUrl}/sorties/${sortieId}/complete`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 400 || response.status === 404 || response.status === 409) {
-      return "rejected";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const parsed: unknown = await response.json();
-    return isSortie(parsed) ? parsed : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/sorties/${sortieId}/complete`, token, { method: "POST" });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    return "rejected";
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const parsed: unknown = await response.json();
+  return isSortie(parsed) ? parsed : "unreachable";
 }
 
 export async function assertStopArrival(
@@ -199,14 +167,14 @@ export async function extendStopWait(
   sortieId: string,
   position: number,
 ): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
-  try {
-    const response = await fetch(`${apiUrl}/sorties/${sortieId}/stops/${position}/extend-wait`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
+  const response = await fetchAuthorized(
+    `${apiUrl}/sorties/${sortieId}/stops/${position}/extend-wait`,
+    token,
+    { method: "POST" },
+  );
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
     if (response.status === 409 && (await readError(response)) === "no location") {
       return "no-location";
     }
@@ -216,11 +184,8 @@ export async function extendStopWait(
     if (!response.ok) {
       return "unreachable";
     }
-    const parsed: unknown = await response.json();
-    return isSortie(parsed) ? parsed : "unreachable";
-  } catch {
-    return "unreachable";
-  }
+  const parsed: unknown = await response.json();
+  return isSortie(parsed) ? parsed : "unreachable";
 }
 
 async function postStopAction(
@@ -230,25 +195,20 @@ async function postStopAction(
   position: number,
   action: "arrive",
 ): Promise<Sortie | "unauthorized" | "unreachable" | "rejected"> {
-  try {
-    const response = await fetch(`${apiUrl}/sorties/${sortieId}/stops/${position}/${action}`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 400 || response.status === 404 || response.status === 409) {
-      return "rejected";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const parsed: unknown = await response.json();
-    return isSortie(parsed) ? parsed : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/sorties/${sortieId}/stops/${position}/${action}`, token, {
+    method: "POST",
+  });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    return "rejected";
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const parsed: unknown = await response.json();
+  return isSortie(parsed) ? parsed : "unreachable";
 }
 
 async function writeSortie(
@@ -258,18 +218,14 @@ async function writeSortie(
   path: string,
   body: SortieWriteRequest,
 ): Promise<Sortie | "unauthorized" | "unreachable" | "rejected" | "no-location"> {
-  try {
-    const response = await fetch(`${apiUrl}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
+  const response = await fetchAuthorized(`${apiUrl}${path}`, token, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
     if (response.status === 409 && (await readError(response)) === "no location") {
       return "no-location";
     }
@@ -279,11 +235,8 @@ async function writeSortie(
     if (!response.ok) {
       return "unreachable";
     }
-    const parsed: unknown = await response.json();
-    return isSortie(parsed) ? parsed : "unreachable";
-  } catch {
-    return "unreachable";
-  }
+  const parsed: unknown = await response.json();
+  return isSortie(parsed) ? parsed : "unreachable";
 }
 
 function isCalendarResponse(value: unknown): value is CalendarResponse {
@@ -352,49 +305,36 @@ export async function reportLocationObservation(
   token: string,
   body: LocationObservationRequest,
 ): Promise<"ok" | "unauthorized" | "rejected"> {
-  try {
-    const response = await fetch(`${apiUrl}/location-observations`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 204) {
-      return "ok";
-    }
-    return "rejected";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/location-observations`, token, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response === "unauthorized") {
+    return "unauthorized";
+  }
+  if (response === "unreachable") {
     return "rejected";
   }
+  return response.status === 204 ? "ok" : "rejected";
 }
 
 export async function requestTariff(
   apiUrl: string,
   token: string,
 ): Promise<Tariff | "unauthorized" | "unreachable" | "no-driver"> {
-  try {
-    const response = await fetch(`${apiUrl}/fare-rates`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 409) {
-      return "no-driver";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const body: unknown = await response.json();
-    return isTariff(body) ? body : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/fare-rates`, token);
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (response.status === 409) {
+    return "no-driver";
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const body: unknown = await response.json();
+  return isTariff(body) ? body : "unreachable";
 }
 
 export async function saveTariff(
@@ -402,53 +342,40 @@ export async function saveTariff(
   token: string,
   tariff: Tariff,
 ): Promise<Tariff | "unauthorized" | "unreachable" | "rejected" | "no-driver"> {
-  try {
-    const response = await fetch(`${apiUrl}/fare-rates`, {
-      method: "PUT",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(tariff),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 409) {
-      return "no-driver";
-    }
-    if (response.status === 400) {
-      return "rejected";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const body: unknown = await response.json();
-    return isTariff(body) ? body : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/fare-rates`, token, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(tariff),
+  });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (response.status === 409) {
+    return "no-driver";
+  }
+  if (response.status === 400) {
+    return "rejected";
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const body: unknown = await response.json();
+  return isTariff(body) ? body : "unreachable";
 }
 
 export async function readActivity(
   apiUrl: string,
   token: string,
 ): Promise<ActivityResponse | "unauthorized" | "unreachable"> {
-  try {
-    const response = await fetch(`${apiUrl}/activity`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const body: unknown = await response.json();
-    return isActivity(body) ? body : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/activity`, token);
+  if (typeof response === "string") {
+    return response;
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const body: unknown = await response.json();
+  return isActivity(body) ? body : "unreachable";
 }
 
 export async function replaceMeterReading(
@@ -456,53 +383,39 @@ export async function replaceMeterReading(
   token: string,
   body: ReplaceMeterReadingRequest,
 ): Promise<MeterReading | "unauthorized" | "unreachable" | "rejected"> {
-  try {
-    const response = await fetch(`${apiUrl}/meter-reading`, {
-      method: "PUT",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 400 || response.status === 409) {
-      return "rejected";
-    }
-    if (!response.ok) {
-      return "unreachable";
-    }
-    const parsed: unknown = await response.json();
-    return isMeterReading(parsed) ? parsed : "unreachable";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/meter-reading`, token, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (response.status === 400 || response.status === 409) {
+    return "rejected";
+  }
+  if (!response.ok) {
     return "unreachable";
   }
+  const parsed: unknown = await response.json();
+  return isMeterReading(parsed) ? parsed : "unreachable";
 }
 
 export async function clearMeterReading(
   apiUrl: string,
   token: string,
 ): Promise<"ok" | "unauthorized" | "unreachable" | "rejected"> {
-  try {
-    const response = await fetch(`${apiUrl}/meter-reading`, {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401) {
-      return "unauthorized";
-    }
-    if (response.status === 409) {
-      return "rejected";
-    }
-    if (response.status !== 204 && !response.ok) {
-      return "unreachable";
-    }
-    return "ok";
-  } catch {
+  const response = await fetchAuthorized(`${apiUrl}/meter-reading`, token, { method: "DELETE" });
+  if (response === "unauthorized" || response === "unreachable") {
+    return response;
+  }
+  if (response.status === 409) {
+    return "rejected";
+  }
+  if (response.status !== 204 && !response.ok) {
     return "unreachable";
   }
+  return "ok";
 }
 
 function isTariff(value: unknown): value is Tariff {

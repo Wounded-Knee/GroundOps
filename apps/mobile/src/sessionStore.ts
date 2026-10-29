@@ -1,40 +1,16 @@
-import * as SecureStore from "expo-secure-store";
-import { Platform } from "react-native";
-import { sessionKey } from "./sessionClient";
+import { deleteSecureString, readSecureString, writeSecureString } from "./secureString";
 
-type WebStorage = {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-};
+const sessionKey = "groundops.session";
+const missingSessionStorage = "Could not reach the server.";
 
 export async function readStoredSession(): Promise<string | null> {
-  if (Platform.OS === "web") {
-    return webStorage().getItem(sessionKey);
-  }
-  return SecureStore.getItemAsync(sessionKey);
+  return readSecureString(sessionKey, missingSessionStorage);
 }
 
 export async function writeStoredSession(token: string): Promise<void> {
-  if (Platform.OS === "web") {
-    webStorage().setItem(sessionKey, token);
-    return;
-  }
-  await SecureStore.setItemAsync(sessionKey, token);
+  await writeSecureString(sessionKey, token, missingSessionStorage);
 }
 
 export async function deleteStoredSession(): Promise<void> {
-  if (Platform.OS === "web") {
-    webStorage().removeItem(sessionKey);
-    return;
-  }
-  await SecureStore.deleteItemAsync(sessionKey);
-}
-
-function webStorage(): WebStorage {
-  const storage = (globalThis as { localStorage?: WebStorage }).localStorage;
-  if (!storage) {
-    throw new Error("Could not reach the server.");
-  }
-  return storage;
+  await deleteSecureString(sessionKey, missingSessionStorage);
 }

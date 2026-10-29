@@ -1,6 +1,6 @@
 import type { AvailabilityInterval, AvailabilityResponse, User } from "@groundops/contracts";
 import { and, asc, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
-import { ensureDriver } from "../calendar/calendar.js";
+import { ensureDriver, type DriverDb } from "../identity/driver.js";
 import { db } from "../db.js";
 import { availabilityUpdated, publishRealtime } from "../realtime.js";
 import { driver, driverAvailabilityEvent } from "../schema.js";
@@ -256,4 +256,9 @@ async function lockDriver(
     throw new Error("driver missing");
   }
   return row;
+}
+
+/** Deletes availability history for one driver. The driver row stays. */
+export async function deleteOwnedByDriver(tx: DriverDb, driverId: string): Promise<void> {
+  await tx.delete(driverAvailabilityEvent).where(eq(driverAvailabilityEvent.driverId, driverId));
 }
