@@ -774,9 +774,9 @@ export function SettingsScreen({
         ) : null}
         {availabilityMessage ? <Text style={styles.message}>{availabilityMessage}</Text> : null}
       </Section>
-      {Platform.OS === "android" ? (
+      {Platform.OS === "android" && !alwaysOnTopAllowed ? (
         <Section title="Always on top">
-          <Text style={styles.previewHint}>{alwaysOnTopAllowed ? "Allowed" : "Not allowed"}</Text>
+          <Text style={styles.previewHint}>Not allowed</Text>
           <Pressable
             style={styles.button}
             accessibilityRole="button"
