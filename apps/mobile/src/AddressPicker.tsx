@@ -17,7 +17,7 @@ import {
 } from "./addressBookStore";
 import { resolveApiUrl } from "./apiUrl";
 import { phoneAddressSubtitle } from "./phoneAddress";
-import { geocodePostal } from "./phoneGeocode";
+import { geocodePostal, rememberPostalCoordinate } from "./phoneGeocode";
 import { parsePlaceQuery } from "./placeQuery";
 import { requestPlaceSuggestions } from "./routingClient";
 import { useTheme } from "./ThemeProvider";
@@ -188,13 +188,26 @@ export function AddressPicker({
   function choosePhone(row: Extract<ShownRow, { kind: "phone" }>): void {
     const requestId = generation.current;
     void (async () => {
-      const coordinate = await geocodePostal(row.contactId, row.addressId, row.postal);
+      let coordinate = await geocodePostal(row.contactId, row.addressId, row.postal);
       if (generation.current !== requestId) {
         return;
       }
       if (coordinate === "failed") {
-        onSearchFailedRef.current?.();
-        return;
+        const remote = await requestPlaceSuggestions(apiUrl, token, row.postal, biasRef.current);
+        if (generation.current !== requestId) {
+          return;
+        }
+        if (remote === "unauthorized") {
+          onUnauthorizedRef.current();
+          return;
+        }
+        const first = remote === "failed" ? null : (remote[0] ?? null);
+        if (!first) {
+          onSearchFailedRef.current?.();
+          return;
+        }
+        coordinate = { latitude: first.latitude, longitude: first.longitude };
+        rememberPostalCoordinate(row.contactId, row.addressId, coordinate);
       }
       choose({
         name: row.name,

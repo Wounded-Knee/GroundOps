@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Shader
+import android.hardware.input.InputManager
 import android.os.Build
 import android.util.DisplayMetrics
 import android.view.Gravity
@@ -28,14 +29,25 @@ internal data class FadeStop(
   val a: Float,
   val position: Float,
 ) {
-  fun argb(): Int {
+  fun argb(paintAlpha: Float): Int {
     return Color.argb(
-      (a.coerceIn(0f, 1f) * 255f).roundToInt(),
+      (paintAlpha.coerceIn(0f, 1f) * 255f).roundToInt(),
       r.coerceIn(0, 255),
       g.coerceIn(0, 255),
       b.coerceIn(0, 255),
     )
   }
+}
+
+/**
+ * Stop alpha that still looks like [stopAlpha] after the window multiplies by [windowAlpha].
+ * The result is clamped to 1, so a stop brighter than the pass-through cap cannot exceed it.
+ */
+internal fun touchSafePaintAlpha(stopAlpha: Float, pulse: Float, windowAlpha: Float): Float {
+  if (windowAlpha <= 0f) {
+    return 0f
+  }
+  return (stopAlpha.coerceIn(0f, 1f) * pulse.coerceIn(0f, 1f) / windowAlpha).coerceIn(0f, 1f)
 }
 
 internal data class AlertEdges(
@@ -78,6 +90,7 @@ internal class AlertOverlay(context: Context) {
       return
     }
     view.alpha = 1f
+    view.setPulse(1f)
     view.render(intensity, stops, edges)
   }
 
@@ -92,8 +105,9 @@ internal class AlertOverlay(context: Context) {
       return false
     }
     cancelThrob()
+    view.alpha = 1f
+    view.setPulse(0f)
     view.render(intensity, stops, edges)
-    view.alpha = 0f
     val pulses = ArrayList<Animator>(count)
     repeat(count) {
       pulses.add(pulse())
@@ -211,7 +225,22 @@ internal class AlertOverlay(context: Context) {
     params.gravity = Gravity.TOP or Gravity.START
     params.x = 0
     params.y = 0
+    val windowAlpha = passThroughAlpha()
+    params.alpha = windowAlpha
+    view.setWindowAlpha(windowAlpha)
     return params
+  }
+
+  /**
+   * Android 12 and later drop a pass-through touch when this overlay's window alpha is above
+   * the value returned here. The flash is drawn in the paint so this alpha never changes with it.
+   */
+  private fun passThroughAlpha(): Float {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+      return 1f
+    }
+    val input = view.context.getSystemService(InputManager::class.java) ?: return 0.8f
+    return input.maximumObscuringOpacityForTouch.coerceIn(0f, 1f)
   }
 
   private fun realDisplaySize(): Pair<Int, Int> {
@@ -229,12 +258,12 @@ internal class AlertOverlay(context: Context) {
     val up = ValueAnimator.ofFloat(0f, 1f).apply {
       duration = THROB_UP_MS
       interpolator = easeInOutQuad
-      addUpdateListener { view.alpha = it.animatedValue as Float }
+      addUpdateListener { view.setPulse(it.animatedValue as Float) }
     }
     val down = ValueAnimator.ofFloat(1f, 0f).apply {
       duration = THROB_DOWN_MS
       interpolator = easeInOutQuad
-      addUpdateListener { view.alpha = it.animatedValue as Float }
+      addUpdateListener { view.setPulse(it.animatedValue as Float) }
     }
     return AnimatorSet().apply { playSequentially(up, down) }
   }
@@ -242,13 +271,34 @@ internal class AlertOverlay(context: Context) {
 
 internal class AlertOverlayView(context: Context) : View(context) {
   private var intensity = 0f
+  private var pulse = 1f
+  private var windowAlpha = 1f
   private var stops: List<FadeStop> = emptyList()
   private var edges = AlertEdges(top = true, bottom = true, left = true, right = true)
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
   init {
+    alpha = 1f
     setWillNotDraw(false)
     setBackgroundColor(Color.TRANSPARENT)
+  }
+
+  fun setPulse(value: Float) {
+    val next = value.coerceIn(0f, 1f)
+    if (pulse == next) {
+      return
+    }
+    pulse = next
+    invalidate()
+  }
+
+  fun setWindowAlpha(value: Float) {
+    val next = value.coerceIn(0f, 1f)
+    if (windowAlpha == next) {
+      return
+    }
+    windowAlpha = next
+    invalidate()
   }
 
   fun render(intensity: Float, stops: List<FadeStop>, edges: AlertEdges) {
@@ -263,7 +313,9 @@ internal class AlertOverlayView(context: Context) : View(context) {
     if (depth <= 0f || stops.size < 2) {
       return
     }
-    val colors = IntArray(stops.size) { stops[it].argb() }
+    val colors = IntArray(stops.size) {
+      stops[it].argb(touchSafePaintAlpha(stops[it].a, pulse, windowAlpha))
+    }
     val positions = FloatArray(stops.size) { stops[it].position }
     val widthPx = width.toFloat()
     val heightPx = height.toFloat()

@@ -4,13 +4,22 @@ import { Platform } from "react-native";
 
 const resolved = new Map<string, GeoCoordinate>();
 
+function cacheKey(contactId: string, addressId: string): string {
+  return `${contactId}\n${addressId}`;
+}
+
+/** Remembers a coordinate resolved outside the device geocoder (for example Places). */
+export function rememberPostalCoordinate(contactId: string, addressId: string, coordinate: GeoCoordinate): void {
+  resolved.set(cacheKey(contactId, addressId), coordinate);
+}
+
 /** Resolves one phone address when the driver uses it. The result stays in memory for the session. */
 export async function geocodePostal(
   contactId: string,
   addressId: string,
   postal: string,
 ): Promise<GeoCoordinate | "failed"> {
-  const key = `${contactId}\n${addressId}`;
+  const key = cacheKey(contactId, addressId);
   const cached = resolved.get(key);
   if (cached) {
     return cached;

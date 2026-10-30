@@ -34,10 +34,10 @@ import {
 } from "./addressBookStore";
 import { AddressPicker } from "./AddressPicker";
 import { resolveApiUrl } from "./apiUrl";
-import { geocodePostal } from "./phoneGeocode";
+import { geocodePostal, rememberPostalCoordinate } from "./phoneGeocode";
 import { phoneAddressSubtitle, type DevicePostalAddress } from "./phoneAddress";
 import type { PlaceGuideCommand } from "./placeGuide";
-import { requestDrivingRoute } from "./routingClient";
+import { requestDrivingRoute, requestPlaceSuggestions } from "./routingClient";
 import { useTheme } from "./ThemeProvider";
 import type { ThemeColors } from "./theme";
 
@@ -269,7 +269,7 @@ export function AddressBookScreen({
   }
 
   async function guidePhone(row: PhoneRow): Promise<void> {
-    const place = await placeFromPhone(row);
+    const place = await placeFromPhone(row, token);
     if (place === "failed") {
       setMessage(notLocated);
       return;
@@ -278,7 +278,7 @@ export function AddressBookScreen({
   }
 
   async function sortiePhone(row: PhoneRow): Promise<void> {
-    const place = await placeFromPhone(row);
+    const place = await placeFromPhone(row, token);
     if (place === "failed") {
       setMessage(notLocated);
       return;
@@ -692,10 +692,16 @@ function TextButton({
   );
 }
 
-async function placeFromPhone(row: PhoneRow): Promise<PlaceSuggestion | "failed"> {
-  const coordinate = await geocodePostal(row.contactId, row.addressId, row.postal);
+async function placeFromPhone(row: PhoneRow, token: string): Promise<PlaceSuggestion | "failed"> {
+  let coordinate = await geocodePostal(row.contactId, row.addressId, row.postal);
   if (coordinate === "failed") {
-    return "failed";
+    const remote = await requestPlaceSuggestions(apiUrl, token, row.postal, null);
+    const first = remote === "failed" || remote === "unauthorized" ? null : (remote[0] ?? null);
+    if (!first) {
+      return "failed";
+    }
+    coordinate = { latitude: first.latitude, longitude: first.longitude };
+    rememberPostalCoordinate(row.contactId, row.addressId, coordinate);
   }
   return {
     name: row.name,
