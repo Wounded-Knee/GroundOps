@@ -579,7 +579,7 @@ function AppContent() {
             ) : null}
           </>
         ) : null}
-        <StatusBar style={mapUnderStatusBar ? "dark" : scheme === "dark" ? "light" : "dark"} hidden={floatingMap} />
+        <StatusBar style={scheme === "dark" ? "light" : "dark"} hidden={floatingMap} />
       </View>
     </AppFrame>
   );
