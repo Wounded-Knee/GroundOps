@@ -97,7 +97,7 @@ After a successful onward save during guidance, the client updates stops, sets `
 
 ## 7.3 Dwell and pending next leg
 
-**Dwell** and **pending next leg** are client inferences while guidance is active. They are not persisted as separate entities.
+**Dwell** and **pending next leg** are client inferences while guidance is active. They are not server entities. The phone checkpoints them with the navigation session so a crash or a closed app can restore that session, as slice 014 defines.
 
 ---
 

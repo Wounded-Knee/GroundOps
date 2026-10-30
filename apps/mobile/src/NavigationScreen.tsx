@@ -124,6 +124,14 @@ import type { DeadheadCommand } from "./deadheadShortcutLogic";
 import { shortcutMayStart, shortcutNavKind } from "./deadheadShortcutLogic";
 import { throb } from "./VisualAlert";
 import { floatingRouteScale, isActiveNavigation } from "./alwaysOnTopLogic";
+import {
+  assembleCheckpoint,
+  shouldAbandonRestoredSortie,
+  shouldSettleRestoredDwell,
+  type NavigationCheckpoint,
+  type SortieNavigationSession,
+} from "./navigationCheckpoint";
+import { clearNavigationCheckpoint, readNavigationCheckpoint, writeNavigationCheckpoint } from "./navigationCheckpointStore";
 
 export type { SortieGuideCommand } from "./sortieGuide";
 
@@ -272,7 +280,14 @@ export function NavigationScreen({
   const [fix, setFix] = useState<GeoCoordinate | null>(null);
   const [routeEpoch, setRouteEpoch] = useState(0);
   const [meter, setMeter] = useState<MeterState>(emptyMeter());
-  const { queueMeterReport, resetMeterReporter } = useMeterReporter(apiUrl, token, onUnauthorized);
+  const [checkpointReady, setCheckpointReady] = useState(false);
+  const [checkpointRevision, setCheckpointRevision] = useState(0);
+  const { queueMeterReport, resetMeterReporter } = useMeterReporter(
+    apiUrl,
+    token,
+    accountView?.user.id ?? "",
+    onUnauthorized,
+  );
   const { upcoming, due, clock } = useUpcomingDeparture({
     apiUrl,
     token,
@@ -316,12 +331,21 @@ export function NavigationScreen({
   const offRouteSinceRef = useRef<number | null>(null);
   const rerouteGeneration = useRef(0);
   const spokenKey = useRef<string | null>(null);
+  const pendingSpokenKey = useRef<string | null | undefined>(undefined);
+  const pendingCameraMode = useRef<"follow" | "overview" | null>(null);
   const speechGeneration = useRef(0);
   const stopAdvanceInFlight = useRef(false);
   const extendWaitInFlight = useRef(false);
   const endingSortieRef = useRef(false);
   const arrivalDwellRef = useRef(emptyArrivalDwell());
   const arrivalEnteredRef = useRef(false);
+  const routeEpochRef = useRef(0);
+  routeEpochRef.current = routeEpoch;
+  const restoredSessionRef = useRef(false);
+  const resumeCheckedRef = useRef(false);
+  const dwellAwaitingFixRef = useRef(false);
+  const checkpointGeneration = useRef(0);
+  const checkpointUserId = accountView?.user.id ?? null;
   function guidanceCameraFrom(at: GeoCoordinate, bearing: number): MapCamera {
     // Look-ahead keeps the fix near bottom-center on a heading-up camera.
     const target = offsetAlongBearing(at, bearing, guidanceLookAheadMeters);
@@ -1067,6 +1091,14 @@ export function NavigationScreen({
       if (!isFinalStop(current.stops, current.firstStopPosition)) {
         return;
       }
+      if (
+        !shouldSettleRestoredDwell({
+          satisfied: arrivalDwellRef.current.satisfied,
+          seenFixSinceRestore: !dwellAwaitingFixRef.current,
+        })
+      ) {
+        return;
+      }
       const settled = settleArrivalDwell(arrivalDwellRef.current, Date.now());
       arrivalDwellRef.current = settled;
       if (!settled.satisfied) {
@@ -1077,11 +1109,173 @@ export function NavigationScreen({
     return () => clearInterval(timer);
   }, [guidingFinalStop]);
 
+  function sessionFromNav(current: NavState): SortieNavigationSession | null {
+    if (current.mode === "guiding" && current.kind === "sortie" && current.sortieId && current.sortie) {
+      return {
+        ...current,
+        kind: "sortie",
+        sortieId: current.sortieId,
+        sortie: current.sortie,
+        offRouteSince: offRouteSinceRef.current,
+      };
+    }
+    if (current.mode === "arrived" && current.kind === "sortie" && current.sortieId && current.sortie) {
+      return {
+        ...current,
+        kind: "sortie",
+        sortieId: current.sortieId,
+        sortie: current.sortie,
+      };
+    }
+    return null;
+  }
+
+  function captureCheckpoint(userId: string): NavigationCheckpoint | null {
+    const session = sessionFromNav(navRef.current);
+    if (!session) {
+      return null;
+    }
+    return assembleCheckpoint({
+      userId,
+      savedAt: Date.now(),
+      nav: session,
+      meter: meterRef.current,
+      baselineRemainingMeters: baselineRemainingRef.current,
+      cameraMode: cameraModeRef.current,
+      dwell: arrivalDwellRef.current,
+      spokenKey: spokenKey.current,
+      completedLegPaths: completedLegPathsRef.current,
+      routeEpoch: routeEpochRef.current,
+    });
+  }
+
+  function applyCheckpoint(checkpoint: NavigationCheckpoint): void {
+    const session = checkpoint.nav;
+    navRef.current = session;
+    setNav(session);
+    meterRef.current = checkpoint.meter;
+    setMeter(checkpoint.meter);
+    baselineRemainingRef.current = checkpoint.baselineRemainingMeters;
+    arrivalDwellRef.current = checkpoint.dwell;
+    dwellAwaitingFixRef.current = !checkpoint.dwell.satisfied;
+    arrivalEnteredRef.current = session.mode === "arrived";
+    pendingCameraMode.current = checkpoint.cameraMode;
+    cameraModeRef.current = checkpoint.cameraMode;
+    setCameraMode(checkpoint.cameraMode);
+    pendingSpokenKey.current = checkpoint.spokenKey;
+    spokenKey.current = checkpoint.spokenKey;
+    offRouteSinceRef.current = session.mode === "guiding" ? session.offRouteSince : null;
+    replaceCompletedLegs(checkpoint.completedLegPaths);
+    routeEpochRef.current = checkpoint.routeEpoch;
+    setRouteEpoch(checkpoint.routeEpoch);
+    restoredSessionRef.current = true;
+    resumeCheckedRef.current = false;
+    publishMeter(checkpoint.meter, session, fixRef.current);
+    void setActiveSortieObservation(session.sortieId);
+  }
+
+  function abandonRestoredSortie(userId: string): void {
+    checkpointGeneration.current += 1;
+    restoredSessionRef.current = false;
+    dwellAwaitingFixRef.current = false;
+    const browse = { mode: "browse" as const, destination: null, message: null };
+    navRef.current = browse;
+    setNav(browse);
+    const cleared = emptyMeter();
+    meterRef.current = cleared;
+    setMeter(cleared);
+    baselineRemainingRef.current = 0;
+    resetArrivalDwell();
+    clearCompletedLegs();
+    offRouteSinceRef.current = null;
+    spokenKey.current = null;
+    void setActiveSortieObservation(null);
+    onMeterReading?.(null);
+    void clearNavigationCheckpoint(userId);
+  }
+
+  useEffect(() => {
+    if (!checkpointUserId) {
+      return;
+    }
+    const userId = checkpointUserId;
+    let cancelled = false;
+    void (async () => {
+      let checkpoint: NavigationCheckpoint | null = null;
+      try {
+        checkpoint = await readNavigationCheckpoint(userId);
+      } catch {
+        checkpoint = null;
+      }
+      if (cancelled) {
+        return;
+      }
+      if (checkpoint && navRef.current.mode === "browse") {
+        applyCheckpoint(checkpoint);
+      }
+      setCheckpointReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [checkpointUserId]);
+
+  useEffect(() => {
+    if (!checkpointReady || !checkpointUserId) {
+      return;
+    }
+    const userId = checkpointUserId;
+    const generation = ++checkpointGeneration.current;
+    if (!sessionFromNav(nav)) {
+      void clearNavigationCheckpoint(userId);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void (async () => {
+        if (generation !== checkpointGeneration.current) {
+          return;
+        }
+        const checkpoint = captureCheckpoint(userId);
+        if (!checkpoint || generation !== checkpointGeneration.current) {
+          return;
+        }
+        await writeNavigationCheckpoint(checkpoint);
+        if (generation !== checkpointGeneration.current && !sessionFromNav(navRef.current)) {
+          await clearNavigationCheckpoint(userId);
+        }
+      })();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [checkpointReady, checkpointUserId, nav, meter, cameraMode, completedLegPaths, routeEpoch, checkpointRevision]);
+
+  const activityAsOf = accountView?.activity.asOf ?? "";
+  const activitySortie = accountView?.activity.sortie ?? null;
+  useEffect(() => {
+    if (!checkpointReady || !checkpointUserId || !restoredSessionRef.current || resumeCheckedRef.current) {
+      return;
+    }
+    if (activityAsOf === "") {
+      return;
+    }
+    resumeCheckedRef.current = true;
+    if (
+      !shouldAbandonRestoredSortie({
+        restored: true,
+        nav: navRef.current,
+        activity: { asOf: activityAsOf, sortie: activitySortie },
+      })
+    ) {
+      return;
+    }
+    abandonRestoredSortie(checkpointUserId);
+  }, [checkpointReady, checkpointUserId, activityAsOf, activitySortie]);
+
   useEffect(() => {
     const current = navRef.current;
     if (!fix || (current.mode !== "guiding" && current.mode !== "arrived")) {
       return;
     }
+    dwellAwaitingFixRef.current = false;
     if (current.mode === "arrived" && current.kind === "sortie") {
       const stop = current.stops[current.stopPosition];
       const choice = arrivedFixChoice({
@@ -1113,6 +1307,13 @@ export function NavigationScreen({
         fix,
         nowMs: Date.now(),
       });
+      if (
+        choice.dwell.startedAtMs !== arrivalDwellRef.current.startedAtMs ||
+        choice.dwell.satisfied !== arrivalDwellRef.current.satisfied ||
+        choice.dwell.anchor !== arrivalDwellRef.current.anchor
+      ) {
+        setCheckpointRevision((revision) => revision + 1);
+      }
       arrivalDwellRef.current = choice.dwell;
       if (choice.action === "enter-stop") {
         enterStopDwell(current, current.firstStopPosition, fix);
@@ -1293,6 +1494,12 @@ export function NavigationScreen({
 
   useEffect(() => {
     if (nav.mode === "guiding" || nav.mode === "arrived") {
+      if (pendingCameraMode.current) {
+        const restored = pendingCameraMode.current;
+        pendingCameraMode.current = null;
+        cameraModeRef.current = restored;
+        setCameraMode(restored);
+      }
       return;
     }
     cameraModeRef.current = "follow";
@@ -1307,6 +1514,10 @@ export function NavigationScreen({
   }, []);
 
   useEffect(() => {
+    if ((nav.mode === "guiding" || nav.mode === "arrived") && pendingSpokenKey.current !== undefined) {
+      spokenKey.current = pendingSpokenKey.current;
+      pendingSpokenKey.current = undefined;
+    }
     if (nav.mode === "guiding") {
       const announceIndex = upcomingStepIndex(nav.route, nav.stepIndex);
       const announceStep = nav.route.steps[announceIndex];

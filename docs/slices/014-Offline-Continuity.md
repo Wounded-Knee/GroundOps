@@ -50,7 +50,7 @@ A client-generated sortie id is the sortie’s id when the server accepts a crea
 - A calendar, address book, activity, tariff, or availability read that fails shows the last stored copy for that user. A successful read replaces that copy.
 - Author, revise, or drag while the server cannot be reached stores a pending command and shows the provisional window. A further edit of that same sortie replaces the pending body.
 - A pending create that the server accepts becomes the server sortie and drops the pending row. A pending revise that the server accepts is replaced by the server sortie. A rejection restores the pre-image, or drops the create, and the screen says the sortie was not saved, or that location is required.
-- An active guided trip stored on the device is restored after a process restart and keeps following GPS. Ending guidance clears that stored trip.
+- An active guided sortie stored on the device is restored after a crash or a closed app, on the same step or dwell, and keeps following GPS. Ending guidance clears that stored trip. The first activity snapshot that says the sortie is no longer open returns to the map. An unreachable server keeps the stored trip. A sortie commenced in this process is not abandoned by that check.
 - An unsent location observation and the latest unsent meter reading are sent when the link returns. A repeat of an observation the server already stored is ignored.
 
 No operational event is written on the device.
@@ -96,7 +96,7 @@ On the device, one SQLite database holds, per signed-in user:
 - The last calendar read, including the range it covers. Sorties from that read are shown when the visible period lies inside that range.
 - Pending author and revise commands: the client id or the server id, the latest write body, the provisional sortie, the pre-image for a revise, and the time the command was authored.
 - The address book and phone stars, the last activity snapshot, the tariff, and the availability choice.
-- The active guidance snapshot: sortie id, driving route, leg index, and meter, while guidance is active.
+- The active guidance snapshot while a sortie is guiding or arrived: the driving route, step, meter totals, dwell, camera, completed legs, and the maneuver already announced. The GPS sample is dropped so the time the process was dead is not added to wait. A driving route stays off the server. Search guidance and route preview are not checkpointed.
 - Unsent location observations, capped, and the latest unsent meter reading.
 
 The session token and the cached user profile stay in secure storage beside each other. Sign-out deletes the SQLite rows for that user and the cached profile. A cache stored for a different user is deleted before it is shown.
@@ -121,7 +121,7 @@ The slice works when all of the following are true on the local stack:
 4. When the link returns, observations are sent before sortie commands. Replaying a create with the same client id does not insert a second sortie or a second `sortie.created`. Replaying an identical revise appends no second `sortie.revised`. The server response replaces the provisional window. A follow-up calendar read does not drop a command that is still pending.
 5. A rejected create is removed. A rejected revise restores the pre-image. The screen says the sortie was not saved, or that location is required. A dragged block returns to the last accepted time.
 6. A routing failure or an unreachable server leaves the command queued. A second offline edit of the same sortie replaces the pending body.
-7. Guide is disabled on a sortie the server has not accepted. An already loaded guided trip is restored after the process is killed and keeps following GPS. The latest meter reading and unsent observations are sent when the link returns. A repeated observation id does not recompute a window.
+7. Guide is disabled on a sortie the server has not accepted. Killing the app during sortie guidance or arrival and opening it again returns to that sortie on the same step or dwell, with the same meter totals, and keeps following GPS. A sortie the server has already completed returns to the map. An unreachable server keeps the stored trip. The latest meter reading and unsent observations are sent when the link returns. A repeated observation id does not recompute a window.
 8. A wait extension the server does not accept restores the previous wait. A complete or a next leg that cannot be sent leaves the trip in place and says so.
 9. Sign-out clears the local caches for that session. The flow runs with `pnpm dev:server` and `pnpm dev:mobile`.
 

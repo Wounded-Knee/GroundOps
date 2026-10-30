@@ -5,6 +5,7 @@ import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { clearOfflineStore } from "./localDatabase";
+import { clearNavigationCheckpoint } from "./navigationCheckpointStore";
 import { createSession, readCurrentUser, revokeSession } from "./sessionClient";
 import {
   deleteStoredSession,
@@ -311,6 +312,7 @@ async function readCachedUser(): Promise<User | null> {
 async function forgetCalendarCache(): Promise<void> {
   try {
     await clearOfflineStore();
+    await clearNavigationCheckpoint();
   } catch {
     // A later sign-in discards a cache stored for a different user.
   }
