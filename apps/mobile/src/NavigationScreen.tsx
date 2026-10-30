@@ -14,6 +14,7 @@ import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AddressPicker } from "./AddressPicker";
 import { NetworkStatusIcon } from "./NetworkStatusIcon";
 import type { NetworkFault } from "./networkStatus";
@@ -227,6 +228,7 @@ export function NavigationScreen({
   minimal = false,
   onActiveNavigationChange,
   bottomInset = 0,
+  underStatusBar = false,
 }: {
   token: string;
   onUnauthorized: () => void;
@@ -252,6 +254,8 @@ export function NavigationScreen({
   onActiveNavigationChange?: (active: boolean) => void;
   /** Height of the status stack overlaid on the map. Chrome stays above it. */
   bottomInset?: number;
+  /** Map paints under the Android status bar. Chrome is padded clear of it. */
+  underStatusBar?: boolean;
   accountView?: {
     user: User;
     live: "authenticated" | "closed";
@@ -259,6 +263,7 @@ export function NavigationScreen({
   } | null;
 }) {
   const { colors } = useTheme();
+  const statusBarInset = useSafeAreaInsets().top;
   const styles = createStyles(colors);
   const mapRef = useRef<MapHandle>(null);
   const [cameraMode, setCameraMode] = useState<GuidanceCameraMode>("follow");
@@ -2400,6 +2405,7 @@ export function NavigationScreen({
   const showFooter = showSearch && (finding || (browseMessage !== null && !pendingWhereTo));
   const showBottomSheet = preview !== null || notice !== null || guiding?.rerouteMessage != null || showFooter;
   const chromeHeight = Math.max(0, chromeBox - bottomInset);
+  const chromePadTop = underStatusBar ? statusBarInset : 0;
 
   useEffect(() => {
     onActiveNavigationChange?.(isActiveNavigation(nav.mode));
@@ -2421,7 +2427,10 @@ export function NavigationScreen({
       />
       {minimal ? null : (
       <View
-        style={[StyleSheet.absoluteFill, bottomInset > 0 ? { paddingBottom: bottomInset } : null]}
+        style={[
+          StyleSheet.absoluteFill,
+          chromePadTop > 0 || bottomInset > 0 ? { paddingTop: chromePadTop, paddingBottom: bottomInset } : null,
+        ]}
         pointerEvents="box-none"
         onLayout={(event) => {
           const next = Math.round(event.nativeEvent.layout.height);

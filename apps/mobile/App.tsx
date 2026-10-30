@@ -432,6 +432,8 @@ function AppContent() {
     />
   );
   const floatingMap = Platform.OS === "android" && floating;
+  const mapUnderStatusBar =
+    Platform.OS === "android" && signedIn && destination === "navigation" && compose === null && !floatingMap;
   const screenCover = floatingMap ? [styles.cover, styles.hidden] : styles.cover;
   const overlay = (
     <VisualAlert
@@ -444,7 +446,7 @@ function AppContent() {
   );
 
   return (
-    <AppFrame overlay={overlay} edgeToEdge={floatingMap}>
+    <AppFrame overlay={overlay} edgeToEdge={floatingMap} omitTopInset={mapUnderStatusBar}>
       <View style={signedIn ? styles.signedIn : styles.container}>
         {phase.status === "loading" ? <Text style={styles.message}>Checking session…</Text> : null}
         {phase.status === "signed-out" ? (
@@ -484,6 +486,7 @@ function AppContent() {
                   minimal={floatingMap}
                   onActiveNavigationChange={onActiveNavigationChange}
                   bottomInset={statusOverlaysMap && !floatingMap ? statusChromeHeight : 0}
+                  underStatusBar={mapUnderStatusBar}
                 />
               ) : null}
               {Platform.OS === "web" && destination === "navigation" ? (
@@ -576,7 +579,7 @@ function AppContent() {
             ) : null}
           </>
         ) : null}
-        <StatusBar style={scheme === "dark" ? "light" : "dark"} hidden={floatingMap} />
+        <StatusBar style={mapUnderStatusBar ? "dark" : scheme === "dark" ? "light" : "dark"} hidden={floatingMap} />
       </View>
     </AppFrame>
   );
