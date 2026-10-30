@@ -993,16 +993,19 @@ export function NavigationScreen({
               timeMs: Date.now(),
               path: currentLegPath(currentNav.route),
             });
-            if (currentNav.kind === "sortie" && sortieLegBillable(currentNav)) {
-              const advanced = advanceMeterAlongRoute(meterRef.current, {
-                fix: sampleFix,
-                observedAtMs: Date.now(),
-                accuracyMeters: typeof location.coords.accuracy === "number" ? location.coords.accuracy : null,
-                routePath: currentLegPath(currentNav.route),
-              });
-              meterRef.current = advanced;
-              setMeter(advanced);
-              publishMeter(advanced, currentNav, sampleFix);
+            if (currentNav.kind === "sortie") {
+              let next = meterRef.current;
+              if (sortieLegBillable(currentNav)) {
+                next = advanceMeterAlongRoute(meterRef.current, {
+                  fix: sampleFix,
+                  observedAtMs: Date.now(),
+                  accuracyMeters: typeof location.coords.accuracy === "number" ? location.coords.accuracy : null,
+                  routePath: currentLegPath(currentNav.route),
+                });
+                meterRef.current = next;
+                setMeter(next);
+              }
+              publishMeter(next, currentNav, sampleFix);
             }
           }
         },
